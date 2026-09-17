@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.png binary
+*.cubin binary
+tests/cpp/passes/golden/*.tsr text eol=lf

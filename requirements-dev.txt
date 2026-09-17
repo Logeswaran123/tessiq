@@ -1,0 +1,25 @@
+# Copyright 2026 The Tessera Authors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pinned development tooling.
+#
+# CI and the pre-commit hooks both install from this file, so a hook cannot disagree with the gate
+# it is supposed to mirror (PLAN.md section 7.7). Two versions of a formatter produce two different
+# "correct" formattings, and the difference shows up as a CI failure on a commit that passed
+# locally.
+#
+# Bumping a pin is a deliberate change: do it in its own commit, with the reformatting it causes.
+
+clang-format==23.1.1
+clang-tidy==22.1.8
+mypy==2.3.1
+pre-commit==4.6.2
+pytest==9.1.1
+pytest-benchmark==5.3.0
+ruff==0.16.8
+
+# Build tooling
+cmake>=3.26
+ninja>=1.11
+pybind11>=2.12
+scikit-build-core>=0.10

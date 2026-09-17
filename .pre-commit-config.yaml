@@ -1,0 +1,67 @@
+# Copyright 2026 The Tessera Authors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Local gates that mirror CI (PLAN.md section 7.7). Anything enforced here is also enforced in CI:
+# a hook that CI does not also run is a hook people learn to skip.
+#
+#   pip install -r requirements-dev.txt
+#   pre-commit install --install-hooks
+#   pre-commit install --hook-type commit-msg
+#
+# The linters and formatters run as `language: system`, from the environment, rather than from
+# pre-commit's own pinned hook environments. This is deliberate: pre-commit would otherwise install
+# its own version of ruff and clang-format, and two versions of a formatter disagree about what
+# correct formatting is. The versions are pinned once, in requirements-dev.txt, which CI installs
+# from as well.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, perf, refactor, docs, test, build, ci, chore, revert]
+
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        entry: ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff (format)
+        entry: ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: clang-format
+        name: clang-format
+        entry: clang-format -i
+        language: system
+        types_or: [c++, c, cuda]
+        exclude: '^csrc/generated/'
+
+      - id: mypy
+        name: mypy
+        entry: mypy
+        language: system
+        types: [python]
+        pass_filenames: false

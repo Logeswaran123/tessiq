@@ -1,0 +1,122 @@
+# Copyright 2026 The Tessera Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "tessera"
+description = "A from-scratch PyTorch accelerator backend: device, graph compiler, and kernels"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Logeswaran123", email = "loges.siva14@gmail.com" }]
+keywords = ["pytorch", "compiler", "cuda", "accelerator", "backend", "fusion"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Compilers",
+]
+
+# The version is owned by CMakeLists.txt and read from it, so that the Python package, the native
+# module and the build all report the same number.
+dynamic = ["version"]
+
+dependencies = []
+
+[project.optional-dependencies]
+# torch is deliberately not a hard dependency: the IR, the passes and their tests must build and
+# run without it (PLAN.md section 8). Only the frontend needs torch.
+torch = ["torch>=2.6"]
+dev = [
+  "mypy>=1.11",
+  "pre-commit>=3.8",
+  "pytest>=8.0",
+  "pytest-benchmark>=4.0",
+  "ruff>=0.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/Logeswaran123/tessera"
+Repository = "https://github.com/Logeswaran123/tessera"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["python/tessera"]
+cmake.version = ">=3.26"
+cmake.build-type = "RelWithDebInfo"
+
+[tool.scikit-build.cmake.define]
+# The C++ test suite is not part of a wheel build; it is built explicitly from a CMake configure.
+TESSERA_BUILD_TESTS = "OFF"
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "CMakeLists.txt"
+regex = '(?sm)project\s*\(\s*tessera.*?VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
+
+# --- Tooling -------------------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests/python"]
+# -ra reports the reason for every non-passing test; --strict-markers makes a typo'd marker an
+# error rather than a test that silently never runs.
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+  "cuda: requires an NVIDIA GPU; deselected in CI with -m 'not cuda'",
+  "slow: takes more than a second",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["python", "tests/python", "tools"]
+# Build trees contain vendored third-party sources (googletest ships Python helpers). Linting
+# them reports hundreds of errors in code this project does not own.
+extend-exclude = ["build", "_skbuild", "csrc/generated"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # import sorting
+  "N",        # naming
+  "UP",       # pyupgrade
+  "B",        # bugbear
+  "A",        # shadowing builtins
+  "C4",       # comprehensions
+  "PT",       # pytest style
+  "RET",      # return simplification
+  "SIM",      # simplification
+  "ARG",      # unused arguments
+  "PTH",      # pathlib over os.path
+  "ERA",      # commented-out code (PLAN.md section 7.5)
+  "RUF",
+]
+ignore = [
+  "E501",  # line length is enforced by the formatter, not the linter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private internals deliberately, to exercise the error-translation boundary.
+"tests/python/*" = ["SLF001"]
+# `_C` is the established name for a native extension module across the Python ecosystem.
+"python/tessera/_C.pyi" = ["N999"]
+
+[tool.mypy]
+# Matches the development interpreter rather than the minimum supported version: dependencies ship
+# stubs using 3.12 syntax, which mypy cannot parse when told to assume 3.10. Compatibility with the
+# 3.10 floor declared in requires-python is enforced by ruff's target-version and by CI running the
+# test suite on the oldest supported interpreter.
+python_version = "3.12"
+files = ["python/tessera", "tests/python"]
+strict = true
+# The native module is typed by a hand-written stub (python/tessera/_C.pyi).
+ignore_missing_imports = false
+warn_unreachable = true

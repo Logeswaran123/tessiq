@@ -1,0 +1,33 @@
+# Build
+build/
+_skbuild/
+dist/
+*.egg-info/
+csrc/generated/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.so
+
+# Caches produced at runtime
+.tessera_cache/
+*.cubin
+*.ptx
+
+# IR dumps (TESSERA_DUMP_IR)
+ir_dumps/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local working notes, never published
+NOTES.local.md

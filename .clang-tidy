@@ -1,0 +1,81 @@
+---
+# Checks are deliberately strict: PLAN.md section 7 makes lint a merge gate, not a suggestion.
+#
+# Disabled checks, and why. Note that comments cannot live inside the `Checks` value below -- it is
+# a YAML folded scalar, so a '#' there becomes part of the check list rather than a comment.
+#
+#   bugprone-easily-swappable-parameters  Fires on every (width, height)-style signature.
+#   cppcoreguidelines-avoid-do-while      The assertion macros need do-while for statement safety.
+#   cppcoreguidelines-macro-usage         TESSERA_LOG must not evaluate its arguments, and the
+#                                         assertion macros need __FILE__/__LINE__. A function
+#                                         cannot do either job.
+#   modernize-use-trailing-return-type    A style preference this project does not share.
+#   performance-enum-size                 These enums appear in signatures and switches, never in
+#                                         bulk storage. Shrinking them trades clarity for nothing.
+#   portability-avoid-pragma-once         Supported by every compiler this project targets.
+#   readability-inconsistent-ifelse-braces TESSERA_LOG expands to a braceless if/else by design;
+#                                         this would fire at every log site in the project.
+#   readability-use-anyofallof            Suggests std::any_of for loops that carry side effects.
+#
+Checks: >
+  bugprone-*,
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -modernize-use-trailing-return-type,
+  -performance-enum-size,
+  -portability-avoid-pragma-once,
+  -readability-identifier-length,
+  -readability-inconsistent-ifelse-braces,
+  -readability-magic-numbers,
+  -readability-use-anyofallof
+
+WarningsAsErrors: '*'
+
+# compile_commands.json carries GCC-only warning flags (see cmake/CompilerWarnings.cmake). Clang
+# rejects the ones it does not recognise, which would fail every file before analysis begins.
+ExtraArgsBefore: ['-Wno-unknown-warning-option']
+
+HeaderFilterRegex: '.*/csrc/tessera/.*'
+FormatStyle: file
+
+CheckOptions:
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumConstantPrefix
+    value: k
+  - key: readability-identifier-naming.ConstexprVariableCase
+    value: CamelCase
+  - key: readability-identifier-naming.ConstexprVariablePrefix
+    value: k
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: _
+  - key: readability-identifier-naming.ProtectedMemberSuffix
+    value: _
+  - key: readability-identifier-naming.MacroDefinitionPrefix
+    value: TESSERA_
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 25
