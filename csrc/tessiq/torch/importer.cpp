@@ -186,6 +186,8 @@ Result<void> import_output(const py::object& fx_node,
     // A backward graph returns None at every position whose input takes no gradient. Nothing is
     // computed there, so there is no value to record. The FX graph stays the authority on output
     // arity; results() holds the values the graph computes, which is what the passes need.
+    // Anything rebuilding a return value needs an output spec as well, for which see
+    // docs/design_notes/0002-output-structure-is-calling-convention.md.
     if (value.is_none()) {
       continue;
     }
