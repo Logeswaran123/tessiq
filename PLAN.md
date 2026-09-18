@@ -99,7 +99,8 @@ Verified on this machine as of 2026-09-17:
 | GPU | NVIDIA RTX 5080, 16 GB, **sm_120** (Blackwell) | Set `CMAKE_CUDA_ARCHITECTURES=120` |
 | CUDA toolkit | 12.8 (`/usr/local/cuda-12.8`) | Supports sm_120; NVRTC ships with it |
 | PyTorch | pinned to **2.11.0** | The last release with `cu128` wheels. 2.12+ need cu129 or newer, so bumping torch means bumping the toolkit |
-| Host compiler | g++ 11.4.0 (Ubuntu 22.04, WSL2) | C++17; check nvcc host-compiler compatibility |
+| Host compiler | g++ 11.4.0 (Ubuntu 22.04, WSL2) | Check nvcc host-compiler compatibility |
+| CI compiler | g++ 13 (ubuntu-latest) | Newer than the local one, and it warns about things 11.4 does not. Reproduce with conda-forge `gxx_linux-64=13` before pushing; use the system compiler for sanitizer runs, because the conda ASan runtime hangs against the system glibc |
 | Python | 3.13.11 (miniconda) | |
 | CPU / RAM | 32 cores / 15 GB | RAM is the build constraint — cap `-j` (§12) |
 | PyTorch | **not yet installed** | Must be installed before Phase 1 |
@@ -920,6 +921,8 @@ cost model, and the recipe cache key design.
 |---|---|---|
 | Device backend registration API churn between torch versions | Build breaks on upgrade | Pin torch exactly in `requirements-dev.txt`, and have CI read that pin rather than keeping its own; isolate registration in `csrc/tessera/torch/` |
 | A dependency pinned as a range rather than exactly | CI resolves a different version than the developer and fails somewhere nobody has run | Every pin is exact. An unpinned torch is what broke the first CI run of phase 1 |
+| The local compiler is older than CI's | Warnings fire only in CI, where the loop is slowest | Keep a matching compiler installed (§3) and build with it before pushing. `-Werror` plus a strict warning set means a compiler bump is a breaking change |
+| A strict warning fires inside an inlined third-party header | Unfixable in our own code, and `-isystem` does not help because the analysis runs after inlining | Disable that one analysis for the target that includes those headers, never globally, with the reason recorded at the call site |
 | sm_120 support gaps in torch/cuDNN builds | CUDA path fails at runtime | Verify `torch.cuda.get_arch_list()` on day one (§3); CPU backend keeps the project viable regardless |
 | 15 GB RAM with 32 cores | OOM during parallel C++ builds | Cap at `-j8`; use ninja; enable ccache; keep translation units small |
 | Scope creep — "one more op" | Never reaching a demo | Phase milestones are the gate; op *breadth* is explicitly Phase 6, not earlier |

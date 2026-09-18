@@ -61,6 +61,7 @@ target_link_libraries(_C PRIVATE
 # includes them is built this way; the core stays at C++17 so it keeps compiling anywhere.
 target_compile_features(_C PRIVATE cxx_std_20)
 
+
 # torch's Python bindings live in libtorch_python, which TORCH_LIBRARIES does not include.
 find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
 target_link_libraries(_C PRIVATE "${TORCH_PYTHON_LIBRARY}")
@@ -78,6 +79,17 @@ set_target_properties(_C PROPERTIES
   BUILD_WITH_INSTALL_RPATH ON)
 
 tessera_set_warnings(_C)
+
+# Must come after tessera_set_warnings, which adds -Wnull-dereference: GCC takes the last flag.
+#
+# -isystem suppresses warnings raised while parsing a header, but not warnings from analyses that
+# run after inlining -- GCC attributes those to the translation unit that pulled the code in. At
+# -O2, GCC 13 reports a null dereference inside libstdc++'s std::vector::size() when torch's
+# c10::generic_to is inlined here. The code is not ours and the report is a false positive, so the
+# analysis is off for this target only. Everything else in the project keeps it.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  target_compile_options(_C PRIVATE -Wno-null-dereference)
+endif()
 tessera_enable_sanitizers(_C)
 
 install(TARGETS _C DESTINATION tessera)
