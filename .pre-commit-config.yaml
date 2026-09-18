@@ -49,7 +49,11 @@ repos:
         name: ruff (format)
         entry: ruff format --force-exclude
         language: system
-        types_or: [python, pyi]
+        # markdown is in the list because `ruff format` also formats python blocks inside it, and
+        # CI runs `ruff format --check .` over the whole tree. Without it the hook passes on a
+        # snippet in the README that CI then rejects, which is exactly the drift these hooks exist
+        # to prevent.
+        types_or: [python, pyi, markdown]
         require_serial: true
 
       - id: clang-format

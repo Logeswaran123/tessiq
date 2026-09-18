@@ -27,8 +27,8 @@ tessiq.memory_stats()
 From phase 2 the backend is chosen per tensor rather than per process:
 
 ```python
-reference = torch.randn(1024, device=tessiq.cpu)   # host memory
-fast      = reference.to(tessiq.gpu)               # GPU memory
+reference = torch.randn(1024, device=tessiq.cpu)  # host memory
+fast = reference.to(tessiq.gpu)  # GPU memory
 ```
 
 ## How it fits together

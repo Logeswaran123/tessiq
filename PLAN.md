@@ -357,11 +357,11 @@ tessiq uses them to distinguish backends:
 ```python
 import torch, tessiq
 
-reference = torch.randn(1024, device=tessiq.cpu)   # host memory, our allocator
-fast      = reference.to(tessiq.gpu)               # device memory on the GPU
+reference = torch.randn(1024, device=tessiq.cpu)  # host memory, our allocator
+fast = reference.to(tessiq.gpu)  # device memory on the GPU
 
-torch.allclose(fast.to(tessiq.cpu), reference)     # the oracle check, in one line
-tessiq.memory_stats(tessiq.gpu).allocated_bytes   # per-backend accounting
+torch.allclose(fast.to(tessiq.cpu), reference)  # the oracle check, in one line
+tessiq.memory_stats(tessiq.gpu).allocated_bytes  # per-backend accounting
 ```
 
 `tessiq.cpu` and `tessiq.gpu` are `torch.device` values, so they go anywhere a device goes:
@@ -1011,13 +1011,20 @@ cost model, and the recipe cache key design.
 
 ---
 
-## 13. Immediate next steps
+## 13. Where things stand
 
-1. Create the conda env and install pinned torch; verify `sm_120` is in `get_arch_list()` (§3).
-2. Install cmake + ninja; confirm `nvcc` works with g++ 11.4 on a trivial `.cu` file.
-3. `git init`, push an empty `Logeswaran123/tessiq` repo with README + LICENSE + this plan.
-4. Begin Phase 0 — and note that Phase 0 *is* the engineering-standards phase (§7). The tooling that
-   enforces quality goes in before the code it will judge.
+**Done.** Phase 0 and phase 1. The environment is set up and verified: pinned torch with `sm_120` in
+`get_arch_list()`, `nvcc` building for sm_120, and a conda-forge g++ 13 alongside the system 11.4 so
+the CI compiler can be reproduced locally (§3). The repository is `Logeswaran123/tessiq` under
+Apache-2.0, with the phase 0 gate suite enforcing §7 and the phase 1 device runtime under it.
 
-Decide before Phase 0: license (Apache-2.0 recommended — the patent grant matters for a compiler
-project, and it matches TVM, IREE and MLIR/LLVM, which keeps the phase 10 export target clean).
+**Next.** Phase 2: the CUDA device, one allocator per backend, and `tessiq.cpu` / `tessiq.gpu` (§4.4).
+The 5080 does nothing for this project until then — today's device is CPU-backed.
+
+**Standing checks before any push**, learned the expensive way in phase 1:
+
+- Build under g++ 13 as well as the system compiler. Every CI failure so far was a diagnostic only
+  the newer one emits (§12).
+- Run the sanitizer build under `setarch $(uname -m) -R`, or ASan hangs on this kernel's ASLR.
+- Keep every dependency pinned exactly. A range let CI resolve a different torch than this machine
+  had, and the build broke in a configuration nobody had run.
