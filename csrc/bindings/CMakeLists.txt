@@ -49,9 +49,11 @@ endif()
 pybind11_add_module(_C MODULE
   module.cpp
   ../tessiq/torch/backend.cpp
+  ../tessiq/torch/importer.cpp
   ../tessiq/torch/ops.cpp)
 
 target_link_libraries(_C PRIVATE
+  tessiq::ir
   tessiq::runtime
   tessiq::support
   ${TORCH_LIBRARIES})
