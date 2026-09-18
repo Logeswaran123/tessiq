@@ -4,10 +4,14 @@ A PyTorch accelerator backend built from scratch: a custom device, a graph compi
 library. It exists to answer, in working code, what a hardware vendor actually has to build to put
 a chip behind `model.to(...)` and `torch.compile`.
 
-Phase 1 of 9. There is a working device: tensors allocate, transfer and compute under
-`device="tessera"`, with a caching allocator behind them and a CPU fallback covering ops that have
-no kernel yet. No IR and no compiler passes yet. [PLAN.md](PLAN.md) has the design and the phase
-breakdown.
+Phase 1 of 10 is done. Tensors allocate, transfer and compute under `device="tessera"`, backed by
+a caching allocator, with a CPU fallback covering every op that has no kernel yet.
+
+**Today that device runs on the CPU.** Its memory is host memory and its arithmetic is PyTorch's
+own CPU kernels; no GPU is involved. What is real is the rest of it: PyTorch treats tessera as a
+separate device with its own dispatch key, allocator and memory accounting. The GPU backend, and
+picking between the two per tensor, is phase 2. No IR and no compiler passes yet.
+[PLAN.md](PLAN.md) has the design and the phase breakdown.
 
 ```python
 import torch, tessera
@@ -15,6 +19,13 @@ import torch, tessera
 x = torch.randn(1024, device="tessera")
 y = (x + x).cpu()
 tessera.memory_stats()
+```
+
+From phase 2 the backend is chosen per tensor rather than per process:
+
+```python
+reference = torch.randn(1024, device=tessera.cpu)   # host memory
+fast      = reference.to(tessera.gpu)               # GPU memory
 ```
 
 ## How it fits together
@@ -79,8 +90,8 @@ pre-commit install --hook-type commit-msg
 |---|---|
 | [`csrc/`](csrc/) | C++/CUDA core: runtime, IR, passes, lowering, codegen, kernels |
 | [`python/tessera/`](python/tessera/) | Python API and the `torch.compile` backend |
-| [`ops/`](ops/) | Op definitions in YAML, and the source of truth for codegen (phase 6) |
-| [`tools/`](tools/) | `gen_ops.py`, `tessera-opt`, `tessera-explain` (phases 2, 6, 7) |
+| [`ops/`](ops/) | Op definitions in YAML, and the source of truth for codegen (phase 7) |
+| [`tools/`](tools/) | `gen_ops.py`, `tessera-opt`, `tessera-explain` (phases 3, 7, 8) |
 | [`tests/`](tests/) | gtest suites and golden pass tests; Python accuracy and end-to-end tests |
 | [`bench/`](bench/) | Benchmarks, and the scripts behind any number published here |
 | [`docs/`](docs/) | Architecture, IR spec, pass reference, design notes |
@@ -94,7 +105,7 @@ the script that produced it.
 
 ## Benchmarks
 
-Nothing worth showing before phase 5. Numbers land here when they exist, next to the scripts that
+Nothing worth showing before phase 6. Numbers land here when they exist, next to the scripts that
 produced them.
 
 ## Prior art

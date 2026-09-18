@@ -51,10 +51,10 @@ open, and every structural decision here traces to something a reader can go and
 |---|---|
 | PyTorch's out-of-tree backend mechanism and `torch/csrc` | Device registration, dispatch, the allocator interface (§4.4) |
 | `pytorch/xla` | Graph capture and lowering for a non-native device |
-| MLIR | Pass infrastructure, the textual-IR-plus-golden-test method (§5.1), and the phase 9 export target (§9.3) |
+| MLIR | Pass infrastructure, the textual-IR-plus-golden-test method (§5.1), and the phase 10 export target (§9.3) |
 | IREE, TVM | Fusion strategy, scheduling, memory planning |
 | `torch.compile` internals (Dynamo, AOTAutograd, FX) | The graph path (§4.1) |
-| Triton | Kernel-level codegen, and the phase 8 emitter (§9.2) |
+| Triton | Kernel-level codegen, and the phase 9 emitter (§9.2) |
 
 Where a design decision has a public precedent, the code comment cites that precedent at the point
 of use, so a reader can follow the reasoning to its source.
@@ -72,7 +72,7 @@ what makes the phase plan coherent rather than a list of features:
 | Unfused elementwise chains are memory-bound | Fusion + NVRTC codegen (§5.5, §5.7) |
 | Accelerators prefer different tensor layouts | Layout assignment with transpose elimination (§5.3) |
 | Compilation is expensive and must be amortized | Recipe cache keyed on graph + shape signature (§5.6) |
-| Shapes change between iterations | Symbolic shapes + bucketing (§5.8, Phase 7) |
+| Shapes change between iterations | Symbolic shapes + bucketing (§5.8, Phase 8) |
 | Hundreds of ops means hundreds of registrations | YAML op definitions + code generator (§6) |
 | Peak memory dominates on-device feasibility | Liveness-based memory planner (§5.3) |
 
@@ -142,7 +142,7 @@ Two notes:
                               correctness floor + fallback target
 
                           ┌─────────────────────────────────────┐
-   torch.compile(         │        GRAPH PATH (Phase 3+)        │
+   torch.compile(         │        GRAPH PATH (Phase 4+)        │
      model,               │                                      │
      backend="tessera")   │  Dynamo  ──> FX GraphModule          │
                      ────>│     │                                │
@@ -191,14 +191,15 @@ tessera/
 ├── LICENSE                        # Apache-2.0 or MIT
 │
 ├── csrc/                          # C++/CUDA core
-│   ├── runtime/                   # Phase 1
-│   │   ├── device.h/.cpp          # Device interface; CpuDevice, CudaDevice
-│   │   ├── allocator.h/.cpp       # caching block allocator, stream-aware
-│   │   ├── stream.h/.cpp          # stream + event abstraction
-│   │   ├── host_memory.h/.cpp     # pinned staging buffers
-│   │   └── register.cpp           # device backend registration, DeviceGuardImpl
+│   ├── runtime/                   # Phases 1, 2
+│   │   ├── device.h               # Device interface, backend registry
+│   │   ├── cpu_device.cpp         # reference backend                      (phase 1)
+│   │   ├── cuda_device.cpp        # CUDA backend                           (phase 2)
+│   │   ├── allocator.h/.cpp       # caching block allocator, one per device
+│   │   ├── stream.h/.cpp          # stream + event abstraction             (phase 2)
+│   │   └── host_memory.h/.cpp     # pinned staging buffers                 (phase 2)
 │   │
-│   ├── ir/                        # Phase 2
+│   ├── ir/                        # Phase 3
 │   │   ├── types.h                # TensorType: shape, dtype, layout, strides
 │   │   ├── graph.h/.cpp           # Graph, Node, Value; SSA, use-def
 │   │   ├── builder.h/.cpp
@@ -206,7 +207,7 @@ tessera/
 │   │   ├── printer.cpp            # IR → text
 │   │   └── parser.cpp             # text → IR  (roundtrip-tested)
 │   │
-│   ├── passes/                    # Phases 2,4,5,6
+│   ├── passes/                    # Phases 3,5,6,7
 │   │   ├── pass.h                 # Pass interface, PassManager, registry
 │   │   ├── canonicalize/          # dce, cse, const_fold, inplace_to_functional
 │   │   ├── shape/                 # shape inference, symbolic dims
@@ -217,18 +218,18 @@ tessera/
 │   │   ├── schedule/              # liveness-aware topological ordering
 │   │   └── memory/                # liveness analysis, buffer reuse, arena
 │   │
-│   ├── lowering/                  # Phase 4
+│   ├── lowering/                  # Phase 5
 │   │   ├── kernel_spec.h          # kernel id + params + buffer bindings
 │   │   ├── recipe.h/.cpp          # executable plan
 │   │   ├── recipe_cache.h/.cpp    # hash → recipe, LRU, on-disk persistence
 │   │   └── lower.cpp              # IR → Recipe
 │   │
-│   ├── codegen/                   # Phase 5
+│   ├── codegen/                   # Phase 6
 │   │   ├── fused_emitter.cpp      # fused cluster → CUDA source
 │   │   ├── nvrtc_compiler.cpp     # NVRTC compile + cubin disk cache
 │   │   └── templates/             # kernel source templates
 │   │
-│   ├── kernels/                   # Phases 1,5,6
+│   ├── kernels/                   # Phases 1,6,7
 │   │   ├── registry.h/.cpp        # kernel_id → impl, per backend/dtype
 │   │   ├── cpu/                   # reference implementations
 │   │   └── cuda/                  # elementwise, reduce, gemm, conv, norm, softmax
@@ -236,7 +237,7 @@ tessera/
 │   ├── bindings/                  # pybind11 surface
 │   └── generated/                 # gitignored; output of tools/gen_ops.py
 │
-├── ops/                           # Phase 6 — op definition YAML (source of truth)
+├── ops/                           # Phase 7 — op definition YAML (source of truth)
 │   ├── elementwise.yaml
 │   ├── reduction.yaml
 │   ├── contraction.yaml
@@ -305,7 +306,7 @@ Recipe {
 dynamic shapes), dtypes, layouts, device capability, and compiler flags. Getting this right matters:
 too coarse silently returns a wrong recipe, too fine never hits. Unit-test collisions explicitly.
 
-### 4.4 Device backend registration and naming
+### 4.4 Device backend registration, naming, and selection
 
 PyTorch reserves one dispatch key for out-of-tree backends. That key's internal identifier is fixed
 in PyTorch's own `DispatchKey` enum and **cannot be renamed by us** — it is their API surface, not a
@@ -332,6 +333,50 @@ will (§12) — exactly one file needs to change.
 **Verify at Phase 1:** these helper names have moved between torch releases. Confirm them against
 the installed, pinned version rather than trusting this document; if they've moved, fix them here
 and in `register.cpp` together.
+
+### Choosing a backend: `tessera.cpu` and `tessera.gpu`
+
+A tensor should say which backend it lives on, at the point it is created. A process-wide switch is
+the wrong control: it makes the two backends mutually exclusive, when the whole point of keeping a
+CPU reference is running both at once and comparing them.
+
+**One constraint decides the design.** PyTorch exposes exactly one device *type* to out-of-tree
+backends. `DeviceType` has a single `PrivateUse1` entry and only `rename_privateuse1_backend`
+exists, so `tessera_cpu` and `tessera_gpu` cannot be two device types however much that would read
+better. Verified against the pinned torch, not assumed.
+
+What PyTorch does give is device *indices*, which is how CUDA distinguishes `cuda:0` from `cuda:1`.
+tessera uses them to distinguish backends:
+
+| Index | Backend | Python name |
+|---|---|---|
+| `tessera:0` | CPU reference | `tessera.cpu` |
+| `tessera:1` | first CUDA device | `tessera.gpu`, or `tessera.gpu(0)` |
+| `tessera:1+n` | further CUDA devices | `tessera.gpu(n)` |
+
+```python
+import torch, tessera
+
+reference = torch.randn(1024, device=tessera.cpu)   # host memory, our allocator
+fast      = reference.to(tessera.gpu)               # device memory on the GPU
+
+torch.allclose(fast.to(tessera.cpu), reference)     # the oracle check, in one line
+tessera.memory_stats(tessera.gpu).allocated_bytes   # per-backend accounting
+```
+
+`tessera.cpu` and `tessera.gpu` are `torch.device` values, so they go anywhere a device goes:
+`device=`, `.to()`, `torch.zeros(..., device=...)`. The `tessera:N` spelling still works and is what
+`repr()` prints, because it is what PyTorch actually stores.
+
+**Why index 0 is the CPU reference.** An unqualified `device="tessera"` resolves to index 0, so the
+default is the backend that is always present and always correct. A machine with no GPU then gets a
+working default rather than an error, and CI needs no special case.
+
+Each backend owns a `Device` and its own `CachingAllocator`, so memory statistics are per backend.
+A single pooled number would be meaningless the moment both are in use.
+
+Cross-backend copies stage through the host. `tessera:0` and `tessera:1` share no address space, and
+a device-to-device copy between different backends is not one memcpy.
 
 ---
 
@@ -408,7 +453,7 @@ Start narrow: same-shape, same-dtype, unary/binary elementwise chains only. Expa
 then mixed dtypes, then reduction epilogues. Every expansion needs a correctness test against the
 CPU reference before it lands.
 
-### 5.8 Dynamic shapes (Phase 7)
+### 5.8 Dynamic shapes (Phase 8)
 
 Symbolic dims through shape inference; recipes keyed on shape *buckets* rather than exact shapes, so
 a varying sequence length doesn't recompile every step. Guard conditions recorded per recipe and
@@ -507,7 +552,7 @@ Rules that follow from this:
 - Every pass logs, at `DEBUG`, what it changed and how many nodes it touched. A compiler you can't
   see inside is a compiler you can't debug.
 - `TESSERA_DUMP_IR=before,after,all` writes IR snapshots per pass to a directory. This is the single
-  most valuable debugging feature in the project — build it in Phase 2, not when you first need it.
+  most valuable debugging feature in the project — build it in Phase 3, not when you first need it.
 - Compilation statistics (pass timings, node counts, cache hit/miss, kernels generated) are queryable
   from Python, not just printed.
 
@@ -688,11 +733,11 @@ replaces how a single fused kernel is produced; MLIR replaces how the whole grap
 lowered.
 
 ```
-  Tessera IR ──> passes ──> fused clusters ──┬──> NVRTC emitter    ──> cubin   (Phase 5)
-       │                                     ├──> Triton emitter   ──> cubin   (Phase 8)
+  Tessera IR ──> passes ──> fused clusters ──┬──> NVRTC emitter    ──> cubin   (Phase 6)
+       │                                     ├──> Triton emitter   ──> cubin   (Phase 9)
        │                                     └──> CPU emitter      ──> loops
        │
-       └──> MLIR export ──> linalg/tensor ──> MLIR pipeline ──> LLVM ──> CPU/GPU  (Phase 9)
+       └──> MLIR export ──> linalg/tensor ──> MLIR pipeline ──> LLVM ──> CPU/GPU  (Phase 10)
               ^
               └── seam 2                      ^
                                               └── seam 1 (KernelEmitter)
@@ -700,7 +745,7 @@ lowered.
 
 ### 9.1 The three seams to build now
 
-**Seam 1 — `KernelEmitter` interface (build in Phase 5).** Fusion produces a *cluster description*;
+**Seam 1 — `KernelEmitter` interface (build in Phase 6).** Fusion produces a *cluster description*;
 something else turns that into a runnable kernel. Define the interface even while NVRTC is the only
 implementation:
 
@@ -719,13 +764,13 @@ adding one class and zero changes anywhere else — and, critically, it means NV
 **benchmarked head-to-head on identical clusters**, which is a far more interesting result than either
 one alone.
 
-**Seam 2 — `LoweringTarget` abstraction (build in Phase 4).** `Recipe` must not be hardcoded as *the*
+**Seam 2 — `LoweringTarget` abstraction (build in Phase 5).** `Recipe` must not be hardcoded as *the*
 output of lowering. Lowering targets a `LoweringTarget` interface; `RecipeTarget` is the first
 implementation, `MlirTarget` a later one. The trap to avoid: letting `lower.cpp` reach into
 `Recipe`-specific structures. If lowering only ever speaks the target interface, MLIR export is an
 additive change.
 
-**Seam 3 — keep the IR op set small, orthogonal, and target-neutral (ongoing, from Phase 2).** This
+**Seam 3 — keep the IR op set small, orthogonal, and target-neutral (ongoing, from Phase 3).** This
 is the one that's easy to violate by accident and expensive to repair. Rules:
 - IR ops carry **no CUDA-specific assumptions** — no block sizes, no warp semantics, no launch config.
   Those belong in the emitter, below the IR.
@@ -734,7 +779,7 @@ is the one that's easy to violate by accident and expensive to repair. Rules:
 - **Shape, dtype, and layout live on the type** (§4.3), not in side tables — this maps directly onto
   MLIR's ranked tensor types. Side-table metadata does not survive the conversion.
 
-### 9.2 Adding Triton (Phase 8)
+### 9.2 Adding Triton (Phase 9)
 
 Triton slots in at seam 1 as an alternative emitter. A fused cluster becomes generated Triton kernel
 source instead of CUDA C source; `triton.compile` replaces NVRTC; the cubin cache is unchanged.
@@ -753,7 +798,7 @@ Triton is opt-in.
 code has to do before adopting a tool that does it for you. Reaching for Triton first would make the
 project a Triton wrapper — which is the common, less interesting version of this project.
 
-### 9.3 Adding MLIR/LLVM (Phase 9)
+### 9.3 Adding MLIR/LLVM (Phase 10)
 
 Three possible integration modes; the plan recommends the first:
 
@@ -781,7 +826,7 @@ so a second generator backend targeting TableGen is a new emitter template, not 
 makes the project harder to build for a casual visitor. Mitigation: MLIR support is a **build-time
 opt-in** (`-DTESSERA_ENABLE_MLIR=ON`, default `OFF`), never required for the core project or CI.
 
-**Realistic scope.** Phase 9 as written means: export the IR to `linalg` on tensors, run a standard
+**Realistic scope.** Phase 10 as written means: export the IR to `linalg` on tensors, run a standard
 MLIR bufferization + lowering pipeline, and execute the result — for a *subset* of ops, demonstrated
 end-to-end on one model. That is an honest, achievable deliverable and a strong one. "Reimplement the
 whole backend in MLIR" is not.
@@ -818,58 +863,89 @@ badly-formatted, warning-producing commit is *rejected* by CI.
 **Why here:** standards adopted after the code exists are standards applied to a backlog. Adopted
 first, they cost nothing and are never negotiated again.
 
-### Phase 1 — Device runtime and eager path
-`Device` abstraction with CPU and CUDA impls; caching allocator; streams/events; device backend
-registration with `DeviceGuardImplInterface` and the backend rename (§4.4); H2D/D2H copies; a
-handful of hand-registered eager ops.
-**Milestone:** `x = torch.randn(1024, device="tessera"); y = (x + x).cpu()` gives correct results on
-both backends. Memory stats API reports allocations.
+### Phase 1 — Device runtime and eager path — **done**
+`Device` abstraction with the CPU reference backend; caching allocator; device backend registration
+with `DeviceGuardImplInterface` and the backend rename (§4.4); transfers in both directions; enough
+native ops to make tensors usable, with a CPU fallback covering the rest of ATen.
+**Milestone:** `x = torch.randn(1024, device="tessera"); y = (x + x).cpu()` gives correct results,
+and the memory API reports allocations, reuse and cache hits.
 **Risk:** Device backend registration is the most version-fragile part of the project. Do it first, on a
 pinned torch, so the fragility is discovered on day one rather than in month three.
 
-### Phase 2 — IR and pass infrastructure
+### Phase 2 — The CUDA device, and choosing a backend per tensor
+
+A real `CudaDevice` alongside the CPU reference one, and an explicit choice between them at the
+point a tensor is created rather than a process-wide switch.
+
+- `CudaDevice` implementing `Device`: `cudaMalloc`/`cudaFree`, async `cudaMemcpy` in all three
+  directions, streams and events, and `device_count()` from the driver.
+- One `CachingAllocator` per device, so memory statistics are reported per backend rather than
+  pooled into a number that means nothing.
+- Device indices select the backend (§4.4): index 0 is the CPU reference, indices 1..N are the
+  CUDA devices. `tessera.cpu` and `tessera.gpu` name them in Python.
+- Cross-backend copies (`tessera:0` ↔ `tessera:1`) stage through the host.
+- The guard implementation gains real device switching, and `deviceCount()` covers both.
+- Every op-level test runs against both backends and compares results.
+
+**Milestone:** `torch.randn(1024, device=tessera.gpu)` allocates on the GPU and shows up in
+`nvidia-smi`; `.to(tessera.cpu)` moves it back; the two backends produce identical results on the
+op suite; `tessera.memory_stats(tessera.gpu)` reports device bytes independently of the CPU pool.
+
+**Expect it to be slow, and do not treat that as a defect.** Until the kernel library exists every
+op still reaches the host through the CPU fallback, so a GPU tensor makes two transfers per
+operation and will lose to plain CPU. What this phase buys is control and a correctness baseline:
+tensors genuinely live in device memory, both backends are exercised side by side, and the CUDA
+runtime is debugged while it is the only new thing in the picture. Kernels arrive in phases 6 and
+7, and the transfers disappear with them.
+
+**Why here rather than with the kernels.** Driver setup, stream semantics and async copies each
+fail in their own confusing way. Landing them next to fusion and runtime codegen would mean
+debugging three unfamiliar things at once, and every one of them can produce a wrong number
+rather than an error.
+
+### Phase 3 — IR and pass infrastructure
 Graph/Node/Value, TensorType, builder, verifier, printer, parser. PassManager + registry. `dce`,
 `cse`, `const-fold`. `tessera-opt` CLI. Golden test harness.
 **Milestone:** `tessera-opt --passes=dce,cse in.tsr` produces expected output; parse/print roundtrip
 is property-tested; no torch dependency in any of it.
 
-### Phase 3 — Graph capture
+### Phase 4 — Graph capture
 FX importer, `torch.compile` backend registration, capability partitioner, CPU fallback for
 unsupported ops, naive lowering (one kernel per node, no fusion yet).
 **Milestone:** `torch.compile(mlp, backend="tessera")` runs an MLP end-to-end with correct results,
 and a graph containing a deliberately unsupported op still produces correct results via fallback.
 
-### Phase 4 — Shape inference, memory planning, recipe cache
+### Phase 5 — Shape inference, memory planning, recipe cache
 Shape inference pass, canonicalization set, liveness analysis, memory planner, `Recipe`, recipe cache
 with signature hashing.
 **Milestone:** second call with same shapes hits the cache (assert via counter); measured peak memory
 below naive allocation; measured reduction in per-call overhead.
 
-### Phase 5 — Fusion and CUDA codegen
+### Phase 6 — Fusion and CUDA codegen
 Elementwise fusion pass; fused kernel emitter; NVRTC compilation with on-disk cubin cache; benchmarks.
 **Milestone:** a chain like `(a*b + c).relu().sigmoid()` runs as **one** kernel launch, with a
 measured, reproducible speedup over the unfused path on the 5080, and bit-comparable results against
 the CPU reference.
 
-### Phase 6 — Op coverage and real models
+### Phase 7 — Op coverage and real models
 YAML op definitions + `gen_ops.py`; broad elementwise/reduction/movement coverage; GEMM via cuBLAS;
 conv via cuDNN; layernorm/softmax kernels; layout assignment.
 **Milestone:** a ResNet-18 block and a transformer encoder block compile and run correctly on both
 backends. `docs/op_coverage.md` is generated and non-trivial.
 
-### Phase 7 — Training, dynamic shapes, tooling
+### Phase 8 — Training, dynamic shapes, tooling
 AOTAutograd backward graphs; symbolic shapes + bucketing; profiler with chrome-trace export;
 `tessera-explain`; `docs/architecture.md`; a write-up.
 **Milestone:** a small model **trains** to convergence on the tessera backend; sequence-length
 variation doesn't trigger recompilation every step.
 
-### Phase 8 — Triton emitter (optional, §9.2)
+### Phase 9 — Triton emitter (optional, §9.2)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;
 head-to-head benchmark against the NVRTC emitter on identical clusters.
 **Milestone:** `TESSERA_EMITTER=triton` produces correct results on the full op test suite, and
 `bench/emitters/` publishes a per-pattern comparison table of the two emitters.
 
-### Phase 9 — MLIR export target (optional, §9.3)
+### Phase 10 — MLIR export target (optional, §9.3)
 `MlirTarget` implementing `LoweringTarget`; Tessera IR → `linalg`-on-tensors converter; `gen_ops.py`
 extended to emit ODS from the same YAML; standard MLIR bufferization + lowering pipeline to LLVM.
 Gated behind `-DTESSERA_ENABLE_MLIR=ON`, off by default.
@@ -878,16 +954,16 @@ end-to-end on one model with results matching the CPU reference.
 
 ### Sequencing note
 
-Phases 0–3 are the risky ones: they're where an unfamiliar API can cost a week. Phases 4–7 are
+Phases 0–4 are the risky ones: they're where an unfamiliar API can cost a week. Phases 5–8 are
 additive and mostly under your own control. If time gets tight, a repo that stops cleanly after
-Phase 5 — with fusion working and measured — is a strong artifact. A repo that sprawls into Phase 7
-with a broken Phase 3 is not.
+Phase 6 — with fusion working and measured — is a strong artifact. A repo that sprawls into Phase 8
+with a broken Phase 4 is not.
 
-**Phases 8 and 9 are explicitly optional**, and framing them that way is deliberate. Their value to
-the project is mostly realized in Phases 4 and 5, when the seams get built (§9.1) — a plan that
+**Phases 9 and 10 are explicitly optional**, and framing them that way is deliberate. Their value to
+the project is mostly realized in Phases 5 and 6, when the seams get built (§9.1) — a plan that
 *demonstrably could* take a Triton emitter or an MLIR target, with the interfaces in place to prove
 it, already shows the architectural judgment. Building them is a bonus; designing for them is the
-skill. Do not let either become the reason Phase 6 never ships.
+skill. Do not let either become the reason Phase 7 never ships.
 
 ---
 
@@ -925,7 +1001,7 @@ cost model, and the recipe cache key design.
 | A strict warning fires inside an inlined third-party header | Unfixable in our own code, and `-isystem` does not help because the analysis runs after inlining | Disable that one analysis for the target that includes those headers, never globally, with the reason recorded at the call site |
 | sm_120 support gaps in torch/cuDNN builds | CUDA path fails at runtime | Verify `torch.cuda.get_arch_list()` on day one (§3); CPU backend keeps the project viable regardless |
 | 15 GB RAM with 32 cores | OOM during parallel C++ builds | Cap at `-j8`; use ninja; enable ccache; keep translation units small |
-| Scope creep — "one more op" | Never reaching a demo | Phase milestones are the gate; op *breadth* is explicitly Phase 6, not earlier |
+| Scope creep — "one more op" | Never reaching a demo | Phase milestones are the gate; op *breadth* is explicitly Phase 7, not earlier |
 | Fusion correctness bugs | Silent wrong results — the worst failure mode | Every fused path tested against CPU reference; CPU reference is never optimized, only kept obviously correct |
 | Cache key too coarse | Silent wrong results | Dedicated collision tests; in debug builds, verify cache hits by re-running the compile and comparing |
 | Generated code becomes unreviewable | Maintenance wall | Generated files gitignored and clearly marked; hand-written escape hatches per op (§6) |
@@ -944,4 +1020,4 @@ cost model, and the recipe cache key design.
    enforces quality goes in before the code it will judge.
 
 Decide before Phase 0: license (Apache-2.0 recommended — the patent grant matters for a compiler
-project, and it matches TVM, IREE and MLIR/LLVM, which keeps the phase 9 export target clean).
+project, and it matches TVM, IREE and MLIR/LLVM, which keeps the phase 10 export target clean).

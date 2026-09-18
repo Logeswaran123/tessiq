@@ -1,6 +1,6 @@
 # Op definitions
 
-Empty until phase 6.
+Empty until phase 7.
 
 Ops get defined here in YAML: aten schema, kernel name, supported dtypes and backends, shape rule,
 fusion category. `tools/gen_ops.py` reads them and emits the dispatcher registrations, importer
