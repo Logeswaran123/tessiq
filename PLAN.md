@@ -689,11 +689,26 @@ not.
 The test: read it aloud. If it sounds like a brochure, or like every paragraph was produced by the
 same template, rewrite it.
 
-**Commit messages get the same treatment, with less room.** The subject is what changed, in a few
-plain words after the conventional-commit type: `docs: clean docs`, not `docs: rewrite the docs in
-an engineer's voice`. Describe the change, not the quality of it, and never characterise your own
-work in the subject line. The body says what changed and why, in whatever length that honestly
-takes, and stops.
+**Commit messages are capped.** Subject under 50 characters, body under five lines, and often no
+body at all. "Whatever length it honestly takes" is not a limit; it is how commit messages turn
+into essays.
+
+The subject says what changed, after the conventional-commit type: `docs: clean docs`, not
+`docs: rewrite the docs in an engineer's voice`. Never characterise your own work in it.
+
+The body exists for one thing: the *why*, when the diff cannot show it. Cut everything else.
+
+| Do not put in a commit | Where it goes |
+|---|---|
+| Evidence for a decision — counts, benchmarks, search results | The PR description, or an ADR |
+| A list of what the diff already shows | Nowhere. Read the diff |
+| The investigation that led here | Nowhere, or one clause |
+| Re-justifying a decision already recorded | A link to §n or the ADR |
+| What was verified, test by test | The PR, or CI |
+
+If the reasoning needs paragraphs, it is a design decision and belongs in `docs/design_notes/`.
+A commit message that has to argue its case is a commit that should have been an ADR plus a
+two-line commit.
 
 ---
 
