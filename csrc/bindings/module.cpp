@@ -1,7 +1,7 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// The exception boundary (PLAN.md section 7.2, ADR 0001). Result<T> is the currency inside the
+// The exception boundary (ADR 0001). Result<T> is the currency inside the
 // core; Python callers expect exceptions. Translation happens here and nowhere else.
 
 #include <pybind11/pybind11.h>
@@ -53,7 +53,7 @@ void set_log_level_from_string(const std::string& level_name) {
 } // namespace
 
 PYBIND11_MODULE(_C, m) {
-  m.doc() = "tessiq native core (see PLAN.md for architecture)";
+  m.doc() = "tessiq native core";
 
   m.attr("__version__") = tessiq::kVersion;
 

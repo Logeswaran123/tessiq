@@ -29,7 +29,7 @@ enum class ErrorCode {
 std::string_view error_code_name(ErrorCode code);
 
 /// A recoverable failure. Messages state what failed, the offending value, and what was
-/// expected -- see PLAN.md section 7.2.
+/// expected.
 class Error {
  public:
   Error(ErrorCode code, std::string message) : code_(code), message_(std::move(message)) {}

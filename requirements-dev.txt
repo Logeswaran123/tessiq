@@ -4,7 +4,7 @@
 # Pinned development tooling.
 #
 # CI and the pre-commit hooks both install from this file, so a hook cannot disagree with the gate
-# it is supposed to mirror (PLAN.md section 7.7). Two versions of a formatter produce two different
+# it is supposed to mirror. Two versions of a formatter produce two different
 # "correct" formattings, and the difference shows up as a CI failure on a commit that passed
 # locally.
 #

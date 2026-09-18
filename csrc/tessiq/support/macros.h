@@ -23,7 +23,7 @@ check_failed(const char* file, int line, const char* condition, const std::strin
 /// Aborts unless `condition` holds. Retained in release builds.
 ///
 /// For internal invariants only. User input is validated with Result<T> (support/result.h) --
-/// a crash is never an acceptable response to bad input. See PLAN.md section 7.2.
+/// a crash is never an acceptable response to bad input.
 #define TESSIQ_CHECK(condition, message)                                                           \
   do {                                                                                             \
     if (TESSIQ_UNLIKELY(!(condition))) {                                                           \

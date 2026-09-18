@@ -8,4 +8,4 @@ entries, shape functions, lowering boilerplate, kernel registry and coverage doc
 
 Hand-writing four files per op stops scaling somewhere around op 40, which is why this is data
 rather than code. It also means a future MLIR dialect can be generated from the same source
-([PLAN.md §9.3](../PLAN.md)).
+([PHASES.md](../PHASES.md), phase 10).

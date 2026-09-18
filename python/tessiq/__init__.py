@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """tessiq: a from-scratch PyTorch accelerator backend.
 
-The public surface is intentionally small at this stage. See PLAN.md for the architecture and
+The public surface is intentionally small at this stage. See PHASES.md for
 the phase plan; the device API, the ``torch.compile`` backend and the debug tooling arrive in
 later phases.
 """

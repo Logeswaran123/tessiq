@@ -12,7 +12,7 @@ namespace tessiq {
 
 /// Minimum alignment of every pointer a Device hands out.
 ///
-/// Chosen to satisfy the widest vector load on the targets in PLAN.md section 3. Both backends
+/// Chosen to satisfy the widest vector load on the supported targets. Both backends
 /// meet it for free: cudaMalloc aligns to at least 256 bytes, and the CPU backend uses
 /// aligned_alloc. Stating it as a contract means a kernel can assume alignment without checking,
 /// and a new backend knows what it owes.

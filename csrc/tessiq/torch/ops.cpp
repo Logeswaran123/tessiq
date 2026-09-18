@@ -5,7 +5,7 @@
 //
 // These exist for two reasons: they are the fallback for anything the compiler declines to take,
 // and they are what makes tensors usable at all -- allocation, transfers and enough arithmetic to
-// check the plumbing. Breadth arrives with the op generator in phase 6 (PLAN.md section 6).
+// check the plumbing. Breadth arrives with the op generator (PHASES.md, phase 7).
 
 #include <ATen/EmptyTensor.h>
 #include <ATen/core/Tensor.h>
@@ -224,7 +224,7 @@ at::Tensor copy_from_and_resize(const at::Tensor& self, const at::Tensor& dst) {
 /// to land somewhere. It is slow by construction -- two transfers per op -- which is the point.
 /// Anything hot shows up immediately in a profile as fallback traffic.
 ///
-/// The compiler path treats the same question as partitioning (PLAN.md section 5.4): ops without a
+/// The compiler path treats the same question as partitioning: ops without a
 /// kernel are cut out of the graph and left on the host.
 void cpu_fallback(const c10::OperatorHandle& op, torch::jit::Stack* stack) {
   TESSIQ_LOG(kDebug, kLogModule) << "cpu fallback for " << op.schema().operator_name().name;

@@ -1,7 +1,7 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Warning configuration (PLAN.md section 7.1).
+# Warning configuration.
 #
 # Warnings are build failures in CI, not advisory output. A warning that is allowed to persist
 # trains everyone to ignore the next one.

@@ -14,7 +14,7 @@ a caching allocator, with a CPU fallback covering every op that has no kernel ye
 own CPU kernels; no GPU is involved. What is real is the rest of it: PyTorch treats tessiq as a
 separate device with its own dispatch key, allocator and memory accounting. The GPU backend, and
 picking between the two per tensor, is phase 2. No IR and no compiler passes yet.
-[PLAN.md](PLAN.md) has the design and the phase breakdown.
+[PHASES.md](PHASES.md) has the full phase breakdown and what each one delivers.
 
 ```python
 import torch, tessiq
@@ -101,10 +101,10 @@ pre-commit install --hook-type commit-msg
 
 ## Standards
 
-`-Werror` with a wide warning set, clang-tidy, ruff, `mypy --strict` and ASan/UBSan all gate merges.
-[PLAN.md §7](PLAN.md) has the rules. The parts that come up most: user input never reaches an
-assert, every pass states why its transformation is legal, and no performance claim ships without
-the script that produced it.
+`-Werror` with a wide warning set, clang-tidy, ruff, `mypy --strict` and ASan/UBSan all gate merges,
+and the pre-commit hooks run the same versions CI does. The rules that come up most: user input
+never reaches an assert, every pass states why its transformation is legal, and no performance
+claim ships without the script that produced it.
 
 ## Benchmarks
 

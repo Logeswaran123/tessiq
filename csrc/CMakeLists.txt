@@ -5,7 +5,7 @@
 #
 # The foundation layer: assertions, errors, logging. Every other target depends on it, and it
 # depends on nothing but the standard library. Keeping it free of torch and CUDA is what allows
-# the IR and the passes to be tested without either (PLAN.md section 8).
+# the IR and the passes to be tested without either.
 
 # version.h is generated so that the version lives in exactly one place (CMakeLists.txt) and
 # cannot drift between the native module and the Python package.

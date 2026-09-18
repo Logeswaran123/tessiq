@@ -29,5 +29,7 @@ ir_dumps/
 *.swp
 .DS_Store
 
-# Local working notes, never published
+# Local working notes, never published. PLAN.md is the full design document; PHASES.md carries
+# the part of it that belongs in the repository.
 NOTES.local.md
+PLAN.md

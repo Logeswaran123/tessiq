@@ -4,7 +4,7 @@
 // Everything PyTorch needs in order to treat tessiq as a device.
 //
 // PyTorch reserves one dispatch key for out-of-tree backends. Its internal identifier is fixed in
-// PyTorch's own enum and is confined to this file (PLAN.md section 4.4); the name users see is set
+// PyTorch's own enum and is confined to this file; the name users see is set
 // by rename_privateuse1_backend("tessiq") on the Python side.
 //
 // This is the most version-fragile file in the project. If a torch upgrade breaks the build, it

@@ -98,7 +98,7 @@ select = [
   "SIM",      # simplification
   "ARG",      # unused arguments
   "PTH",      # pathlib over os.path
-  "ERA",      # commented-out code (PLAN.md section 7.5)
+  "ERA",      # commented-out code
   "RUF",
 ]
 ignore = [

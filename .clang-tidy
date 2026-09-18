@@ -1,5 +1,5 @@
 ---
-# Checks are deliberately strict: PLAN.md section 7 makes lint a merge gate, not a suggestion.
+# Checks are deliberately strict: lint is a merge gate here, not a suggestion.
 #
 # Disabled checks, and why. Note that comments cannot live inside the `Checks` value below -- it is
 # a YAML folded scalar, so a '#' there becomes part of the check list rather than a comment.

@@ -1,7 +1,7 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# CI runs on GPU-less runners and is expected to stay green there (PLAN.md section 8). That is
+# CI runs on GPU-less runners and is expected to stay green there. That is
 # honest rather than a compromise: the compiler passes are hardware-independent, so the CPU
 # backend genuinely exercises them. CUDA tests are marked `cuda` and run locally.
 

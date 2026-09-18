@@ -16,9 +16,9 @@ option(TESSIQ_BUILD_PYTHON "Build the Python extension module" ON)
 option(TESSIQ_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(TESSIQ_ENABLE_CUDA "Build the CUDA backend" OFF)
 
-# Reserved for PLAN.md section 9.3. Declared now so the option name is fixed and documented
+# Reserved for the MLIR export target. Declared now so the option name is fixed and documented
 # before anything depends on it; enabling it is a later phase.
-option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PLAN.md phase 9)" OFF)
+option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PHASES.md, phase 10)" OFF)
 
 set(TESSIQ_SANITIZER "" CACHE STRING
     "Comma-separated sanitizers to enable, e.g. 'address,undefined'. Empty disables them.")
@@ -47,7 +47,7 @@ include(Sanitizers)
 
 if(TESSIQ_ENABLE_MLIR)
   message(FATAL_ERROR
-          "TESSIQ_ENABLE_MLIR is reserved for phase 9 (see PLAN.md section 9.3) and is not "
+          "TESSIQ_ENABLE_MLIR is reserved for phase 10 (see PHASES.md) and is not "
           "implemented yet. Configure without it.")
 endif()
 

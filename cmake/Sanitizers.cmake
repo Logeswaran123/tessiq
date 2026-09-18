@@ -1,7 +1,7 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Sanitizer configuration (PLAN.md section 7.7).
+# Sanitizer configuration.
 #
 # ASan and UBSan run on the CPU backend in CI. They are not enabled by default because they change
 # the ABI and slow builds; they are a distinct build configuration, selected with

@@ -63,7 +63,7 @@ TEST_F(LoggingTest, EnabledLevelsAreOrdered) {
 }
 
 TEST_F(LoggingTest, DisabledLogDoesNotEvaluateItsArguments) {
-  // The central performance claim of the logging layer (PLAN.md section 7.3): building an
+  // The central performance claim of the logging layer: building an
   // expensive message must cost nothing when the level is disabled. If this regresses, every
   // hot-path log statement starts paying for a string it never prints.
   set_log_level(LogLevel::kWarn);

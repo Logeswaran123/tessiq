@@ -38,7 +38,7 @@ def test_unknown_level_raises_value_error() -> None:
 
 
 def test_error_message_lists_the_valid_levels() -> None:
-    # PLAN.md section 7.2: an error message names the fix, not just the problem.
+    # An error message names the fix, not just the problem.
     with pytest.raises(ValueError, match="unknown log level") as excinfo:
         tessiq.set_log_level("verbose")
 

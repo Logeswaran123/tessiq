@@ -3,7 +3,7 @@
 """Every ErrorCode maps to the Python exception type a caller would expect.
 
 The mapping lives in csrc/bindings/module.cpp and is the single exception boundary of the project
-(PLAN.md section 7.2). Python code distinguishes these with ``except`` clauses, so a regression
+Python code distinguishes these with ``except`` clauses, so a regression
 here silently forces callers to match on message text instead.
 """
 

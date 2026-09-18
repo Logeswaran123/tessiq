@@ -51,4 +51,4 @@ Worth revisiting once `std::expected` is available across the toolchains we supp
 
 ## See also
 
-`csrc/tessiq/support/result.h`, `csrc/tessiq/support/error.h`, [PLAN.md](../../PLAN.md) §7.2.
+`csrc/tessiq/support/result.h`, `csrc/tessiq/support/error.h`.

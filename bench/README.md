@@ -7,4 +7,4 @@ Report a distribution, not one timing, and drop the warmup.
 
 - `micro/` — per-pattern, fused against unfused
 - `models/` — model-level, fusion on and off
-- `emitters/` — NVRTC against Triton on the same clusters ([PLAN.md §9.2](../PLAN.md))
+- `emitters/` — NVRTC against Triton on the same clusters ([PHASES.md](../PHASES.md), phase 9)

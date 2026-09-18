@@ -1,7 +1,7 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Local gates that mirror CI (PLAN.md section 7.7). Anything enforced here is also enforced in CI:
+# Local gates that mirror CI. Anything enforced here is also enforced in CI:
 # a hook that CI does not also run is a hook people learn to skip.
 #
 #   pip install -r requirements-dev.txt
