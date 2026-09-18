@@ -148,6 +148,25 @@ TEST(PassManagerTest, ReportsWhetherEachPassChangedAnything) {
   EXPECT_FALSE(reports->front().changed) << "nothing in this graph is dead";
 }
 
+TEST(ClusterTest, RefusesToRunBeforeMarkSupported) {
+  // Clustering reads an attribute mark-supported writes. Running it first would silently treat
+  // every node as unsupported and produce no clusters at all, which looks like a correct answer.
+  auto graph = ir::parse(R"(graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
+  %x = aten.add.Tensor(%a, %b) : f32[4]
+  return %x
+}
+)");
+  ASSERT_TRUE(graph.has_value());
+
+  PassManager manager;
+  ASSERT_TRUE(manager.add_from_pipeline("cluster").has_value());
+
+  auto reports = manager.run(**graph);
+  ASSERT_FALSE(reports.has_value());
+  EXPECT_NE(reports.error().message().find("mark-supported"), std::string::npos)
+      << reports.error().message();
+}
+
 TEST(PassManagerTest, PassesAreIdempotent) {
   // Running a pass twice should be a no-op the second time. A pass that keeps reporting changes
   // would spin forever under fixpoint iteration.
@@ -162,15 +181,18 @@ TEST(PassManagerTest, PassesAreIdempotent) {
 )");
     ASSERT_TRUE(graph.has_value());
 
+    // cluster reads what mark-supported writes, so it is run behind it rather than alone.
+    const std::string pipeline = name == "cluster" ? "mark-supported,cluster" : name;
+
     PassManager first;
-    ASSERT_TRUE(first.add_from_pipeline(name).has_value());
+    ASSERT_TRUE(first.add_from_pipeline(pipeline).has_value());
     ASSERT_TRUE(first.run(**graph).has_value()) << name;
 
     PassManager second;
-    ASSERT_TRUE(second.add_from_pipeline(name).has_value());
+    ASSERT_TRUE(second.add_from_pipeline(pipeline).has_value());
     auto reports = second.run(**graph);
     ASSERT_TRUE(reports.has_value()) << name;
-    EXPECT_FALSE(reports->front().changed) << name << " kept changing on a second run";
+    EXPECT_FALSE(reports->back().changed) << name << " kept changing on a second run";
   }
 }
 

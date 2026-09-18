@@ -1,0 +1,20 @@
+// RUN: mark-supported,cluster
+// %x, %z and %w are each supported and each connected, so merging by edges alone would put all
+// three in one cluster. %y consumes from that cluster and %w consumes %y, so the cluster would
+// have to run both before and after %y. There is no order that works, so the merge is refused and
+// %w stays separate.
+graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
+  %x = aten.add.Tensor(%a, %b) : f32[4]
+  %y = aten.mm.default(%x, %b) : f32[4]
+  %z = aten.mul.Tensor(%x, %a) : f32[4]
+  %w = aten.sub.Tensor(%y, %z) : f32[4]
+  return %w
+}
+// ---
+graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
+  %x = aten.add.Tensor(%a, %b) {tessiq.cluster = 0, tessiq.supported = true} : f32[4]
+  %y = aten.mm.default(%x, %b) {tessiq.supported = false} : f32[4]
+  %z = aten.mul.Tensor(%x, %a) {tessiq.cluster = 0, tessiq.supported = true} : f32[4]
+  %w = aten.sub.Tensor(%y, %z) {tessiq.cluster = 1, tessiq.supported = true} : f32[4]
+  return %w
+}

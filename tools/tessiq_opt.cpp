@@ -104,8 +104,11 @@ int run(const std::vector<std::string_view>& args) {
   if (options->list) {
     for (const std::string& name : tessiq::passes::PassRegistry::instance().names()) {
       auto pass = tessiq::passes::PassRegistry::instance().create(name);
-      std::cout << "  " << name << std::string(name.size() < 14 ? 14 - name.size() : 1, ' ')
-                << (*pass)->description() << "\n";
+      // Padded to the widest name plus a gap, so adding a longer pass name does not silently
+      // collapse the column.
+      constexpr std::size_t kColumn = 18;
+      const std::size_t pad = name.size() < kColumn ? kColumn - name.size() : 1;
+      std::cout << "  " << name << std::string(pad, ' ') << (*pass)->description() << "\n";
     }
     return 0;
   }

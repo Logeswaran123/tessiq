@@ -10,6 +10,7 @@
 #include <string>
 
 #include "tessiq/ir/text.h"
+#include "tessiq/passes/pass.h"
 #include "tessiq/runtime/allocator.h"
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/error.h"
@@ -129,6 +130,32 @@ PYBIND11_MODULE(_C, m) {
       py::arg("graph_module"),
       py::arg("name") = "forward",
       "Converts a torch.fx.GraphModule into tessiq IR and returns its textual form.");
+
+  m.def(
+      "run_passes",
+      [](const std::string& ir, const std::string& pipeline) {
+        auto graph = tessiq::ir::parse(ir);
+        if (!graph) {
+          raise_from_error(graph.error());
+        }
+        tessiq::passes::PassManager manager;
+        if (const auto added = manager.add_from_pipeline(pipeline); !added) {
+          raise_from_error(added.error());
+        }
+        if (auto reports = manager.run(**graph); !reports) {
+          raise_from_error(reports.error());
+        }
+        return tessiq::ir::print(**graph);
+      },
+      py::arg("ir"),
+      py::arg("pipeline"),
+      "Runs a named pass pipeline over textual IR and returns the result. Text in and text out, "
+      "for tests and debugging; the compiler keeps the graph in memory instead.");
+
+  m.def(
+      "pass_names",
+      []() { return tessiq::passes::PassRegistry::instance().names(); },
+      "Names of the registered passes.");
 
   // Exercises the Result -> exception mapping from tests; a mapping nothing tests rots.
   m.def(

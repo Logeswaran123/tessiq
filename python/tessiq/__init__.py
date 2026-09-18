@@ -29,7 +29,7 @@ from tessiq.device import (
     memory_reserved,
     memory_stats,
 )
-from tessiq.fx import import_graph
+from tessiq.fx import import_graph, pass_names, run_passes
 
 __all__ = [
     "DEVICE_NAME",
@@ -47,6 +47,8 @@ __all__ = [
     "memory_allocated",
     "memory_reserved",
     "memory_stats",
+    "pass_names",
+    "run_passes",
     "set_log_level",
 ]
 

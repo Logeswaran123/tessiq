@@ -66,9 +66,12 @@ add_library(tessiq_ir STATIC
   tessiq/ir/graph.cpp
   tessiq/ir/text.cpp
   tessiq/ir/types.cpp
+  tessiq/passes/cluster.cpp
   tessiq/passes/const_fold.cpp
   tessiq/passes/cse.cpp
   tessiq/passes/dce.cpp
+  tessiq/passes/mark_supported.cpp
+  tessiq/passes/op_support.cpp
   tessiq/passes/pass.cpp)
 
 target_link_libraries(tessiq_ir PUBLIC tessiq::support)

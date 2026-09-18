@@ -52,8 +52,11 @@ pybind11_add_module(_C MODULE
   ../tessiq/torch/importer.cpp
   ../tessiq/torch/ops.cpp)
 
+# WHOLE_ARCHIVE because passes register themselves at static initialisation, and a static
+# library only contributes objects something already references. Without it the module links but
+# the pass registry is empty.
 target_link_libraries(_C PRIVATE
-  tessiq::ir
+  "$<LINK_LIBRARY:WHOLE_ARCHIVE,tessiq_ir>"
   tessiq::runtime
   tessiq::support
   ${TORCH_LIBRARIES})
