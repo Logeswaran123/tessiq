@@ -1,10 +1,11 @@
 # Op definitions
 
-*Arrives in phase 6 — see [`PLAN.md` §6](../PLAN.md).*
+Empty until phase 6.
 
-This directory will hold the YAML op definitions that are the single source of truth for code
-generation. `tools/gen_ops.py` reads them and emits dispatcher registrations, importer entries,
-shape functions, lowering boilerplate, the kernel registry, and `docs/op_coverage.md`.
+Ops get defined here in YAML: aten schema, kernel name, supported dtypes and backends, shape rule,
+fusion category. `tools/gen_ops.py` reads them and emits the dispatcher registrations, importer
+entries, shape functions, lowering boilerplate, kernel registry and coverage docs.
 
-Defining ops as data rather than as hand-written C++ is also what keeps a future MLIR dialect
-cheap: the same YAML can emit ODS/TableGen ([`PLAN.md` §9.3](../PLAN.md)).
+Hand-writing four files per op stops scaling somewhere around op 40, which is why this is data
+rather than code. It also means a future MLIR dialect can be generated from the same source
+([PLAN.md §9.3](../PLAN.md)).

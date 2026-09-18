@@ -606,6 +606,43 @@ A change is done when **all** of these are true — not when it works on your ma
   CPU reference is not an optimization; it's a bug. No exceptions, no "close enough" tolerances
   chosen after seeing the failure.
 
+### 7.10 Voice in documentation and commit messages
+
+**Write like an engineer explaining the project to a peer, not like a generated summary of it.**
+This applies to the README, the docs, ADRs, changelog entries and commit messages. PLAN.md is the
+exception: it is a design document and can afford to argue with itself at length.
+
+Assume the reader is competent. They do not need to be told what a compiler pass is, reassured that
+the project is well engineered, or walked through why each section exists.
+
+Habits that make prose read as machine-generated, and what to do instead:
+
+| Tell | Instead |
+|---|---|
+| Status banners and meta-commentary about the document itself | State the status in one line and move on |
+| Every section the same length and shape | Let sections be as long as they need to be; a one-line section is fine |
+| A bolded lead-in on every bullet | Bold the two things that matter, or nothing |
+| Em-dashes as the default connector | A full stop. Occasionally a colon |
+| Triads: "elegant, portable, and correct" | Name the one property that matters |
+| "deliberately", "genuinely", "honestly", "carefully", "the whole point" | Cut them. The reader decides what is deliberate |
+| Explaining a decision three times in three places | Say it once, link to it |
+| Hedged claims that restate themselves | One sentence, then stop |
+| Tables for things that are not tabular | A sentence or a list |
+| Marketing adjectives about your own work | Facts the reader can check |
+
+What good looks like: short paragraphs, concrete versions and flags, commands that can be pasted,
+plain statements about what does not work yet. A dry aside is fine. Repetition and reassurance are
+not.
+
+The test: read it aloud. If it sounds like a brochure, or like every paragraph was produced by the
+same template, rewrite it.
+
+**Commit messages get the same treatment, with less room.** The subject is what changed, in a few
+plain words after the conventional-commit type: `docs: clean docs`, not `docs: rewrite the docs in
+an engineer's voice`. Describe the change, not the quality of it, and never characterise your own
+work in the subject line. The body says what changed and why, in whatever length that honestly
+takes, and stops.
+
 ---
 
 ## 8. Testing strategy

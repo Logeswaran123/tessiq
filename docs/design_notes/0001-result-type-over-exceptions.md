@@ -1,63 +1,54 @@
-# ADR 0001: `Result<T>` for recoverable failures, exceptions only at the boundary
+# ADR 0001: Result<T> for recoverable failures
 
 - **Status:** accepted
 - **Date:** 2026-09-17
-- **Phase:** 0
 
 ## Context
 
-The compiler needs a failure mechanism for paths that fail routinely: kernel lookup that finds no
-implementation for a dtype, a pattern match that does not apply, a cache probe that misses, an op
-the backend cannot lower. These are not exceptional conditions. They are ordinary answers that
-drive a decision — usually "fall back to CPU" or "try the next pattern".
-
-Three options were considered.
+Plenty of paths in a compiler fail as a matter of routine. Kernel lookup finds nothing for a dtype.
+A pattern doesn't match. A cache probe misses. An op can't be lowered. None of that is exceptional;
+it's the normal answer, and it usually drives a fallback decision.
 
 ## Options
 
-**1. Exceptions throughout.** Idiomatic C++, no return-type ceremony, and errors propagate without
-each layer handling them.
+**Exceptions.** Idiomatic, no ceremony at the call site, propagate on their own.
 
-Rejected because it makes the common case invisible. A function signature says nothing about
-whether it can fail, so a caller cannot tell from the interface that a fallback decision is
-required. It also costs on hot paths — pattern matching runs thousands of times per compilation,
-and "no match" is the expected outcome for most patterns tried.
+The problem is that the signature stops telling you anything. A caller can't see that a function
+might need a fallback, so the decision gets made by whoever remembers. Pattern matching also runs
+thousands of times per compilation with "no match" as the expected result, and paying for a throw
+on the expected path is backwards.
 
-**2. Sentinel returns** (`nullptr`, `-1`, `std::optional`). Cheap and simple.
+**Sentinels** — `nullptr`, `-1`, `std::optional`. Cheap, but they throw away the reason. "No kernel
+exists" and "a kernel exists but not for f64" lead somewhere different, and `nullopt` can't tell
+them apart. Easy to ignore, too.
 
-Rejected because it discards the reason. "No kernel" and "kernel exists but this dtype is not
-supported" lead to different decisions, and a bare `std::nullopt` cannot tell them apart. It is
-also silently ignorable.
-
-**3. `Result<T>` carrying a value or an `Error`.** Chosen.
+**Result<T>.** Chosen.
 
 ## Decision
 
-Recoverable failures return `Result<T>`. `Result` is `[[nodiscard]]`, so ignoring a fallible call
-is a compile error. `Error` carries an `ErrorCode` for programmatic decisions and a message for
-humans, and `with_context()` adds provenance while propagating.
+Recoverable failures return `Result<T>`. It's `[[nodiscard]]`, so dropping one is a compile error.
+`Error` carries an `ErrorCode` to branch on and a message for whoever reads the log;
+`with_context()` adds provenance on the way up.
 
-Exceptions are confined to one place: `csrc/bindings/module.cpp`, where `Error` is translated into
-the Python exception type a caller would expect. No C++ exception crosses the C ABI boundary.
+Exceptions live in exactly one file, `csrc/bindings/module.cpp`, where an `Error` becomes the
+Python exception a caller would expect. Nothing throws across the C ABI.
 
-Broken internal invariants are a third, separate category. They are not `Result` — they are
-`TESSERA_DCHECK`, because a caller cannot do anything useful with "the compiler has a bug".
+Broken invariants are a separate thing again. Those are `TESSERA_DCHECK`, because there is nothing
+useful a caller can do with "the compiler has a bug".
 
 ## Consequences
 
-**Good.** Fallibility is visible in every signature. The compiler enforces that results are
-checked. Error classification survives propagation, so the fallback logic can branch on `code()`
-rather than on message text. No exception-handling cost on hot paths.
+Fallibility shows up in every signature, and the compiler enforces that results get checked.
+Classification survives propagation, so fallback logic branches on `code()` instead of grepping
+message text.
 
-**Bad.** More ceremony than exceptions: each fallible call needs a check or a propagation macro.
-`TESSERA_RETURN_IF_ERROR` and `TESSERA_ASSIGN_OR_RETURN` reduce it but do not remove it. The two
-mechanisms must not be mixed by accident, which is a discipline question, not a compiler-enforced
-one.
+The cost is ceremony: every fallible call needs a check or a macro. `TESSERA_RETURN_IF_ERROR` and
+`TESSERA_ASSIGN_OR_RETURN` take the edge off but don't remove it. And nothing stops someone mixing
+the two mechanisms by accident — that's a review question, not a compiler-enforced one.
 
-**Revisit if** C++23's `std::expected` becomes available across the supported toolchains, at which
-point `Result<T>` should become a thin alias rather than an independent implementation.
+Worth revisiting once `std::expected` is available across the toolchains we support, at which point
+`Result<T>` should become an alias rather than its own implementation.
 
-## References
+## See also
 
-- `csrc/tessera/support/result.h`, `csrc/tessera/support/error.h`
-- `PLAN.md` §7.2 — the three-category error model
+`csrc/tessera/support/result.h`, `csrc/tessera/support/error.h`, [PLAN.md](../../PLAN.md) §7.2.
