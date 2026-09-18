@@ -100,7 +100,7 @@ Verified on this machine as of 2026-09-17:
 | CUDA toolkit | 12.8 (`/usr/local/cuda-12.8`) | Supports sm_120; NVRTC ships with it |
 | PyTorch | pinned to **2.11.0** | The last release with `cu128` wheels. 2.12+ need cu129 or newer, so bumping torch means bumping the toolkit |
 | Host compiler | g++ 11.4.0 (Ubuntu 22.04, WSL2) | Check nvcc host-compiler compatibility |
-| CI compiler | g++ 13 (ubuntu-latest) | Newer than the local one, and it warns about things 11.4 does not. Reproduce with conda-forge `gxx_linux-64=13` before pushing; use the system compiler for sanitizer runs, because the conda ASan runtime hangs against the system glibc |
+| CI compiler | g++ 13 (ubuntu-latest) | Newer than the local one, and it warns about things 11.4 does not. Reproduce with conda-forge `gxx_linux-64=13` before pushing. Its ASan build hangs at startup on this kernel's ASLR entropy; run it under `setarch $(uname -m) -R` and the suite passes |
 | Python | 3.13.11 (miniconda) | |
 | CPU / RAM | 32 cores / 15 GB | RAM is the build constraint — cap `-j` (§12) |
 | PyTorch | **not yet installed** | Must be installed before Phase 1 |
