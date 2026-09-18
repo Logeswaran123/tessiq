@@ -49,7 +49,7 @@ The passes don't know what hardware they're targeting, so CI runs the compiler o
 
 ```bash
 pip install -r requirements-dev.txt
-pip install -e .
+pip install -e . --no-build-isolation
 pytest
 
 cmake -S . -B build -G Ninja

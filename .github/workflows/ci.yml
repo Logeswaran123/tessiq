@@ -40,7 +40,7 @@ jobs:
       - name: ruff format
         run: ruff format --check .
       - name: Install package for type checking
-        run: pip install -e .
+        run: pip install -e . --no-build-isolation
       - name: mypy
         run: mypy
 
@@ -65,8 +65,7 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DTESSERA_BUILD_PYTHON=ON \
-            -Dpybind11_DIR=$(python -m pybind11 --cmakedir)
+            -DTESSERA_BUILD_PYTHON=ON
       - name: clang-tidy
         run: |
           status=0
@@ -103,8 +102,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DTESSERA_BUILD_TESTS=ON \
             -DTESSERA_BUILD_PYTHON=ON \
-            -DTESSERA_WARNINGS_AS_ERRORS=ON \
-            -Dpybind11_DIR=$(python -m pybind11 --cmakedir)
+            -DTESSERA_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build
       - name: C++ tests

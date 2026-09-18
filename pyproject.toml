@@ -77,9 +77,11 @@ markers = [
 line-length = 100
 target-version = "py310"
 src = ["python", "tests/python", "tools"]
-# Build trees contain vendored third-party sources (googletest ships Python helpers). Linting
-# them reports hundreds of errors in code this project does not own.
-extend-exclude = ["build", "_skbuild", "csrc/generated"]
+# Build trees contain vendored third-party sources: googletest ships Python helpers, and linting
+# them reports hundreds of errors in code this project does not own. Matched by pattern rather
+# than by exact name, because build directories get suffixes (build-asan, build-cuda) and an
+# exclude list that only covers "build" silently stops working the first time one appears.
+extend-exclude = ["build*", "_skbuild*", "**/_deps/**", "csrc/generated"]
 
 [tool.ruff.lint]
 select = [
