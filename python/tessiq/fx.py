@@ -31,3 +31,28 @@ def import_graph(graph_module: torch.fx.GraphModule, name: str = "forward") -> s
         TypeError: If the graph uses a dtype or a node kind the IR cannot represent.
     """
     return str(_C.import_fx(graph_module, name))
+
+
+def run_passes(ir: str, pipeline: str) -> str:
+    """Run a named pass pipeline over textual IR and return the result.
+
+    Text in and text out, for tests and for looking at what a pass did. The compiler itself keeps
+    the graph in memory rather than round-tripping through text.
+
+    Args:
+        ir: A graph in tessiq's textual IR.
+        pipeline: Comma-separated pass names, for example ``"mark-supported,cluster"``.
+
+    Returns:
+        The graph after the pipeline, in textual IR.
+
+    Raises:
+        ValueError: If the IR does not parse, or a pass rejects the graph.
+        KeyError: If the pipeline names a pass that does not exist.
+    """
+    return str(_C.run_passes(ir, pipeline))
+
+
+def pass_names() -> list[str]:
+    """Names of the registered passes, sorted."""
+    return list(_C.pass_names())

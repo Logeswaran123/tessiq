@@ -36,3 +36,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `tessiq-opt`, which runs a named pipeline over textual IR, and golden-file pass tests.
 - `tessiq.import_graph(gm)`, which converts the FX graph a `torch.compile` backend receives into
   tessiq IR and returns its textual form.
+- Partitioning, as two passes: `mark-supported` records whether the backend can run each node, and
+  `cluster` groups neighbouring supported nodes into units, refusing any merge that would make the
+  graph unexecutable.
+- `tessiq.run_passes(ir, pipeline)` and `tessiq.pass_names()`.

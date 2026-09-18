@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <set>
 #include <string>
 #include <string_view>
