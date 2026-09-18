@@ -78,17 +78,25 @@ PYBIND11_MODULE(_C, m) {
 
   m.def(
       "device_count",
-      []() { return tessiq::current_device().device_count(); },
-      "Number of tessiq devices visible to this process.");
+      []() { return tessiq::device_count(); },
+      "Number of tessiq devices: the CPU reference plus every usable CUDA device.");
 
   m.def(
       "backend_name",
-      []() { return std::string(tessiq::device_kind_name(tessiq::current_device().kind())); },
-      "Name of the backend currently executing tessiq tensors.");
+      [](int index) {
+        auto device = tessiq::device_at(index);
+        if (!device) {
+          raise_from_error(device.error());
+        }
+        return std::string(tessiq::device_kind_name((*device)->kind()));
+      },
+      py::arg("index"),
+      "Backend behind a device index: 'cpu' for the reference, 'cuda' for a GPU.");
 
   m.def("empty_cache",
         &tessiq::torch_backend::empty_cache,
-        "Releases cached device blocks. Returns the number of bytes handed back.");
+        py::arg("index"),
+        "Releases cached blocks on a device. Returns the number of bytes handed back.");
 
   py::class_<tessiq::AllocatorStats>(m, "AllocatorStats")
       .def_readonly("allocated_bytes", &tessiq::AllocatorStats::allocated_bytes)
@@ -100,7 +108,10 @@ PYBIND11_MODULE(_C, m) {
       .def_readonly("cache_hits", &tessiq::AllocatorStats::cache_hits)
       .def_readonly("cache_misses", &tessiq::AllocatorStats::cache_misses);
 
-  m.def("memory_stats", &tessiq::torch_backend::allocator_stats, "Current allocator counters.");
+  m.def("memory_stats",
+        &tessiq::torch_backend::allocator_stats,
+        py::arg("index"),
+        "Allocator counters for one device.");
 
   // Exercises the Result -> exception mapping from tests; a mapping nothing tests rots.
   m.def(

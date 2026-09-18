@@ -35,7 +35,19 @@ add_library(tessiq::support ALIAS tessiq_support)
 
 add_library(tessiq_runtime STATIC
   tessiq/runtime/allocator.cpp
-  tessiq/runtime/cpu_device.cpp)
+  tessiq/runtime/cpu_device.cpp
+  tessiq/runtime/cuda_device.cpp
+  tessiq/runtime/registry.cpp)
+
+# The CUDA backend talks to the driver through the runtime API only; kernels arrive in a later
+# phase and will need the CUDA language enabled. Until then this is ordinary C++ linking cudart,
+# which keeps the build working on machines without a GPU.
+if(TESSIQ_ENABLE_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  target_link_libraries(tessiq_runtime PRIVATE CUDA::cudart)
+  target_compile_definitions(tessiq_runtime PRIVATE TESSIQ_WITH_CUDA)
+  message(STATUS "tessiq: cuda backend enabled, cudart ${CUDAToolkit_VERSION}")
+endif()
 
 target_link_libraries(tessiq_runtime PUBLIC tessiq::support)
 

@@ -24,3 +24,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - A CPU fallback for ops without a native kernel, so the whole ATen surface is usable now and
   kernels can replace it one at a time.
 - `tessiq.memory_stats()`, `memory_allocated()`, `memory_reserved()` and `empty_cache()`.
+- A CUDA backend, selected per tensor: `tessiq.cpu` is the reference, `tessiq.gpu` the first GPU,
+  `tessiq.gpu_at(n)` the rest. Each device has its own allocator, so memory statistics are per
+  backend rather than pooled.
+- Copies between backends, staged through the host.

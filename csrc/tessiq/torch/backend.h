@@ -16,9 +16,9 @@ c10::Allocator* get_allocator();
 /// Installs the allocator with c10. Idempotent, and called during module import.
 void register_allocator();
 
-AllocatorStats allocator_stats();
+AllocatorStats allocator_stats(int index);
 
-/// Releases cached blocks. Returns the bytes handed back to the device.
-std::size_t empty_cache();
+/// Releases cached blocks on `index`. Returns the bytes handed back to the device.
+std::size_t empty_cache(int index);
 
 } // namespace tessiq::torch_backend

@@ -15,63 +15,124 @@ DEVICE = tessiq.DEVICE_NAME
 
 DTYPES = [torch.float32, torch.float64, torch.int32, torch.int64]
 
+#: Every backend on this machine, so a test written once runs against all of them. The CPU
+#: reference is always present; GPUs appear only where there is one.
+BACKENDS = [
+    pytest.param(tessiq.cpu, id="cpu"),
+    *(
+        pytest.param(tessiq.gpu_at(i), id=f"gpu{i}", marks=pytest.mark.cuda)
+        for i in range(tessiq.gpu_count())
+    ),
+]
+
+
+@pytest.fixture(params=BACKENDS)
+def device(request: pytest.FixtureRequest) -> torch.device:
+    """Each test using this runs once per backend."""
+    device: torch.device = request.param
+    return device
+
 
 def test_backend_is_registered_under_our_name() -> None:
     assert torch.empty(1, device=DEVICE).device.type == DEVICE
 
 
-def test_device_is_reported() -> None:
-    assert tessiq.device_count() >= 1
-    assert tessiq.backend_name() in {"cpu", "cuda"}
+def test_index_zero_is_the_cpu_reference() -> None:
+    # An unqualified device="tessiq" must land on the backend that always exists.
+    assert torch.empty(1, device=DEVICE).device.index == 0
+    assert tessiq.backend_name(tessiq.cpu) == "cpu"
 
 
-def test_empty_allocates_the_requested_shape() -> None:
-    x = torch.empty(3, 4, device=DEVICE)
+def test_device_count_covers_every_backend() -> None:
+    assert tessiq.device_count() == 1 + tessiq.gpu_count()
+
+
+def test_gpu_devices_report_the_cuda_backend() -> None:
+    for i in range(tessiq.gpu_count()):
+        assert tessiq.backend_name(tessiq.gpu_at(i)) == "cuda"
+
+
+def test_gpu_at_rejects_a_negative_ordinal() -> None:
+    with pytest.raises(ValueError, match="must not be negative"):
+        tessiq.gpu_at(-1)
+
+
+def test_unknown_index_is_rejected_with_a_helpful_message() -> None:
+    with pytest.raises(ValueError, match="cpu reference"):
+        tessiq.backend_name(tessiq.device_count())
+
+
+def test_empty_allocates_the_requested_shape(device: torch.device) -> None:
+    x = torch.empty(3, 4, device=device)
     assert tuple(x.shape) == (3, 4)
     assert x.dtype == torch.float32
+    assert x.device == device, "a factory op must honour the device it was given"
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
-def test_round_trip_preserves_values(dtype: torch.dtype) -> None:
+def test_round_trip_preserves_values(device: torch.device, dtype: torch.dtype) -> None:
     source = torch.arange(16, dtype=dtype)
-    assert torch.equal(source.to(DEVICE).cpu(), source)
+    assert torch.equal(source.to(device).cpu(), source)
 
 
-def test_round_trip_preserves_shape() -> None:
+def test_round_trip_preserves_shape(device: torch.device) -> None:
     source = torch.arange(24, dtype=torch.float32).reshape(2, 3, 4)
-    assert torch.equal(source.to(DEVICE).cpu(), source)
+    assert torch.equal(source.to(device).cpu(), source)
 
 
-def test_empty_tensor_round_trips() -> None:
+def test_empty_tensor_round_trips(device: torch.device) -> None:
     # A zero-element tensor still has an identity, and the allocator has to give it an address.
     source = torch.empty(0, dtype=torch.float32)
-    assert tuple(source.to(DEVICE).cpu().shape) == (0,)
+    assert tuple(source.to(device).cpu().shape) == (0,)
 
 
-def test_dtype_conversion_on_device() -> None:
+def test_dtype_conversion_on_device(device: torch.device) -> None:
     source = torch.arange(8, dtype=torch.float32)
-    converted = source.to(DEVICE).to(torch.int32)
+    converted = source.to(device).to(torch.int32)
     assert converted.dtype == torch.int32
     assert torch.equal(converted.cpu(), source.to(torch.int32))
 
 
-def test_device_to_device_copy() -> None:
-    source = torch.arange(8, dtype=torch.float32).to(DEVICE)
-    destination = torch.empty(8, dtype=torch.float32, device=DEVICE)
+def test_device_to_device_copy(device: torch.device) -> None:
+    source = torch.arange(8, dtype=torch.float32).to(device)
+    destination = torch.empty(8, dtype=torch.float32, device=device)
     destination.copy_(source)
     assert torch.equal(destination.cpu(), torch.arange(8, dtype=torch.float32))
 
 
-def test_non_contiguous_source_round_trips() -> None:
+def test_non_contiguous_source_round_trips(device: torch.device) -> None:
     source = torch.arange(12, dtype=torch.float32).reshape(3, 4).t()
-    assert torch.equal(source.to(DEVICE).cpu(), source)
+    assert torch.equal(source.to(device).cpu(), source)
 
 
-def test_copy_rejects_mismatched_shapes() -> None:
-    source = torch.arange(8, dtype=torch.float32).to(DEVICE)
-    destination = torch.empty(4, dtype=torch.float32, device=DEVICE)
+def test_copy_rejects_mismatched_shapes(device: torch.device) -> None:
+    source = torch.arange(8, dtype=torch.float32).to(device)
+    destination = torch.empty(4, dtype=torch.float32, device=device)
     with pytest.raises(RuntimeError, match="matching shapes"):
         torch.ops.aten._copy_from(source, destination, False)
+
+
+@pytest.mark.cuda
+def test_copy_between_backends_stages_through_the_host() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    source = torch.arange(32, dtype=torch.float32).to(tessiq.cpu)
+    moved = source.to(tessiq.gpu)
+    assert moved.device == tessiq.gpu
+    assert torch.equal(moved.to(tessiq.cpu).cpu(), source.cpu())
+
+
+@pytest.mark.cuda
+def test_the_two_backends_agree() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    torch.manual_seed(0)
+    host = torch.randn(256)
+    on_cpu = host.to(tessiq.cpu)
+    on_gpu = host.to(tessiq.gpu)
+    assert torch.allclose(on_cpu.relu().sum().cpu(), on_gpu.relu().sum().cpu(), atol=1e-4)
 
 
 # --- ops, which reach the host through the fallback until the kernel library exists ------------

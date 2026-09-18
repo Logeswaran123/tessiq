@@ -11,8 +11,8 @@ work it describes.
 |---|---|---|
 | 0 | Scaffolding and engineering standards | done |
 | 1 | Device runtime and eager path | done |
-| 2 | The CUDA device, and choosing a backend per tensor | next |
-| 3 | IR and pass infrastructure | |
+| 2 | The CUDA device, and choosing a backend per tensor | done |
+| 3 | IR and pass infrastructure | next |
 | 4 | Graph capture | |
 | 5 | Shape inference, memory planning, recipe cache | |
 | 6 | Fusion and CUDA codegen | |
@@ -42,7 +42,7 @@ and the memory API reports allocations, reuse and cache hits.
 **Risk:** Device backend registration is the most version-fragile part of the project. Do it first, on a
 pinned torch, so the fragility is discovered on day one rather than in month three.
 
-### Phase 2 — The CUDA device, and choosing a backend per tensor
+### Phase 2 — The CUDA device, and choosing a backend per tensor — **done**
 
 A real `CudaDevice` alongside the CPU reference one, and an explicit choice between them at the
 point a tensor is created rather than a process-wide switch.

@@ -20,7 +20,7 @@ class FakeDevice final : public Device {
  public:
   [[nodiscard]] DeviceKind kind() const override { return DeviceKind::kCpu; }
 
-  [[nodiscard]] int device_count() const override { return 1; }
+  [[nodiscard]] int ordinal() const override { return 0; }
 
   Result<void*> raw_allocate(std::size_t bytes) override {
     if (fail_next_allocation) {

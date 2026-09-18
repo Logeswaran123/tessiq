@@ -31,13 +31,27 @@ constexpr std::string_view kLogModule = "ops";
 constexpr c10::DeviceType kDeviceType = c10::DeviceType::PrivateUse1;
 constexpr c10::DispatchKey kDispatchKey = c10::DispatchKey::PrivateUse1;
 
+/// The device index a factory op should allocate on.
+///
+/// An absent or negative index means "wherever this thread already is", which is what PyTorch
+/// passes when the caller did not name a device.
+int index_for(const std::optional<at::Device>& device) {
+  if (!device.has_value() || device->index() < 0) {
+    return current_device_index();
+  }
+  TORCH_CHECK(device->type() == kDeviceType, "expected a tessiq device, got ", *device);
+  return static_cast<int>(device->index());
+}
+
 at::Tensor empty_memory_format(at::IntArrayRef size,
                                std::optional<at::ScalarType> dtype,
                                std::optional<at::Layout> /*layout*/,
-                               std::optional<at::Device> /*device*/,
+                               std::optional<at::Device> device,
                                std::optional<bool> /*pin_memory*/,
                                std::optional<at::MemoryFormat> memory_format) {
-  TESSIQ_LOG(kTrace, kLogModule) << "empty, " << size.size() << " dims";
+  const DeviceIndexGuard guard(index_for(device));
+  TESSIQ_LOG(kTrace, kLogModule) << "empty, " << size.size() << " dims on device "
+                                 << current_device_index();
   return at::detail::empty_generic(size,
                                    get_allocator(),
                                    c10::DispatchKeySet(kDispatchKey),
@@ -49,8 +63,9 @@ at::Tensor empty_strided(at::IntArrayRef size,
                          at::IntArrayRef stride,
                          std::optional<at::ScalarType> dtype,
                          std::optional<at::Layout> /*layout*/,
-                         std::optional<at::Device> /*device*/,
+                         std::optional<at::Device> device,
                          std::optional<bool> /*pin_memory*/) {
+  const DeviceIndexGuard guard(index_for(device));
   return at::detail::empty_strided_generic(size,
                                            stride,
                                            get_allocator(),
@@ -74,26 +89,23 @@ void check(const Result<void>& result) {
   TORCH_CHECK(result.has_value(), result.has_value() ? "" : result.error().to_string());
 }
 
-/// Moves one storage's worth of bytes, picking the direction from where the tensors live.
-void copy_storage(const at::Tensor& src,
-                  const at::Tensor& dst,
-                  bool src_on_device,
-                  bool dst_on_device) {
-  Device& device = current_device();
-  const std::size_t bytes = src.storage().nbytes();
-  void* to = dst.storage().mutable_data();
-  const void* from = src.storage().data();
-
-  if (src_on_device && dst_on_device) {
-    check(device.copy_device_to_device(to, from, bytes));
-  } else if (src_on_device) {
-    check(device.copy_device_to_host(to, from, bytes));
-  } else {
-    check(device.copy_host_to_device(to, from, bytes));
-  }
+/// The backend behind a tessiq tensor.
+Device& backing_device(const at::Tensor& tensor) {
+  auto device = device_at(static_cast<int>(tensor.device().index()));
+  TORCH_CHECK(device.has_value(), device.has_value() ? "" : device.error().to_string());
+  return **device;
 }
 
-/// Brings a device tensor to the host, keeping its layout.
+/// Moves one storage's worth of bytes between a tessiq tensor and the host.
+void copy_storage_to_host(Device& device, const at::Tensor& src, void* dst) {
+  check(device.copy_device_to_host(dst, src.storage().data(), src.storage().nbytes()));
+}
+
+void copy_storage_from_host(Device& device, const void* src, const at::Tensor& dst) {
+  check(device.copy_host_to_device(dst.storage().mutable_data(), src, dst.storage().nbytes()));
+}
+
+/// Brings a tessiq tensor to the host, keeping its layout.
 at::Tensor to_host(const at::Tensor& self) {
   at::Tensor host =
       at::empty_strided(self.sizes(), self.strides(), self.options().device(at::kCPU));
@@ -101,12 +113,11 @@ at::Tensor to_host(const at::Tensor& self) {
               "tessiq cannot stage a tensor with storage offset ",
               self.storage_offset(),
               " through the host yet");
-  check(current_device().copy_device_to_host(
-      host.storage().mutable_data(), self.storage().data(), self.storage().nbytes()));
+  copy_storage_to_host(backing_device(self), self, host.storage().mutable_data());
   return host;
 }
 
-/// Writes `host_src` into a device tensor, converting layout and dtype on the host first.
+/// Writes a host tensor into a tessiq tensor, converting layout and dtype on the host first.
 void from_host(const at::Tensor& host_src, const at::Tensor& dst) {
   at::Tensor host_dst =
       at::empty_strided(dst.sizes(), dst.strides(), dst.options().device(at::kCPU));
@@ -115,11 +126,10 @@ void from_host(const at::Tensor& host_src, const at::Tensor& dst) {
               dst.storage_offset(),
               " through the host yet");
   host_dst.copy_(host_src);
-  check(current_device().copy_host_to_device(
-      dst.storage().mutable_data(), host_dst.storage().data(), host_dst.storage().nbytes()));
+  copy_storage_from_host(backing_device(dst), host_dst.storage().data(), dst);
 }
 
-/// Backs `.to()` in both directions, and device-to-device copies.
+/// Backs `.to()` in both directions, and copies between tessiq devices.
 ///
 /// Layout and dtype changes are done on the host with PyTorch's own kernels. Reimplementing
 /// striding and type promotion here would mean maintaining a second copy of those rules, and the
@@ -137,8 +147,27 @@ at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blo
   TORCH_CHECK(src_on_device || dst_on_device,
               "tessiq _copy_from called with neither tensor on a tessiq device");
 
-  if (same_layout(self, dst)) {
-    copy_storage(self, dst, src_on_device, dst_on_device);
+  const bool across_backends =
+      src_on_device && dst_on_device && self.device().index() != dst.device().index();
+
+  if (across_backends) {
+    // Two tessiq devices with no shared address space. cudaMemcpyDeviceToDevice cannot reach
+    // across them and the CPU reference is not addressable from a GPU at all, so the bytes go
+    // through the host. A peer-to-peer path would belong with the kernels, not here.
+    from_host(to_host(self), dst);
+  } else if (same_layout(self, dst)) {
+    Device& device = src_on_device ? backing_device(self) : backing_device(dst);
+    const std::size_t bytes = self.storage().nbytes();
+    void* to = dst.storage().mutable_data();
+    const void* from = self.storage().data();
+
+    if (src_on_device && dst_on_device) {
+      check(device.copy_device_to_device(to, from, bytes));
+    } else if (src_on_device) {
+      check(device.copy_device_to_host(to, from, bytes));
+    } else {
+      check(device.copy_host_to_device(to, from, bytes));
+    }
   } else {
     const at::Tensor host_src = src_on_device ? to_host(self) : self;
     if (dst_on_device) {
@@ -150,7 +179,12 @@ at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blo
   }
 
   if (!non_blocking) {
-    check(current_device().synchronize());
+    if (src_on_device) {
+      check(backing_device(self).synchronize());
+    }
+    if (dst_on_device) {
+      check(backing_device(dst).synchronize());
+    }
   }
   return dst;
 }

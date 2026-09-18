@@ -19,22 +19,29 @@ from tessiq.device import (
     DEVICE_NAME,
     MemoryStats,
     backend_name,
+    cpu,
     device_count,
     empty_cache,
+    gpu,
+    gpu_at,
+    gpu_count,
     memory_allocated,
     memory_reserved,
     memory_stats,
 )
-from tessiq.device import _register as _register_backend
 
 __all__ = [
     "DEVICE_NAME",
     "MemoryStats",
     "__version__",
     "backend_name",
+    "cpu",
     "device_count",
     "empty_cache",
     "get_log_level",
+    "gpu",
+    "gpu_at",
+    "gpu_count",
     "memory_allocated",
     "memory_reserved",
     "memory_stats",
@@ -61,6 +68,3 @@ def set_log_level(level: str) -> None:
 def get_log_level() -> str:
     """Return the current native log level as a lowercase string."""
     return _C.get_log_level()
-
-
-_register_backend()

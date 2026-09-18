@@ -1,11 +1,11 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// The CPU reference backend, and the device registry.
+// The CPU reference backend.
 
 #include <cstdlib>
 #include <cstring>
-#include <new>
+#include <memory>
 #include <string>
 
 #include "tessiq/runtime/allocator.h"
@@ -25,7 +25,7 @@ class CpuDevice final : public Device {
  public:
   [[nodiscard]] DeviceKind kind() const override { return DeviceKind::kCpu; }
 
-  [[nodiscard]] int device_count() const override { return 1; }
+  [[nodiscard]] int ordinal() const override { return 0; }
 
   // NOLINTBEGIN(cppcoreguidelines-owning-memory, cppcoreguidelines-no-malloc): this class is
   // the raw allocation layer. Handing out owning pointers is its job, and RAII lives above it in
@@ -72,17 +72,9 @@ class CpuDevice final : public Device {
   }
 };
 
-CpuDevice& cpu_device() {
-  static CpuDevice device;
-  return device;
-}
-
-DeviceKind& active_kind() {
-  static DeviceKind kind = DeviceKind::kCpu;
-  return kind;
-}
-
 } // namespace
+
+std::unique_ptr<Device> make_cpu_device() { return std::make_unique<CpuDevice>(); }
 
 std::string_view device_kind_name(DeviceKind kind) {
   switch (kind) {
@@ -92,33 +84,6 @@ std::string_view device_kind_name(DeviceKind kind) {
     return "cuda";
   }
   TESSIQ_UNREACHABLE("unhandled DeviceKind in device_kind_name");
-}
-
-Result<Device*> get_device(DeviceKind kind) {
-  switch (kind) {
-  case DeviceKind::kCpu:
-    return &cpu_device();
-  case DeviceKind::kCuda:
-    // The CUDA backend lands with the kernels it exists to run. Until then, say so plainly
-    // rather than reporting a machine without a GPU.
-    return unsupported("the cuda backend is not built into this version of tessiq");
-  }
-  TESSIQ_UNREACHABLE("unhandled DeviceKind in get_device");
-}
-
-Device& current_device() {
-  auto device = get_device(active_kind());
-  TESSIQ_CHECK(device.has_value(),
-               "the active device kind is unavailable: " +
-                   std::string(device_kind_name(active_kind())));
-  return **device;
-}
-
-Result<void> set_current_device(DeviceKind kind) {
-  TESSIQ_RETURN_IF_ERROR(get_device(kind));
-  active_kind() = kind;
-  TESSIQ_LOG(kInfo, "runtime") << "active backend is now " << device_kind_name(kind);
-  return ok();
 }
 
 } // namespace tessiq

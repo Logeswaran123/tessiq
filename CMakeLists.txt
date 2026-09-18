@@ -14,7 +14,11 @@ project(
 option(TESSIQ_BUILD_TESTS "Build the C++ test suite" ON)
 option(TESSIQ_BUILD_PYTHON "Build the Python extension module" ON)
 option(TESSIQ_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
-option(TESSIQ_ENABLE_CUDA "Build the CUDA backend" OFF)
+# Default follows the machine: on where a toolkit exists, off where it does not, so the same
+# command works on a developer box with a GPU and on a CI runner without one. Force it either way
+# with -DTESSIQ_ENABLE_CUDA=ON/OFF.
+find_package(CUDAToolkit QUIET)
+option(TESSIQ_ENABLE_CUDA "Build the CUDA backend" ${CUDAToolkit_FOUND})
 
 # Reserved for the MLIR export target. Declared now so the option name is fixed and documented
 # before anything depends on it; enabling it is a later phase.

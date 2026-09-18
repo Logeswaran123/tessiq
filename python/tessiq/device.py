@@ -19,6 +19,17 @@ from tessiq import _C
 #: renamed to this once, here; nothing else in the project refers to it.
 DEVICE_NAME = "tessiq"
 
+#: The CPU reference backend, always present. An unqualified ``device="tessiq"`` lands here, so
+#: the default is the backend that always exists and is always correct.
+#:
+#: Assigned by :func:`_register`, because ``torch.device("tessiq", 0)`` is only constructible once
+#: the backend has been renamed.
+cpu: torch.device
+
+#: The first GPU-backed device. Valid when :func:`gpu_count` is non-zero; using it on a machine
+#: without a GPU fails at allocation with a message saying so.
+gpu: torch.device
+
 _registered = False
 
 
@@ -103,12 +114,27 @@ def _register() -> None:
     torch._register_device_module(DEVICE_NAME, _build_torch_device_module())  # type: ignore[no-untyped-call]
     torch.utils.generate_methods_for_privateuse1_backend(for_storage=True)  # type: ignore[attr-defined]
     _C._init_backend()
+
+    global cpu, gpu
+    cpu = torch.device(DEVICE_NAME, 0)
+    gpu = torch.device(DEVICE_NAME, 1)
     _registered = True
+
+
+def gpu_at(ordinal: int) -> torch.device:
+    """The GPU-backed device at `ordinal`, counting from zero.
+
+    PyTorch exposes one device *type* to out-of-tree backends, so CPU and GPU are told apart by
+    index: 0 is the reference, 1.. are GPUs. ``tessiq.gpu`` is ``gpu_at(0)``.
+    """
+    if ordinal < 0:
+        raise ValueError(f"gpu ordinal must not be negative, got {ordinal}")
+    return torch.device(DEVICE_NAME, ordinal + 1)
 
 
 @dataclass(frozen=True)
 class MemoryStats:
-    """Allocator counters at a point in time.
+    """Allocator counters for one device, at a point in time.
 
     ``allocated`` is what callers hold. ``reserved`` includes blocks the allocator is caching for
     reuse, so it is always at least ``allocated`` and only shrinks on :func:`empty_cache`.
@@ -130,18 +156,35 @@ class MemoryStats:
 
 
 def device_count() -> int:
-    """Number of tessiq devices. Zero means the active backend found no hardware."""
+    """Number of tessiq devices: the CPU reference, plus every usable GPU."""
     return int(_C.device_count())
 
 
-def backend_name() -> str:
-    """Backend currently executing tessiq tensors, such as ``"cpu"`` or ``"cuda"``."""
-    return str(_C.backend_name())
+def gpu_count() -> int:
+    """Number of GPU-backed tessiq devices. Zero on a machine without one."""
+    return device_count() - 1
 
 
-def memory_stats() -> MemoryStats:
-    """Return the allocator counters."""
-    raw = _C.memory_stats()
+def _resolve(device: torch.device | str | int | None) -> int:
+    """Turn anything that names a tessiq device into its index."""
+    if device is None:
+        return 0
+    if isinstance(device, int):
+        return device
+    resolved = torch.device(device)
+    if resolved.type != DEVICE_NAME:
+        raise ValueError(f"expected a {DEVICE_NAME} device, got {resolved}")
+    return resolved.index or 0
+
+
+def backend_name(device: torch.device | str | int | None = None) -> str:
+    """Backend behind a device: ``"cpu"`` for the reference, ``"cuda"`` for a GPU."""
+    return str(_C.backend_name(_resolve(device)))
+
+
+def memory_stats(device: torch.device | str | int | None = None) -> MemoryStats:
+    """Allocator counters for one device. Each device has its own; they are never pooled."""
+    raw = _C.memory_stats(_resolve(device))
     return MemoryStats(
         allocated_bytes=raw.allocated_bytes,
         reserved_bytes=raw.reserved_bytes,
@@ -154,19 +197,23 @@ def memory_stats() -> MemoryStats:
     )
 
 
-def memory_allocated() -> int:
-    """Bytes currently held by live tensors."""
-    return memory_stats().allocated_bytes
+def memory_allocated(device: torch.device | str | int | None = None) -> int:
+    """Bytes currently held by live tensors on `device`."""
+    return memory_stats(device).allocated_bytes
 
 
-def memory_reserved() -> int:
-    """Bytes held by the allocator, including cached blocks."""
-    return memory_stats().reserved_bytes
+def memory_reserved(device: torch.device | str | int | None = None) -> int:
+    """Bytes held by `device`'s allocator, including cached blocks."""
+    return memory_stats(device).reserved_bytes
 
 
-def empty_cache() -> int:
-    """Release cached blocks back to the device. Returns the bytes released.
+def empty_cache(device: torch.device | str | int | None = None) -> int:
+    """Release cached blocks on `device`. Returns the bytes released.
 
     Live tensors are unaffected. Useful before handing the machine to another process.
     """
-    return int(_C.empty_cache())
+    return int(_C.empty_cache(_resolve(device)))
+
+
+# Registering on import is what makes `cpu` and `gpu` above constructible.
+_register()

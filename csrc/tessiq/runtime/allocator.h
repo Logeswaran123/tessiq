@@ -105,4 +105,11 @@ class CachingAllocator {
   AllocatorStats stats_;
 };
 
+/// The allocator for `index`. One per device, so statistics are per backend rather than pooled
+/// into a total that belongs to no device.
+CachingAllocator& allocator_at(int index);
+
+/// The allocator for the index this thread is on.
+CachingAllocator& current_allocator();
+
 } // namespace tessiq

@@ -7,29 +7,24 @@ a chip behind `model.to(...)` and `torch.compile`.
 Named after *tessera*, the Latin word for a mosaic tile, which is what the compiler makes of a
 graph: pieces cut to fit, then set into one surface. Said `/ˈtɛs.ɪk/`.
 
-Phase 1 of 10 is done. Tensors allocate, transfer and compute under `device="tessiq"`, backed by
-a caching allocator, with a CPU fallback covering every op that has no kernel yet.
-
-**Today that device runs on the CPU.** Its memory is host memory and its arithmetic is PyTorch's
-own CPU kernels; no GPU is involved. What is real is the rest of it: PyTorch treats tessiq as a
-separate device with its own dispatch key, allocator and memory accounting. The GPU backend, and
-picking between the two per tensor, is phase 2. No IR and no compiler passes yet.
-[PHASES.md](PHASES.md) has the full phase breakdown and what each one delivers.
+Phases 1 and 2 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
+its own caching allocator, and a CPU fallback covers every op that has no kernel yet.
 
 ```python
 import torch, tessiq
 
-x = torch.randn(1024, device="tessiq")
-y = (x + x).cpu()
-tessiq.memory_stats()
+reference = torch.randn(1024, device=tessiq.cpu)  # host memory, the correctness oracle
+fast = reference.to(tessiq.gpu)  # real GPU memory
+
+torch.allclose(fast.to(tessiq.cpu), reference)
+tessiq.memory_stats(tessiq.gpu).allocated_bytes
 ```
 
-From phase 2 the backend is chosen per tensor rather than per process:
-
-```python
-reference = torch.randn(1024, device=tessiq.cpu)  # host memory
-fast = reference.to(tessiq.gpu)  # GPU memory
-```
+**Arithmetic still runs on the host.** Every op reaches PyTorch's CPU kernels through the fallback,
+so a GPU tensor pays two transfers per operation and is slower than plain CPU. What exists is the
+plumbing underneath: a real device, real device memory, per-backend accounting, and two backends
+that can be checked against each other. Kernels arrive with the compiler.
+[PHASES.md](PHASES.md) has the full breakdown.
 
 ## How it fits together
 

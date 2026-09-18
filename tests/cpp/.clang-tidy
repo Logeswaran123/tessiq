@@ -1,0 +1,8 @@
+---
+# Inherits the project configuration and relaxes one check for test bodies.
+#
+# readability-function-cognitive-complexity counts the expansion of gtest's assertion macros, not
+# the code a reader sees. A three-line test that loops over devices and calls EXPECT_EQ scores over
+# the threshold while being entirely legible, so the check measures the wrong thing here.
+InheritParentConfig: true
+Checks: "-readability-function-cognitive-complexity"

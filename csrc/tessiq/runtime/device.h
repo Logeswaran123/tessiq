@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <string_view>
 
 #include "tessiq/support/result.h"
@@ -50,8 +51,8 @@ class Device {
 
   [[nodiscard]] virtual DeviceKind kind() const = 0;
 
-  /// Number of usable devices of this kind. Zero means the backend is unavailable on this machine.
-  [[nodiscard]] virtual int device_count() const = 0;
+  /// Which physical device of this kind this instance drives. Always 0 for the CPU reference.
+  [[nodiscard]] virtual int ordinal() const = 0;
 
   /// Allocates `bytes` of raw memory. Returns kResourceExhausted if the backend cannot satisfy it.
   ///
@@ -79,17 +80,62 @@ class Device {
   Device() = default;
 };
 
-/// Returns the device for `kind`, or kUnsupported if this build has no such backend and
-/// kNotFound if the backend exists but the machine has no such hardware.
-///
-/// Devices are process-wide singletons with static storage duration; the reference stays valid
-/// for the life of the process.
-Result<Device*> get_device(DeviceKind kind);
+/// Constructs the CPU reference backend. Used by the registry; there is exactly one.
+std::unique_ptr<Device> make_cpu_device();
 
-/// Returns the backend the runtime is currently using. Defaults to kCpu.
+/// Number of tessiq devices: the CPU reference, plus one per usable CUDA device.
+///
+/// Index 0 is always the CPU reference, so an unqualified `device="tessiq"` lands on the backend
+/// that is always present and always correct. Indices 1..N are CUDA devices in driver order.
+int device_count();
+
+/// The device at `index`, or kInvalidArgument if there is none.
+///
+/// Devices have static storage duration; the pointer stays valid for the life of the process.
+Result<Device*> device_at(int index);
+
+/// The index this thread allocates on, set by PyTorch's device guard around every op.
+///
+/// Thread-local, because that is what the guard is: two threads can be working on two devices,
+/// and c10's allocator interface takes no device argument, so the ambient index is how an
+/// allocation knows where to land. Defaults to 0.
+int current_device_index();
+
+/// Sets the index for this thread. Fails if `index` names no device, leaving the current one.
+Result<void> set_current_device_index(int index);
+
+namespace detail {
+
+/// Sets the index without validating it. For restoring an index that was already valid, which is
+/// the only case where failure is impossible and throwing would be unacceptable.
+void set_current_device_index_unchecked(int index) noexcept;
+
+} // namespace detail
+
+/// The device this thread is allocating on. Shorthand for device_at(current_device_index()).
 Device& current_device();
 
-/// Switches the active backend. Fails if `kind` is unavailable, leaving the current one in place.
-Result<void> set_current_device(DeviceKind kind);
+/// Sets the current index for a scope and restores it on the way out.
+///
+/// Factory ops carry their device as an argument rather than arriving under a guard, so they set
+/// the index themselves for the duration of the allocation. Without this an explicit
+/// `device=tessiq:1` silently allocates wherever the thread happened to be.
+class DeviceIndexGuard {
+ public:
+  explicit DeviceIndexGuard(int index) : previous_(current_device_index()) {
+    static_cast<void>(set_current_device_index(index));
+  }
+
+  // noexcept by construction: previous_ was valid when this guard was built.
+  ~DeviceIndexGuard() { detail::set_current_device_index_unchecked(previous_); }
+
+  DeviceIndexGuard(const DeviceIndexGuard&) = delete;
+  DeviceIndexGuard& operator=(const DeviceIndexGuard&) = delete;
+  DeviceIndexGuard(DeviceIndexGuard&&) = delete;
+  DeviceIndexGuard& operator=(DeviceIndexGuard&&) = delete;
+
+ private:
+  int previous_;
+};
 
 } // namespace tessiq
