@@ -1,5 +1,5 @@
-# Build
-build/
+# Build. The glob covers the sanitizer and alternate-compiler trees CONTRIBUTING asks for.
+build*/
 _skbuild/
 dist/
 *.egg-info/
