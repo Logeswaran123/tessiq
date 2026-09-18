@@ -17,6 +17,7 @@
 #include "tessiq/support/logging.h"
 #include "tessiq/torch/backend.h"
 #include "tessiq/torch/importer.h"
+#include "tessiq/torch/partition.h"
 #include "tessiq/version.h"
 
 namespace py = pybind11;
@@ -130,6 +131,20 @@ PYBIND11_MODULE(_C, m) {
       py::arg("graph_module"),
       py::arg("name") = "forward",
       "Converts a torch.fx.GraphModule into tessiq IR and returns its textual form.");
+
+  m.def(
+      "partition_fx",
+      [](const py::object& graph_module, const std::string& name) {
+        auto result = tessiq::torch_backend::partition_fx(graph_module, name);
+        if (!result) {
+          raise_from_error(result.error());
+        }
+        return py::make_tuple(result->ir, result->clusters);
+      },
+      py::arg("graph_module"),
+      py::arg("name") = "forward",
+      "Imports and partitions an FX graph. Returns the IR and a map from node name to cluster; "
+      "a node absent from the map runs on the host.");
 
   m.def(
       "run_passes",

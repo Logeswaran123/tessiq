@@ -33,6 +33,27 @@ def import_graph(graph_module: torch.fx.GraphModule, name: str = "forward") -> s
     return str(_C.import_fx(graph_module, name))
 
 
+def partition(
+    graph_module: torch.fx.GraphModule, name: str = "forward"
+) -> tuple[str, dict[str, int]]:
+    """Import an FX graph and decide what the backend takes.
+
+    Args:
+        graph_module: The module a ``torch.compile`` backend receives.
+        name: The name the resulting graph carries.
+
+    Returns:
+        The partitioned graph in textual IR, and a map from FX node name to cluster number. A node
+        absent from the map has no kernel and runs on the host.
+
+    Raises:
+        ValueError: If a node carries no shape information.
+        TypeError: If the graph uses a dtype or node kind the IR cannot represent.
+    """
+    ir, clusters = _C.partition_fx(graph_module, name)
+    return str(ir), dict(clusters)
+
+
 def run_passes(ir: str, pipeline: str) -> str:
     """Run a named pass pipeline over textual IR and return the result.
 
