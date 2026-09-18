@@ -28,6 +28,22 @@ tessera_enable_sanitizers(tessera_support)
 
 add_library(tessera::support ALIAS tessera_support)
 
+# --- tessera_runtime ------------------------------------------------------------------------
+#
+# Device memory and transfers. Depends on support and the standard library, nothing else: the
+# CPU backend has to build and run on a machine with no GPU and no PyTorch.
+
+add_library(tessera_runtime STATIC
+  tessera/runtime/allocator.cpp
+  tessera/runtime/cpu_device.cpp)
+
+target_link_libraries(tessera_runtime PUBLIC tessera::support)
+
+tessera_set_warnings(tessera_runtime)
+tessera_enable_sanitizers(tessera_runtime)
+
+add_library(tessera::runtime ALIAS tessera_runtime)
+
 # --- Python extension module ----------------------------------------------------------------
 
 if(TESSERA_BUILD_PYTHON)

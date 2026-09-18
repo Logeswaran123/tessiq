@@ -4,8 +4,18 @@ A PyTorch accelerator backend built from scratch: a custom device, a graph compi
 library. It exists to answer, in working code, what a hardware vendor actually has to build to put
 a chip behind `model.to(...)` and `torch.compile`.
 
-Phase 0 of 9. The build, the test harness and the support layer are in. There is no device, no IR
-and no passes yet. [PLAN.md](PLAN.md) has the design and the phase breakdown.
+Phase 1 of 9. There is a working device: tensors allocate, transfer and compute under
+`device="tessera"`, with a caching allocator behind them and a CPU fallback covering ops that have
+no kernel yet. No IR and no compiler passes yet. [PLAN.md](PLAN.md) has the design and the phase
+breakdown.
+
+```python
+import torch, tessera
+
+x = torch.randn(1024, device="tessera")
+y = (x + x).cpu()
+tessera.memory_stats()
+```
 
 ## How it fits together
 
@@ -47,8 +57,13 @@ cmake --build build -j8
 ctest --test-dir build
 ```
 
-Python 3.10+, CMake 3.26+, C++17. PyTorch is only needed for the frontend, not to build or test the
-compiler core.
+Python 3.10+, CMake 3.26+, C++17. The extension links libtorch, so PyTorch is needed to import
+tessera. The C++ core builds and tests without it, which is what keeps the compiler testable on a
+machine with neither torch nor a GPU:
+
+```bash
+cmake -S . -B build -G Ninja -DTESSERA_BUILD_PYTHON=OFF
+```
 
 If you're going to commit:
 

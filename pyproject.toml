@@ -26,12 +26,12 @@ classifiers = [
 # module and the build all report the same number.
 dynamic = ["version"]
 
-dependencies = []
+# The extension module links libtorch, so torch is required to import tessera. The C++ core
+# (csrc/tessera/runtime, csrc/tessera/support) still builds and tests without it, which is what
+# keeps the compiler testable on a machine with neither torch nor a GPU.
+dependencies = ["torch>=2.6"]
 
 [project.optional-dependencies]
-# torch is deliberately not a hard dependency: the IR, the passes and their tests must build and
-# run without it (PLAN.md section 8). Only the frontend needs torch.
-torch = ["torch>=2.6"]
 dev = [
   "mypy>=1.11",
   "pre-commit>=3.8",

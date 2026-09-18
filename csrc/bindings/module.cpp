@@ -9,8 +9,11 @@
 #include <stdexcept>
 #include <string>
 
+#include "tessera/runtime/allocator.h"
+#include "tessera/runtime/device.h"
 #include "tessera/support/error.h"
 #include "tessera/support/logging.h"
+#include "tessera/torch/backend.h"
 #include "tessera/version.h"
 
 namespace py = pybind11;
@@ -68,6 +71,36 @@ PYBIND11_MODULE(_C, m) {
       "get_log_level",
       []() { return std::string(tessera::log_level_name(tessera::get_log_level())); },
       "Returns the current native log level as a string.");
+
+  m.def("_init_backend",
+        &tessera::torch_backend::register_allocator,
+        "Internal: makes the native backend known to PyTorch. Called during import.");
+
+  m.def(
+      "device_count",
+      []() { return tessera::current_device().device_count(); },
+      "Number of tessera devices visible to this process.");
+
+  m.def(
+      "backend_name",
+      []() { return std::string(tessera::device_kind_name(tessera::current_device().kind())); },
+      "Name of the backend currently executing tessera tensors.");
+
+  m.def("empty_cache",
+        &tessera::torch_backend::empty_cache,
+        "Releases cached device blocks. Returns the number of bytes handed back.");
+
+  py::class_<tessera::AllocatorStats>(m, "AllocatorStats")
+      .def_readonly("allocated_bytes", &tessera::AllocatorStats::allocated_bytes)
+      .def_readonly("reserved_bytes", &tessera::AllocatorStats::reserved_bytes)
+      .def_readonly("peak_allocated_bytes", &tessera::AllocatorStats::peak_allocated_bytes)
+      .def_readonly("peak_reserved_bytes", &tessera::AllocatorStats::peak_reserved_bytes)
+      .def_readonly("allocation_count", &tessera::AllocatorStats::allocation_count)
+      .def_readonly("deallocation_count", &tessera::AllocatorStats::deallocation_count)
+      .def_readonly("cache_hits", &tessera::AllocatorStats::cache_hits)
+      .def_readonly("cache_misses", &tessera::AllocatorStats::cache_misses);
+
+  m.def("memory_stats", &tessera::torch_backend::allocator_stats, "Current allocator counters.");
 
   // Exercises the Result -> exception mapping from tests; a mapping nothing tests rots.
   m.def(

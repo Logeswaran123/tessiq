@@ -9,11 +9,35 @@ later phases.
 
 from __future__ import annotations
 
+# Imported before the extension module: _C links libtorch, and importing torch first puts those
+# libraries in the process regardless of how this package was installed. The extension also
+# carries an RPATH, but that only covers layouts where torch sits next to us.
+import torch as _torch  # noqa: F401
+
 from tessera import _C
+from tessera.device import (
+    DEVICE_NAME,
+    MemoryStats,
+    backend_name,
+    device_count,
+    empty_cache,
+    memory_allocated,
+    memory_reserved,
+    memory_stats,
+)
+from tessera.device import _register as _register_backend
 
 __all__ = [
+    "DEVICE_NAME",
+    "MemoryStats",
     "__version__",
+    "backend_name",
+    "device_count",
+    "empty_cache",
     "get_log_level",
+    "memory_allocated",
+    "memory_reserved",
+    "memory_stats",
     "set_log_level",
 ]
 
@@ -37,3 +61,6 @@ def set_log_level(level: str) -> None:
 def get_log_level() -> str:
     """Return the current native log level as a lowercase string."""
     return _C.get_log_level()
+
+
+_register_backend()

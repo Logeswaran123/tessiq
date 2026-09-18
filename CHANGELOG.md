@@ -17,3 +17,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   of them.
 - `requirements-dev.txt` pinning the tooling. CI and the pre-commit hooks install from it, which
   stops a hook disagreeing with the gate it mirrors.
+- Device runtime: a `Device` interface with a CPU reference backend, and a caching allocator with
+  size classes, reuse, statistics and `empty_cache()`.
+- Registration with PyTorch as the `tessera` device. `torch.randn(n, device="tessera")`,
+  `.to("tessera")` and `.cpu()` work, including for non-contiguous tensors and across dtypes.
+- A CPU fallback for ops without a native kernel, so the whole ATen surface is usable now and
+  kernels can replace it one at a time.
+- `tessera.memory_stats()`, `memory_allocated()`, `memory_reserved()` and `empty_cache()`.
