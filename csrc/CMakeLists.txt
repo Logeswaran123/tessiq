@@ -69,6 +69,7 @@ add_library(tessiq_ir STATIC
   tessiq/passes/const_fold.cpp
   tessiq/passes/cse.cpp
   tessiq/passes/dce.cpp
+  tessiq/passes/mark_supported.cpp
   tessiq/passes/op_support.cpp
   tessiq/passes/pass.cpp)
 

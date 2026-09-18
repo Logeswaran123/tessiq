@@ -1,0 +1,11 @@
+// RUN: mark-supported
+// The importer writes positional scalars as arg0, arg1. A dotted name cannot collide with those.
+graph @g(%a: f32[4]) -> f32[4] {
+  %x = aten.mul.Tensor(%a) {arg1 = 2.0} : f32[4]
+  return %x
+}
+// ---
+graph @g(%a: f32[4]) -> f32[4] {
+  %x = aten.mul.Tensor(%a) {arg1 = 2.0, tessiq.supported = true} : f32[4]
+  return %x
+}
