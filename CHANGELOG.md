@@ -42,3 +42,5 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `tessiq.run_passes(ir, pipeline)` and `tessiq.pass_names()`.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
+- `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq
+  device, everything else on the host, results back on the host.
