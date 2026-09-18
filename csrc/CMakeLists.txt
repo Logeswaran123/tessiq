@@ -69,6 +69,7 @@ add_library(tessiq_ir STATIC
   tessiq/passes/const_fold.cpp
   tessiq/passes/cse.cpp
   tessiq/passes/dce.cpp
+  tessiq/passes/op_support.cpp
   tessiq/passes/pass.cpp)
 
 target_link_libraries(tessiq_ir PUBLIC tessiq::support)
