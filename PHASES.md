@@ -105,7 +105,7 @@ backends. `docs/op_coverage.md` is generated and non-trivial.
 
 ### Phase 8 — Training, dynamic shapes, tooling
 AOTAutograd backward graphs; symbolic shapes + bucketing; profiler with chrome-trace export;
-`tessiq-explain`; `docs/architecture.md`; a write-up.
+`tessiq-explain`; a write-up.
 **Milestone:** a small model **trains** to convergence on the tessiq backend; sequence-length
 variation doesn't trigger recompilation every step.
 

@@ -33,3 +33,4 @@ ir_dumps/
 # the part of it that belongs in the repository.
 NOTES.local.md
 PLAN.md
+docs/architecture.md
