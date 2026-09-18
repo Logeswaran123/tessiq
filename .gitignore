@@ -34,3 +34,6 @@ ir_dumps/
 NOTES.local.md
 PLAN.md
 docs/architecture.md
+
+# Per-PR working notes. The detail lives here; the PR itself carries a short summary.
+PR_dev/
