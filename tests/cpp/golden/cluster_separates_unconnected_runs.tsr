@@ -1,0 +1,14 @@
+// RUN: mark-supported,cluster
+// Two supported runs with no data dependency between them stay separate: nothing connects them,
+// so there is nothing to merge.
+graph @g(%a: f32[4], %b: f32[4]) -> (f32[4], f32[4]) {
+  %x = aten.neg.default(%a) : f32[4]
+  %y = aten.abs.default(%b) : f32[4]
+  return %x, %y
+}
+// ---
+graph @g(%a: f32[4], %b: f32[4]) -> (f32[4], f32[4]) {
+  %x = aten.neg.default(%a) {tessiq.cluster = 0, tessiq.supported = true} : f32[4]
+  %y = aten.abs.default(%b) {tessiq.cluster = 1, tessiq.supported = true} : f32[4]
+  return %x, %y
+}

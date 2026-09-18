@@ -1,0 +1,14 @@
+// RUN: mark-supported,cluster
+graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
+  %x = aten.add.Tensor(%a, %b) : f32[4]
+  %y = aten.mul.Tensor(%x, %a) : f32[4]
+  %z = aten.relu.default(%y) : f32[4]
+  return %z
+}
+// ---
+graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
+  %x = aten.add.Tensor(%a, %b) {tessiq.cluster = 0, tessiq.supported = true} : f32[4]
+  %y = aten.mul.Tensor(%x, %a) {tessiq.cluster = 0, tessiq.supported = true} : f32[4]
+  %z = aten.relu.default(%y) {tessiq.cluster = 0, tessiq.supported = true} : f32[4]
+  return %z
+}
