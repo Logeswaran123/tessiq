@@ -1,4 +1,4 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
@@ -6,7 +6,7 @@ requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "tessera"
+name = "tessiq"
 description = "A from-scratch PyTorch accelerator backend: device, graph compiler, and kernels"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,8 +26,8 @@ classifiers = [
 # module and the build all report the same number.
 dynamic = ["version"]
 
-# The extension module links libtorch, so torch is required to import tessera. The C++ core
-# (csrc/tessera/runtime, csrc/tessera/support) still builds and tests without it, which is what
+# The extension module links libtorch, so torch is required to import tessiq. The C++ core
+# (csrc/tessiq/runtime, csrc/tessiq/support) still builds and tests without it, which is what
 # keeps the compiler testable on a machine with neither torch nor a GPU.
 dependencies = ["torch>=2.6"]
 
@@ -41,24 +41,24 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Logeswaran123/tessera"
-Repository = "https://github.com/Logeswaran123/tessera"
+Homepage = "https://github.com/Logeswaran123/tessiq"
+Repository = "https://github.com/Logeswaran123/tessiq"
 
 [tool.scikit-build]
 minimum-version = "0.10"
 build-dir = "build/{wheel_tag}"
-wheel.packages = ["python/tessera"]
+wheel.packages = ["python/tessiq"]
 cmake.version = ">=3.26"
 cmake.build-type = "RelWithDebInfo"
 
 [tool.scikit-build.cmake.define]
 # The C++ test suite is not part of a wheel build; it is built explicitly from a CMake configure.
-TESSERA_BUILD_TESTS = "OFF"
+TESSIQ_BUILD_TESTS = "OFF"
 
 [tool.scikit-build.metadata.version]
 provider = "scikit_build_core.metadata.regex"
 input = "CMakeLists.txt"
-regex = '(?sm)project\s*\(\s*tessera.*?VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
+regex = '(?sm)project\s*\(\s*tessiq.*?VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
 
 # --- Tooling -------------------------------------------------------------------------------------
 
@@ -109,7 +109,7 @@ ignore = [
 # Tests reach into private internals deliberately, to exercise the error-translation boundary.
 "tests/python/*" = ["SLF001"]
 # `_C` is the established name for a native extension module across the Python ecosystem.
-"python/tessera/_C.pyi" = ["N999"]
+"python/tessiq/_C.pyi" = ["N999"]
 
 [tool.mypy]
 # Matches the development interpreter rather than the minimum supported version: dependencies ship
@@ -117,8 +117,8 @@ ignore = [
 # 3.10 floor declared in requires-python is enforced by ruff's target-version and by CI running the
 # test suite on the oldest supported interpreter.
 python_version = "3.12"
-files = ["python/tessera", "tests/python"]
+files = ["python/tessiq", "tests/python"]
 strict = true
-# The native module is typed by a hand-written stub (python/tessera/_C.pyi).
+# The native module is typed by a hand-written stub (python/tessiq/_C.pyi).
 ignore_missing_imports = false
 warn_unreachable = true

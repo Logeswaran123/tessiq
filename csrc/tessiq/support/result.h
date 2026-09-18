@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -8,10 +8,10 @@
 #include <utility>
 #include <variant>
 
-#include "tessera/support/error.h"
-#include "tessera/support/macros.h"
+#include "tessiq/support/error.h"
+#include "tessiq/support/macros.h"
 
-namespace tessera {
+namespace tessiq {
 
 /// Holds either a value of type `T` or an Error explaining why there is none.
 ///
@@ -46,20 +46,17 @@ class [[nodiscard]] Result {
   /// Precondition: has_value(). Violating it is a programmer error, not a recoverable one -- the
   /// caller was obliged to check first.
   [[nodiscard]] const T& value() const& {
-    TESSERA_DCHECK(has_value(),
-                   "Result::value() called on an error Result: " + error().to_string());
+    TESSIQ_DCHECK(has_value(), "Result::value() called on an error Result: " + error().to_string());
     return std::get<T>(storage_);
   }
 
   T& value() & {
-    TESSERA_DCHECK(has_value(),
-                   "Result::value() called on an error Result: " + error().to_string());
+    TESSIQ_DCHECK(has_value(), "Result::value() called on an error Result: " + error().to_string());
     return std::get<T>(storage_);
   }
 
   T&& value() && {
-    TESSERA_DCHECK(has_value(),
-                   "Result::value() called on an error Result: " + error().to_string());
+    TESSIQ_DCHECK(has_value(), "Result::value() called on an error Result: " + error().to_string());
     return std::get<T>(std::move(storage_));
   }
 
@@ -75,12 +72,12 @@ class [[nodiscard]] Result {
 
   /// Precondition: !has_value().
   [[nodiscard]] const Error& error() const& {
-    TESSERA_DCHECK(!has_value(), "Result::error() called on a successful Result");
+    TESSIQ_DCHECK(!has_value(), "Result::error() called on a successful Result");
     return std::get<Error>(storage_);
   }
 
   Error&& error() && {
-    TESSERA_DCHECK(!has_value(), "Result::error() called on a successful Result");
+    TESSIQ_DCHECK(!has_value(), "Result::error() called on a successful Result");
     return std::get<Error>(std::move(storage_));
   }
 
@@ -109,7 +106,7 @@ class [[nodiscard]] Result<void> {
 
   /// Precondition: !has_value().
   [[nodiscard]] const Error& error() const& {
-    TESSERA_DCHECK(!has_value(), "Result::error() called on a successful Result");
+    TESSIQ_DCHECK(!has_value(), "Result::error() called on a successful Result");
     // Guarded by the precondition above; re-checking in release would turn a programmer error
     // into a silently different result.
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
@@ -117,7 +114,7 @@ class [[nodiscard]] Result<void> {
   }
 
   Error&& error() && {
-    TESSERA_DCHECK(!has_value(), "Result::error() called on a successful Result");
+    TESSIQ_DCHECK(!has_value(), "Result::error() called on a successful Result");
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     return std::move(*error_);
   }
@@ -132,29 +129,29 @@ inline Result<void> ok() { return {}; }
 ///
 /// A statement macro rather than an expression, so propagation is visible when skimming rather
 /// than buried inside a larger expression.
-#define TESSERA_RETURN_IF_ERROR(expr)                                                              \
+#define TESSIQ_RETURN_IF_ERROR(expr)                                                               \
   do {                                                                                             \
-    auto tessera_result_ = (expr);                                                                 \
-    if (TESSERA_UNLIKELY(!tessera_result_.has_value())) {                                          \
-      return std::move(tessera_result_).error();                                                   \
+    auto tessiq_result_ = (expr);                                                                  \
+    if (TESSIQ_UNLIKELY(!tessiq_result_.has_value())) {                                            \
+      return std::move(tessiq_result_).error();                                                    \
     }                                                                                              \
   } while (false)
 
 // `a##__LINE__` pastes the literal token __LINE__; routing through a second macro expands it
 // to the line number first.
-#define TESSERA_CONCAT_IMPL(a, b) a##b
-#define TESSERA_CONCAT(a, b) TESSERA_CONCAT_IMPL(a, b)
+#define TESSIQ_CONCAT_IMPL(a, b) a##b
+#define TESSIQ_CONCAT(a, b) TESSIQ_CONCAT_IMPL(a, b)
 
 /// Assigns the value of a successful Result to `lhs`, or returns its error.
 ///
-/// `lhs` may include a declaration: TESSERA_ASSIGN_OR_RETURN(auto kernel, find_kernel(...));
+/// `lhs` may include a declaration: TESSIQ_ASSIGN_OR_RETURN(auto kernel, find_kernel(...));
 // NOLINTBEGIN(bugprone-macro-parentheses)
-#define TESSERA_ASSIGN_OR_RETURN(lhs, expr)                                                        \
-  auto TESSERA_CONCAT(tessera_assign_, __LINE__) = (expr);                                         \
-  if (TESSERA_UNLIKELY(!TESSERA_CONCAT(tessera_assign_, __LINE__).has_value())) {                  \
-    return std::move(TESSERA_CONCAT(tessera_assign_, __LINE__)).error();                           \
+#define TESSIQ_ASSIGN_OR_RETURN(lhs, expr)                                                         \
+  auto TESSIQ_CONCAT(tessiq_assign_, __LINE__) = (expr);                                           \
+  if (TESSIQ_UNLIKELY(!TESSIQ_CONCAT(tessiq_assign_, __LINE__).has_value())) {                     \
+    return std::move(TESSIQ_CONCAT(tessiq_assign_, __LINE__)).error();                             \
   }                                                                                                \
-  lhs = std::move(TESSERA_CONCAT(tessera_assign_, __LINE__)).value()
+  lhs = std::move(TESSIQ_CONCAT(tessiq_assign_, __LINE__)).value()
 // NOLINTEND(bugprone-macro-parentheses)
 
-} // namespace tessera
+} // namespace tessiq

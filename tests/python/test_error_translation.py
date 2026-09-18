@@ -1,4 +1,4 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 """Every ErrorCode maps to the Python exception type a caller would expect.
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from tessera import _C
+from tessiq import _C
 
 
 @pytest.mark.parametrize(

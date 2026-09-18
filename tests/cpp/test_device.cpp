@@ -1,13 +1,13 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
 #include <cstdint>
 #include <gtest/gtest.h>
 
-#include "tessera/runtime/device.h"
+#include "tessiq/runtime/device.h"
 
-namespace tessera {
+namespace tessiq {
 namespace {
 
 TEST(DeviceTest, CpuBackendIsAlwaysAvailable) {
@@ -69,4 +69,4 @@ TEST(DeviceTest, NullPointerCopyIsRejected) {
 }
 
 } // namespace
-} // namespace tessera
+} // namespace tessiq

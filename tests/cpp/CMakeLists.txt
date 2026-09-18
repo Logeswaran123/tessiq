@@ -1,4 +1,4 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 
 include(FetchContent)
@@ -15,20 +15,20 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-add_executable(tessera_tests
+add_executable(tessiq_tests
   test_allocator.cpp
   test_device.cpp
   test_error.cpp
   test_logging.cpp
   test_result.cpp)
 
-target_link_libraries(tessera_tests PRIVATE
-  tessera::runtime
-  tessera::support
+target_link_libraries(tessiq_tests PRIVATE
+  tessiq::runtime
+  tessiq::support
   GTest::gtest_main)
 
-tessera_set_warnings(tessera_tests)
-tessera_enable_sanitizers(tessera_tests)
+tessiq_set_warnings(tessiq_tests)
+tessiq_enable_sanitizers(tessiq_tests)
 
 include(GoogleTest)
-gtest_discover_tests(tessera_tests)
+gtest_discover_tests(tessiq_tests)

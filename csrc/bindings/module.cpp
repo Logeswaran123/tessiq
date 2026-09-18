@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
 // The exception boundary (PLAN.md section 7.2, ADR 0001). Result<T> is the currency inside the
@@ -9,12 +9,12 @@
 #include <stdexcept>
 #include <string>
 
-#include "tessera/runtime/allocator.h"
-#include "tessera/runtime/device.h"
-#include "tessera/support/error.h"
-#include "tessera/support/logging.h"
-#include "tessera/torch/backend.h"
-#include "tessera/version.h"
+#include "tessiq/runtime/allocator.h"
+#include "tessiq/runtime/device.h"
+#include "tessiq/support/error.h"
+#include "tessiq/support/logging.h"
+#include "tessiq/torch/backend.h"
+#include "tessiq/version.h"
 
 namespace py = pybind11;
 
@@ -22,44 +22,44 @@ namespace {
 
 /// Maps an Error onto the Python exception type a caller would expect. Collapsing these into
 /// RuntimeError would force callers to match on message text instead of using `except`.
-[[noreturn]] void raise_from_error(const tessera::Error& error) {
+[[noreturn]] void raise_from_error(const tessiq::Error& error) {
   const std::string message = error.to_string();
   switch (error.code()) {
-  case tessera::ErrorCode::kInvalidArgument:
+  case tessiq::ErrorCode::kInvalidArgument:
     throw py::value_error(message);
-  case tessera::ErrorCode::kUnsupported:
+  case tessiq::ErrorCode::kUnsupported:
     throw py::type_error(message);
-  case tessera::ErrorCode::kNotFound:
+  case tessiq::ErrorCode::kNotFound:
     throw py::key_error(message);
-  case tessera::ErrorCode::kResourceExhausted:
+  case tessiq::ErrorCode::kResourceExhausted:
     throw std::bad_alloc();
-  case tessera::ErrorCode::kExternal:
-  case tessera::ErrorCode::kInternal:
+  case tessiq::ErrorCode::kExternal:
+  case tessiq::ErrorCode::kInternal:
     throw std::runtime_error(message);
   }
   throw std::runtime_error(message);
 }
 
 void set_log_level_from_string(const std::string& level_name) {
-  tessera::LogLevel level = tessera::LogLevel::kWarn;
-  if (!tessera::parse_log_level(level_name, &level)) {
+  tessiq::LogLevel level = tessiq::LogLevel::kWarn;
+  if (!tessiq::parse_log_level(level_name, &level)) {
     raise_from_error(
-        tessera::invalid_argument("unknown log level '" + level_name +
-                                  "'; expected one of: error, warn, info, debug, trace"));
+        tessiq::invalid_argument("unknown log level '" + level_name +
+                                 "'; expected one of: error, warn, info, debug, trace"));
   }
-  tessera::set_log_level(level);
+  tessiq::set_log_level(level);
 }
 
 } // namespace
 
 PYBIND11_MODULE(_C, m) {
-  m.doc() = "tessera native core (see PLAN.md for architecture)";
+  m.doc() = "tessiq native core (see PLAN.md for architecture)";
 
-  m.attr("__version__") = tessera::kVersion;
+  m.attr("__version__") = tessiq::kVersion;
 
   m.def(
       "version",
-      []() { return std::string(tessera::kVersion); },
+      []() { return std::string(tessiq::kVersion); },
       "Returns the native core version, which must match the Python package version.");
 
   m.def("set_log_level",
@@ -69,51 +69,51 @@ PYBIND11_MODULE(_C, m) {
 
   m.def(
       "get_log_level",
-      []() { return std::string(tessera::log_level_name(tessera::get_log_level())); },
+      []() { return std::string(tessiq::log_level_name(tessiq::get_log_level())); },
       "Returns the current native log level as a string.");
 
   m.def("_init_backend",
-        &tessera::torch_backend::register_allocator,
+        &tessiq::torch_backend::register_allocator,
         "Internal: makes the native backend known to PyTorch. Called during import.");
 
   m.def(
       "device_count",
-      []() { return tessera::current_device().device_count(); },
-      "Number of tessera devices visible to this process.");
+      []() { return tessiq::current_device().device_count(); },
+      "Number of tessiq devices visible to this process.");
 
   m.def(
       "backend_name",
-      []() { return std::string(tessera::device_kind_name(tessera::current_device().kind())); },
-      "Name of the backend currently executing tessera tensors.");
+      []() { return std::string(tessiq::device_kind_name(tessiq::current_device().kind())); },
+      "Name of the backend currently executing tessiq tensors.");
 
   m.def("empty_cache",
-        &tessera::torch_backend::empty_cache,
+        &tessiq::torch_backend::empty_cache,
         "Releases cached device blocks. Returns the number of bytes handed back.");
 
-  py::class_<tessera::AllocatorStats>(m, "AllocatorStats")
-      .def_readonly("allocated_bytes", &tessera::AllocatorStats::allocated_bytes)
-      .def_readonly("reserved_bytes", &tessera::AllocatorStats::reserved_bytes)
-      .def_readonly("peak_allocated_bytes", &tessera::AllocatorStats::peak_allocated_bytes)
-      .def_readonly("peak_reserved_bytes", &tessera::AllocatorStats::peak_reserved_bytes)
-      .def_readonly("allocation_count", &tessera::AllocatorStats::allocation_count)
-      .def_readonly("deallocation_count", &tessera::AllocatorStats::deallocation_count)
-      .def_readonly("cache_hits", &tessera::AllocatorStats::cache_hits)
-      .def_readonly("cache_misses", &tessera::AllocatorStats::cache_misses);
+  py::class_<tessiq::AllocatorStats>(m, "AllocatorStats")
+      .def_readonly("allocated_bytes", &tessiq::AllocatorStats::allocated_bytes)
+      .def_readonly("reserved_bytes", &tessiq::AllocatorStats::reserved_bytes)
+      .def_readonly("peak_allocated_bytes", &tessiq::AllocatorStats::peak_allocated_bytes)
+      .def_readonly("peak_reserved_bytes", &tessiq::AllocatorStats::peak_reserved_bytes)
+      .def_readonly("allocation_count", &tessiq::AllocatorStats::allocation_count)
+      .def_readonly("deallocation_count", &tessiq::AllocatorStats::deallocation_count)
+      .def_readonly("cache_hits", &tessiq::AllocatorStats::cache_hits)
+      .def_readonly("cache_misses", &tessiq::AllocatorStats::cache_misses);
 
-  m.def("memory_stats", &tessera::torch_backend::allocator_stats, "Current allocator counters.");
+  m.def("memory_stats", &tessiq::torch_backend::allocator_stats, "Current allocator counters.");
 
   // Exercises the Result -> exception mapping from tests; a mapping nothing tests rots.
   m.def(
       "_raise_test_error",
       [](const std::string& code) {
         if (code == "invalid_argument") {
-          raise_from_error(tessera::invalid_argument("test error"));
+          raise_from_error(tessiq::invalid_argument("test error"));
         } else if (code == "unsupported") {
-          raise_from_error(tessera::unsupported("test error"));
+          raise_from_error(tessiq::unsupported("test error"));
         } else if (code == "not_found") {
-          raise_from_error(tessera::not_found("test error"));
+          raise_from_error(tessiq::not_found("test error"));
         }
-        raise_from_error(tessera::internal_error("test error"));
+        raise_from_error(tessiq::internal_error("test error"));
       },
       py::arg("code"),
       "Internal: raises the Python exception mapped from the named ErrorCode. Tests only.");

@@ -1,12 +1,12 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 #include <string>
 
-#include "tessera/support/error.h"
+#include "tessiq/support/error.h"
 
-namespace tessera {
+namespace tessiq {
 namespace {
 
 TEST(ErrorTest, CarriesCodeAndMessage) {
@@ -47,4 +47,4 @@ TEST(ErrorTest, EveryCodeHasAStableName) {
 }
 
 } // namespace
-} // namespace tessera
+} // namespace tessiq

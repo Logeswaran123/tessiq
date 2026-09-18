@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -6,9 +6,9 @@
 #include <cstddef>
 #include <string_view>
 
-#include "tessera/support/result.h"
+#include "tessiq/support/result.h"
 
-namespace tessera {
+namespace tessiq {
 
 /// Minimum alignment of every pointer a Device hands out.
 ///
@@ -92,4 +92,4 @@ Device& current_device();
 /// Switches the active backend. Fails if `kind` is unavailable, leaving the current one in place.
 Result<void> set_current_device(DeviceKind kind);
 
-} // namespace tessera
+} // namespace tessiq

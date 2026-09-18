@@ -1,4 +1,4 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Warning configuration (PLAN.md section 7.1).
@@ -8,9 +8,9 @@
 
 # Applies the project's warning set to `target`.
 #
-# Warnings are PRIVATE: consumers of tessera are not subjected to our warning policy, and a strict
+# Warnings are PRIVATE: consumers of tessiq are not subjected to our warning policy, and a strict
 # policy must never leak through an installed header into someone else's build.
-function(tessera_set_warnings target)
+function(tessiq_set_warnings target)
   set(gcc_clang_warnings
       -Wall
       -Wextra
@@ -39,7 +39,7 @@ function(tessera_set_warnings target)
   target_compile_options(${target} PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:${gcc_clang_warnings}>)
 
-  if(TESSERA_WARNINGS_AS_ERRORS)
+  if(TESSIQ_WARNINGS_AS_ERRORS)
     target_compile_options(${target} PRIVATE
       $<$<COMPILE_LANGUAGE:CXX>:-Werror>)
   endif()

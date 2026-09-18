@@ -1,9 +1,9 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 """Device registration and the memory API.
 
-Importing this module registers ``tessera`` with PyTorch as a device. After that,
-``torch.randn(4, device="tessera")`` and ``tensor.to("tessera")`` work like any other backend.
+Importing this module registers ``tessiq`` with PyTorch as a device. After that,
+``torch.randn(4, device="tessiq")`` and ``tensor.to("tessiq")`` work like any other backend.
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from dataclasses import dataclass
 
 import torch
 
-from tessera import _C
+from tessiq import _C
 
 #: The device name PyTorch knows us by. PyTorch's reserved identifier for out-of-tree backends is
 #: renamed to this once, here; nothing else in the project refers to it.
-DEVICE_NAME = "tessera"
+DEVICE_NAME = "tessiq"
 
 _registered = False
 
@@ -31,7 +31,7 @@ def _current_device() -> int:
 
 
 def _set_device(_device: object) -> None:
-    """Accept and ignore: tessera exposes a single device, so there is nothing to switch to."""
+    """Accept and ignore: tessiq exposes a single device, so there is nothing to switch to."""
 
 
 def _synchronize(_device: object = None) -> None:
@@ -67,7 +67,7 @@ def _initial_seed() -> int:
 def _build_torch_device_module() -> types.ModuleType:
     """Build the module PyTorch expects to find at ``torch.<DEVICE_NAME>``.
 
-    Resolving ``device="tessera"`` makes PyTorch look up a module of that name on ``torch`` and
+    Resolving ``device="tessiq"`` makes PyTorch look up a module of that name on ``torch`` and
     call into it for device counts, the current device and RNG state. Without it, every call that
     names the device fails with a ModuleNotFoundError that says nothing about the real cause.
     """
@@ -130,12 +130,12 @@ class MemoryStats:
 
 
 def device_count() -> int:
-    """Number of tessera devices. Zero means the active backend found no hardware."""
+    """Number of tessiq devices. Zero means the active backend found no hardware."""
     return int(_C.device_count())
 
 
 def backend_name() -> str:
-    """Backend currently executing tessera tensors, such as ``"cpu"`` or ``"cuda"``."""
+    """Backend currently executing tessiq tensors, such as ``"cpu"`` or ``"cuda"``."""
     return str(_C.backend_name())
 
 

@@ -1,6 +1,6 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""The tessera device: allocation, transfers, and the op fallback."""
+"""The tessiq device: allocation, transfers, and the op fallback."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from collections.abc import Callable
 import pytest
 import torch
 
-import tessera
+import tessiq
 
-DEVICE = tessera.DEVICE_NAME
+DEVICE = tessiq.DEVICE_NAME
 
 DTYPES = [torch.float32, torch.float64, torch.int32, torch.int64]
 
@@ -21,8 +21,8 @@ def test_backend_is_registered_under_our_name() -> None:
 
 
 def test_device_is_reported() -> None:
-    assert tessera.device_count() >= 1
-    assert tessera.backend_name() in {"cpu", "cuda"}
+    assert tessiq.device_count() >= 1
+    assert tessiq.backend_name() in {"cpu", "cuda"}
 
 
 def test_empty_allocates_the_requested_shape() -> None:
@@ -133,19 +133,19 @@ def test_random_generation_is_seeded_by_torch_manual_seed() -> None:
 
 
 def test_memory_stats_track_a_live_tensor() -> None:
-    before = tessera.memory_allocated()
+    before = tessiq.memory_allocated()
     x = torch.empty(4096, dtype=torch.float32, device=DEVICE)
-    during = tessera.memory_allocated()
+    during = tessiq.memory_allocated()
     assert during > before
 
     del x
-    assert tessera.memory_allocated() == before
+    assert tessiq.memory_allocated() == before
 
 
 def test_reserved_exceeds_allocated_once_a_block_is_cached() -> None:
     x = torch.empty(4096, dtype=torch.float32, device=DEVICE)
     del x
-    stats = tessera.memory_stats()
+    stats = tessiq.memory_stats()
     assert stats.reserved_bytes >= stats.allocated_bytes
 
 
@@ -156,23 +156,23 @@ def test_repeated_allocation_hits_the_cache() -> None:
     del_me = torch.empty(shape, dtype=torch.float32, device=DEVICE)
     del del_me
 
-    before = tessera.memory_stats().cache_hits
+    before = tessiq.memory_stats().cache_hits
     again = torch.empty(shape, dtype=torch.float32, device=DEVICE)
-    assert tessera.memory_stats().cache_hits > before
+    assert tessiq.memory_stats().cache_hits > before
     del again
 
 
 def test_empty_cache_releases_reserved_memory() -> None:
     x = torch.empty(1 << 16, dtype=torch.float32, device=DEVICE)
     del x
-    released = tessera.empty_cache()
+    released = tessiq.empty_cache()
     assert released > 0
-    assert tessera.memory_stats().reserved_bytes == tessera.memory_stats().allocated_bytes
+    assert tessiq.memory_stats().reserved_bytes == tessiq.memory_stats().allocated_bytes
 
 
 def test_live_blocks_balance_out() -> None:
-    before = tessera.memory_stats().live_blocks
+    before = tessiq.memory_stats().live_blocks
     tensors = [torch.empty(128, device=DEVICE) for _ in range(8)]
-    assert tessera.memory_stats().live_blocks == before + 8
+    assert tessiq.memory_stats().live_blocks == before + 8
     del tensors
-    assert tessera.memory_stats().live_blocks == before
+    assert tessiq.memory_stats().live_blocks == before

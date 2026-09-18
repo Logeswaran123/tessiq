@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
@@ -8,10 +8,10 @@
 #include <set>
 #include <vector>
 
-#include "tessera/runtime/allocator.h"
-#include "tessera/runtime/device.h"
+#include "tessiq/runtime/allocator.h"
+#include "tessiq/runtime/device.h"
 
-namespace tessera {
+namespace tessiq {
 namespace {
 
 /// Counts driver calls, so tests can assert caching behaviour rather than infer it, and can force
@@ -257,4 +257,4 @@ TEST(AllocatorTest, DeallocateIgnoresNull) {
 }
 
 } // namespace
-} // namespace tessera
+} // namespace tessiq

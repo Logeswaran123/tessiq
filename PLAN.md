@@ -1,4 +1,4 @@
-# tessera — Design & Implementation Plan
+# tessiq — Design & Implementation Plan
 
 > A from-scratch PyTorch accelerator backend: custom device, graph compiler, and kernel library.
 
@@ -8,15 +8,15 @@
 
 ## 1. What this project is
 
-`tessera` is a complete, working PyTorch hardware-backend integration built from scratch. It registers
+`tessiq` is a complete, working PyTorch hardware-backend integration built from scratch. It registers
 a real device with PyTorch, captures model graphs, runs them through a genuine optimizing compiler
 pass pipeline, lowers the result to a kernel library, and executes it — with two execution targets:
 
 - a **CPU reference backend** (portable, correctness oracle, runs in CI on any machine), and
 - a **CUDA backend** (real kernels + JIT-generated fused kernels, where the optimizations pay off).
 
-The name is Latin for a mosaic tile: the compiler's central job is tiling a model graph into fused
-clusters that each become one kernel launch.
+The name comes from *tessera*, the Latin word for a single tile in a mosaic. That is the compiler's
+central job: cutting a model graph into clusters and fitting each one into a single kernel launch.
 
 ### Why this project
 
@@ -31,8 +31,8 @@ span is the thing worth showing.
 The project succeeds if a reader can:
 
 1. `pip install -e .` on a CPU-only machine, run the test suite, and see it pass.
-2. Run `torch.compile(model, backend="tessera")` on a real model and get correct results.
-3. Run `tessera-explain model.py` and watch the graph transform pass by pass, ending in a kernel schedule.
+2. Run `torch.compile(model, backend="tessiq")` on a real model and get correct results.
+3. Run `tessiq-explain model.py` and watch the graph transform pass by pass, ending in a kernel schedule.
 4. See a **measured** speedup from fusion on the CUDA backend, with the benchmark reproducible.
 5. Read `docs/architecture.md` and understand how a PyTorch backend actually works.
 6. Open any file at random and find production-quality code — error handling, tests, docs — not
@@ -44,7 +44,7 @@ The project succeeds if a reader can:
 
 ## 2. Prior art and design influences
 
-tessera is designed from publicly documented sources. Backend integration is well described in the
+tessiq is designed from publicly documented sources. Backend integration is well described in the
 open, and every structural decision here traces to something a reader can go and read.
 
 | Source | What it informs |
@@ -64,7 +64,7 @@ of use, so a reader can follow the reasoning to its source.
 These are the industry-general problems any accelerator backend faces. Naming them explicitly is
 what makes the phase plan coherent rather than a list of features:
 
-| Problem | How tessera addresses it |
+| Problem | How tessiq addresses it |
 |---|---|
 | Ops arrive one at a time; per-op dispatch is too slow | Graph capture via `torch.compile`, recipe caching (§5.6) |
 | Graphs need normalizing before optimizing | Canonicalization pass set (§5.3) |
@@ -76,15 +76,15 @@ what makes the phase plan coherent rather than a list of features:
 | Hundreds of ops means hundreds of registrations | YAML op definitions + code generator (§6) |
 | Peak memory dominates on-device feasibility | Liveness-based memory planner (§5.3) |
 
-### Design decisions that are tessera's own
+### Design decisions that are tessiq's own
 
 Three places where this project makes a choice the prior art above does not, and which are
 therefore worth defending on their merits:
 
 1. **Its own SSA IR with a textual format.** Most in-tree backends optimize the framework's
-   existing graph structure in place. tessera defines its own IR with a parseable/printable text
+   existing graph structure in place. tessiq defines its own IR with a parseable/printable text
    form, which makes every pass testable in isolation via golden files and enables a standalone
-   `tessera-opt` tool. This follows MLIR/LLVM practice rather than framework practice.
+   `tessiq-opt` tool. This follows MLIR/LLVM practice rather than framework practice.
 2. **Runtime kernel generation.** Fused elementwise clusters are compiled to CUDA source at
    runtime via NVRTC and cached on disk, rather than dispatched to a fixed library of pre-built
    fused kernels.
@@ -109,8 +109,8 @@ Verified on this machine as of 2026-09-17:
 ### Setup prerequisites (before Phase 0)
 
 ```bash
-conda create -n tessera python=3.12   # 3.12, not 3.13 — see note
-conda activate tessera
+conda create -n tessiq python=3.12   # 3.12, not 3.13 — see note
+conda activate tessiq
 pip install torch --index-url https://download.pytorch.org/whl/cu128
 pip install cmake ninja pybind11 pytest
 ```
@@ -136,7 +136,7 @@ Two notes:
 ```
                           ┌─────────────────────────────────────┐
    torch.Tensor.to()      │        EAGER PATH (Phase 1)         │
-   single aten op    ────>│  aten op → tessera dispatch key      │
+   single aten op    ────>│  aten op → tessiq dispatch key      │
                           │  → kernel registry → device runtime  │
                           └─────────────────────────────────────┘
                               correctness floor + fallback target
@@ -144,14 +144,14 @@ Two notes:
                           ┌─────────────────────────────────────┐
    torch.compile(         │        GRAPH PATH (Phase 4+)        │
      model,               │                                      │
-     backend="tessera")   │  Dynamo  ──> FX GraphModule          │
+     backend="tessiq")   │  Dynamo  ──> FX GraphModule          │
                      ────>│     │                                │
                           │     v                                │
                           │  AOTAutograd ──> fwd graph + bwd graph
                           │     │            (functionalized,    │
                           │     │             decomposed to ATen)│
                           │     v                                │
-                          │  Importer ──> Tessera IR             │
+                          │  Importer ──> Tessiq IR             │
                           │     │                                │
                           │     v                                │
                           │  PassManager                         │
@@ -183,7 +183,7 @@ support, and the **correctness oracle** the graph path is tested against.
 ### 4.2 Repository layout
 
 ```
-tessera/
+tessiq/
 ├── CMakeLists.txt
 ├── pyproject.toml                 # scikit-build-core → drives CMake
 ├── README.md
@@ -243,7 +243,7 @@ tessera/
 │   ├── contraction.yaml
 │   └── movement.yaml
 │
-├── python/tessera/
+├── python/tessiq/
 │   ├── __init__.py
 │   ├── _C.pyi                     # type stubs for the extension
 │   ├── backend.py                 # torch.compile backend registration
@@ -254,8 +254,8 @@ tessera/
 │
 ├── tools/
 │   ├── gen_ops.py                 # YAML → C++ registrations, shape fns, docs
-│   ├── tessera_opt.cpp            # CLI: read IR, run pass pipeline, print
-│   └── tessera_explain.py         # CLI: visualize a model's compilation
+│   ├── tessiq_opt.cpp            # CLI: read IR, run pass pipeline, print
+│   └── tessiq_explain.py         # CLI: visualize a model's compilation
 │
 ├── tests/
 │   ├── cpp/                       # gtest: IR, passes (golden), memplan, allocator
@@ -313,16 +313,16 @@ in PyTorch's own `DispatchKey` enum and **cannot be renamed by us** — it is th
 name this project chose. What *is* ours is every name a user or a reader ever sees:
 
 ```python
-torch.utils.rename_privateuse1_backend("tessera")  # device name: .to("tessera")
-torch.utils.generate_methods_for_privateuse1_backend()  # enables tensor.tessera()
+torch.utils.rename_privateuse1_backend("tessiq")  # device name: .to("tessiq")
+torch.utils.generate_methods_for_privateuse1_backend()  # enables tensor.tessiq()
 ```
 
-After the rename, the user-facing surface is `torch.tessera.*`, `.to("tessera")`, `tensor.tessera()`,
-and `device="tessera"`. PyTorch's reserved identifier never appears in user-facing code or docs.
+After the rename, the user-facing surface is `torch.tessiq.*`, `.to("tessiq")`, `tensor.tessiq()`,
+and `device="tessiq"`. PyTorch's reserved identifier never appears in user-facing code or docs.
 
 **The rule for this codebase:** the reserved identifier appears **only** inside
 `csrc/runtime/register.cpp` and the one Python call above — the exact API boundary where PyTorch
-requires it — and nowhere else. Everything else, in code, comments, docs and tests, says *tessera
+requires it — and nowhere else. Everything else, in code, comments, docs and tests, says *tessiq
 device backend* or *device backend registration*. A grep for the reserved name should return a
 single-digit number of hits, all of them in the registration layer.
 
@@ -334,7 +334,7 @@ will (§12) — exactly one file needs to change.
 the installed, pinned version rather than trusting this document; if they've moved, fix them here
 and in `register.cpp` together.
 
-### Choosing a backend: `tessera.cpu` and `tessera.gpu`
+### Choosing a backend: `tessiq.cpu` and `tessiq.gpu`
 
 A tensor should say which backend it lives on, at the point it is created. A process-wide switch is
 the wrong control: it makes the two backends mutually exclusive, when the whole point of keeping a
@@ -342,59 +342,59 @@ CPU reference is running both at once and comparing them.
 
 **One constraint decides the design.** PyTorch exposes exactly one device *type* to out-of-tree
 backends. `DeviceType` has a single `PrivateUse1` entry and only `rename_privateuse1_backend`
-exists, so `tessera_cpu` and `tessera_gpu` cannot be two device types however much that would read
+exists, so `tessiq_cpu` and `tessiq_gpu` cannot be two device types however much that would read
 better. Verified against the pinned torch, not assumed.
 
 What PyTorch does give is device *indices*, which is how CUDA distinguishes `cuda:0` from `cuda:1`.
-tessera uses them to distinguish backends:
+tessiq uses them to distinguish backends:
 
 | Index | Backend | Python name |
 |---|---|---|
-| `tessera:0` | CPU reference | `tessera.cpu` |
-| `tessera:1` | first CUDA device | `tessera.gpu`, or `tessera.gpu(0)` |
-| `tessera:1+n` | further CUDA devices | `tessera.gpu(n)` |
+| `tessiq:0` | CPU reference | `tessiq.cpu` |
+| `tessiq:1` | first CUDA device | `tessiq.gpu`, or `tessiq.gpu(0)` |
+| `tessiq:1+n` | further CUDA devices | `tessiq.gpu(n)` |
 
 ```python
-import torch, tessera
+import torch, tessiq
 
-reference = torch.randn(1024, device=tessera.cpu)   # host memory, our allocator
-fast      = reference.to(tessera.gpu)               # device memory on the GPU
+reference = torch.randn(1024, device=tessiq.cpu)   # host memory, our allocator
+fast      = reference.to(tessiq.gpu)               # device memory on the GPU
 
-torch.allclose(fast.to(tessera.cpu), reference)     # the oracle check, in one line
-tessera.memory_stats(tessera.gpu).allocated_bytes   # per-backend accounting
+torch.allclose(fast.to(tessiq.cpu), reference)     # the oracle check, in one line
+tessiq.memory_stats(tessiq.gpu).allocated_bytes   # per-backend accounting
 ```
 
-`tessera.cpu` and `tessera.gpu` are `torch.device` values, so they go anywhere a device goes:
-`device=`, `.to()`, `torch.zeros(..., device=...)`. The `tessera:N` spelling still works and is what
+`tessiq.cpu` and `tessiq.gpu` are `torch.device` values, so they go anywhere a device goes:
+`device=`, `.to()`, `torch.zeros(..., device=...)`. The `tessiq:N` spelling still works and is what
 `repr()` prints, because it is what PyTorch actually stores.
 
-**Why index 0 is the CPU reference.** An unqualified `device="tessera"` resolves to index 0, so the
+**Why index 0 is the CPU reference.** An unqualified `device="tessiq"` resolves to index 0, so the
 default is the backend that is always present and always correct. A machine with no GPU then gets a
 working default rather than an error, and CI needs no special case.
 
 Each backend owns a `Device` and its own `CachingAllocator`, so memory statistics are per backend.
 A single pooled number would be meaningless the moment both are in use.
 
-Cross-backend copies stage through the host. `tessera:0` and `tessera:1` share no address space, and
+Cross-backend copies stage through the host. `tessiq:0` and `tessiq:1` share no address space, and
 a device-to-device copy between different backends is not one memcpy.
 
 ---
 
 ## 5. Compiler pass pipeline
 
-The passes are the heart of the project. Each one is independently testable via `tessera-opt` on
+The passes are the heart of the project. Each one is independently testable via `tessiq-opt` on
 textual IR with golden output files.
 
 ### 5.1 Pass infrastructure
 
 `Pass` interface with `run(Graph&) -> bool changed`. `PassManager` handles ordering, fixpoint
 iteration for canonicalization, per-pass enable/disable flags, before/after IR dumps, timing, and
-verification after each pass in debug builds. Passes register themselves by name so `tessera-opt
+verification after each pass in debug builds. Passes register themselves by name so `tessiq-opt
 --passes=dce,cse,fuse-elementwise` works from the CLI.
 
 ### 5.2 Import
 
-FX graph → Tessera IR. Runs after AOTAutograd, so the input is already functionalized and decomposed
+FX graph → Tessiq IR. Runs after AOTAutograd, so the input is already functionalized and decomposed
 to core ATen — a much smaller and better-behaved op set than raw `aten`. Unknown ops become opaque
 `fallback` nodes rather than errors.
 
@@ -507,7 +507,7 @@ and they are not negotiable per-file.
 
 - **C++17 in the core, C++20 for the torch-facing code.** The runtime, IR, passes and kernels are
   C++17 and depend on nothing but the standard library, which is what keeps them testable
-  without torch or a GPU. `csrc/tessera/torch/` is built at C++20 because recent torch headers
+  without torch or a GPU. `csrc/tessiq/torch/` is built at C++20 because recent torch headers
   use `std::strong_ordering` and `requires` clauses and will not parse otherwise. The split is
   enforced per target, not per file.
 - No compiler extensions. `-Wall -Wextra -Wpedantic -Werror` in CI; warnings are build
@@ -532,7 +532,7 @@ Three distinct categories, each with one mechanism — mixing them is what makes
 
 | Category | Mechanism | Example |
 |---|---|---|
-| **Programmer error** (broken invariant) | `TESSERA_DCHECK`, debug-only, crashes loudly | IR node with a null operand after a pass |
+| **Programmer error** (broken invariant) | `TESSIQ_DCHECK`, debug-only, crashes loudly | IR node with a null operand after a pass |
 | **Recoverable failure** (expected, must be handled) | `Result<T>` return type, `[[nodiscard]]` | Kernel not available for this dtype → fall back |
 | **User error** (bad input at the API boundary) | Exception with an actionable message | Unsupported dtype passed from Python |
 
@@ -548,10 +548,10 @@ Rules that follow from this:
 ### 7.3 Logging, diagnostics, and observability
 
 - Leveled logging (`ERROR`/`WARN`/`INFO`/`DEBUG`/`TRACE`), **zero cost when disabled** — the argument
-  expressions must not evaluate. Controlled by `TESSERA_LOG_LEVEL` and per-module `TESSERA_LOG_MODULES`.
+  expressions must not evaluate. Controlled by `TESSIQ_LOG_LEVEL` and per-module `TESSIQ_LOG_MODULES`.
 - Every pass logs, at `DEBUG`, what it changed and how many nodes it touched. A compiler you can't
   see inside is a compiler you can't debug.
-- `TESSERA_DUMP_IR=before,after,all` writes IR snapshots per pass to a directory. This is the single
+- `TESSIQ_DUMP_IR=before,after,all` writes IR snapshots per pass to a directory. This is the single
   most valuable debugging feature in the project — build it in Phase 3, not when you first need it.
 - Compilation statistics (pass timings, node counts, cache hit/miss, kernels generated) are queryable
   from Python, not just printed.
@@ -571,7 +571,7 @@ Rules that follow from this:
 - `clang-format` (LLVM-derived) and `clang-tidy` enforced in CI, never by hand. `ruff` + `mypy` on the
   Python side, `ruff format` for formatting.
 - Naming: `PascalCase` types, `snake_case` functions/variables, `member_` trailing underscore,
-  `kConstant`, `TESSERA_` macro prefix. One convention, applied everywhere, no exceptions.
+  `kConstant`, `TESSIQ_` macro prefix. One convention, applied everywhere, no exceptions.
 - **File layout mirrors the architecture** (§4.2). A reader who understands the architecture can
   find any file without searching.
 - **No dead code, no commented-out code.** Git remembers. Deleting is free.
@@ -733,7 +733,7 @@ replaces how a single fused kernel is produced; MLIR replaces how the whole grap
 lowered.
 
 ```
-  Tessera IR ──> passes ──> fused clusters ──┬──> NVRTC emitter    ──> cubin   (Phase 6)
+  Tessiq IR ──> passes ──> fused clusters ──┬──> NVRTC emitter    ──> cubin   (Phase 6)
        │                                     ├──> Triton emitter   ──> cubin   (Phase 9)
        │                                     └──> CPU emitter      ──> loops
        │
@@ -759,7 +759,7 @@ class KernelEmitter {
 };
 ```
 
-Registered by name, selected by config (`TESSERA_EMITTER=nvrtc|triton|cpu`). Adding Triton then means
+Registered by name, selected by config (`TESSIQ_EMITTER=nvrtc|triton|cpu`). Adding Triton then means
 adding one class and zero changes anywhere else — and, critically, it means NVRTC vs Triton can be
 **benchmarked head-to-head on identical clusters**, which is a far more interesting result than either
 one alone.
@@ -804,9 +804,9 @@ Three possible integration modes; the plan recommends the first:
 
 | Mode | What it means | Verdict |
 |---|---|---|
-| **Export target** | Tessera IR → MLIR (`tensor`/`linalg`) → MLIR's pipeline → LLVM → CPU/GPU | **Recommended.** Additive, keeps the hand-written compiler as the entry point, and demonstrates interop skill on top of compiler skill |
-| **Import source** | `tessera-opt` consumes MLIR and runs tessera passes on it | Useful later for interop demos; cheap once the converter exists in both directions |
-| **Full replacement** | Define a tessera dialect and delete the custom IR | **Rejected.** It's a rewrite, and it deletes the part of the project that demonstrates the most — building the IR and pass infrastructure from scratch |
+| **Export target** | Tessiq IR → MLIR (`tensor`/`linalg`) → MLIR's pipeline → LLVM → CPU/GPU | **Recommended.** Additive, keeps the hand-written compiler as the entry point, and demonstrates interop skill on top of compiler skill |
+| **Import source** | `tessiq-opt` consumes MLIR and runs tessiq passes on it | Useful later for interop demos; cheap once the converter exists in both directions |
+| **Full replacement** | Define a tessiq dialect and delete the custom IR | **Rejected.** It's a rewrite, and it deletes the part of the project that demonstrates the most — building the IR and pass infrastructure from scratch |
 
 **What already fits, by design.** The current plan is unusually well-positioned here, and not by
 accident — several choices were made with this in mind:
@@ -824,7 +824,7 @@ so a second generator backend targeting TableGen is a new emitter template, not 
 
 **What it costs, honestly.** MLIR is a large build dependency with its own version churn, and it
 makes the project harder to build for a casual visitor. Mitigation: MLIR support is a **build-time
-opt-in** (`-DTESSERA_ENABLE_MLIR=ON`, default `OFF`), never required for the core project or CI.
+opt-in** (`-DTESSIQ_ENABLE_MLIR=ON`, default `OFF`), never required for the core project or CI.
 
 **Realistic scope.** Phase 10 as written means: export the IR to `linalg` on tensors, run a standard
 MLIR bufferization + lowering pipeline, and execute the result — for a *subset* of ops, demonstrated
@@ -858,7 +858,7 @@ Repo init, CMake + scikit-build-core skeleton, pybind11 hello-world extension, p
 up, LICENSE, README skeleton. **All of §7's automation lands here, before the first real line of
 code:** `-Werror`, clang-format + clang-tidy, ruff + mypy, pre-commit hooks, ASan/UBSan build config,
 conventional-commit linting, and CI enforcing every one of them.
-**Milestone:** `pip install -e .` works; `import tessera` succeeds; CI is green; a deliberately
+**Milestone:** `pip install -e .` works; `import tessiq` succeeds; CI is green; a deliberately
 badly-formatted, warning-producing commit is *rejected* by CI.
 **Why here:** standards adopted after the code exists are standards applied to a backlog. Adopted
 first, they cost nothing and are never negotiated again.
@@ -867,7 +867,7 @@ first, they cost nothing and are never negotiated again.
 `Device` abstraction with the CPU reference backend; caching allocator; device backend registration
 with `DeviceGuardImplInterface` and the backend rename (§4.4); transfers in both directions; enough
 native ops to make tensors usable, with a CPU fallback covering the rest of ATen.
-**Milestone:** `x = torch.randn(1024, device="tessera"); y = (x + x).cpu()` gives correct results,
+**Milestone:** `x = torch.randn(1024, device="tessiq"); y = (x + x).cpu()` gives correct results,
 and the memory API reports allocations, reuse and cache hits.
 **Risk:** Device backend registration is the most version-fragile part of the project. Do it first, on a
 pinned torch, so the fragility is discovered on day one rather than in month three.
@@ -882,14 +882,14 @@ point a tensor is created rather than a process-wide switch.
 - One `CachingAllocator` per device, so memory statistics are reported per backend rather than
   pooled into a number that means nothing.
 - Device indices select the backend (§4.4): index 0 is the CPU reference, indices 1..N are the
-  CUDA devices. `tessera.cpu` and `tessera.gpu` name them in Python.
-- Cross-backend copies (`tessera:0` ↔ `tessera:1`) stage through the host.
+  CUDA devices. `tessiq.cpu` and `tessiq.gpu` name them in Python.
+- Cross-backend copies (`tessiq:0` ↔ `tessiq:1`) stage through the host.
 - The guard implementation gains real device switching, and `deviceCount()` covers both.
 - Every op-level test runs against both backends and compares results.
 
-**Milestone:** `torch.randn(1024, device=tessera.gpu)` allocates on the GPU and shows up in
-`nvidia-smi`; `.to(tessera.cpu)` moves it back; the two backends produce identical results on the
-op suite; `tessera.memory_stats(tessera.gpu)` reports device bytes independently of the CPU pool.
+**Milestone:** `torch.randn(1024, device=tessiq.gpu)` allocates on the GPU and shows up in
+`nvidia-smi`; `.to(tessiq.cpu)` moves it back; the two backends produce identical results on the
+op suite; `tessiq.memory_stats(tessiq.gpu)` reports device bytes independently of the CPU pool.
 
 **Expect it to be slow, and do not treat that as a defect.** Until the kernel library exists every
 op still reaches the host through the CPU fallback, so a GPU tensor makes two transfers per
@@ -905,14 +905,14 @@ rather than an error.
 
 ### Phase 3 — IR and pass infrastructure
 Graph/Node/Value, TensorType, builder, verifier, printer, parser. PassManager + registry. `dce`,
-`cse`, `const-fold`. `tessera-opt` CLI. Golden test harness.
-**Milestone:** `tessera-opt --passes=dce,cse in.tsr` produces expected output; parse/print roundtrip
+`cse`, `const-fold`. `tessiq-opt` CLI. Golden test harness.
+**Milestone:** `tessiq-opt --passes=dce,cse in.tsr` produces expected output; parse/print roundtrip
 is property-tested; no torch dependency in any of it.
 
 ### Phase 4 — Graph capture
 FX importer, `torch.compile` backend registration, capability partitioner, CPU fallback for
 unsupported ops, naive lowering (one kernel per node, no fusion yet).
-**Milestone:** `torch.compile(mlp, backend="tessera")` runs an MLP end-to-end with correct results,
+**Milestone:** `torch.compile(mlp, backend="tessiq")` runs an MLP end-to-end with correct results,
 and a graph containing a deliberately unsupported op still produces correct results via fallback.
 
 ### Phase 5 — Shape inference, memory planning, recipe cache
@@ -935,20 +935,20 @@ backends. `docs/op_coverage.md` is generated and non-trivial.
 
 ### Phase 8 — Training, dynamic shapes, tooling
 AOTAutograd backward graphs; symbolic shapes + bucketing; profiler with chrome-trace export;
-`tessera-explain`; `docs/architecture.md`; a write-up.
-**Milestone:** a small model **trains** to convergence on the tessera backend; sequence-length
+`tessiq-explain`; `docs/architecture.md`; a write-up.
+**Milestone:** a small model **trains** to convergence on the tessiq backend; sequence-length
 variation doesn't trigger recompilation every step.
 
 ### Phase 9 — Triton emitter (optional, §9.2)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;
 head-to-head benchmark against the NVRTC emitter on identical clusters.
-**Milestone:** `TESSERA_EMITTER=triton` produces correct results on the full op test suite, and
+**Milestone:** `TESSIQ_EMITTER=triton` produces correct results on the full op test suite, and
 `bench/emitters/` publishes a per-pattern comparison table of the two emitters.
 
 ### Phase 10 — MLIR export target (optional, §9.3)
-`MlirTarget` implementing `LoweringTarget`; Tessera IR → `linalg`-on-tensors converter; `gen_ops.py`
+`MlirTarget` implementing `LoweringTarget`; Tessiq IR → `linalg`-on-tensors converter; `gen_ops.py`
 extended to emit ODS from the same YAML; standard MLIR bufferization + lowering pipeline to LLVM.
-Gated behind `-DTESSERA_ENABLE_MLIR=ON`, off by default.
+Gated behind `-DTESSIQ_ENABLE_MLIR=ON`, off by default.
 **Milestone:** a subset of ops exports to valid MLIR, round-trips through `mlir-opt`, and executes
 end-to-end on one model with results matching the CPU reference.
 
@@ -975,7 +975,7 @@ What a visitor sees in the first 60 seconds determines whether they read further
 before/after IR snippet showing a fusion actually happening; a benchmark table with real numbers from
 the 5080; a 5-line quickstart; then links to deeper docs.
 
-**`tessera-explain`** is the demo that carries the project — point it at a model and it renders the
+**`tessiq-explain`** is the demo that carries the project — point it at a model and it renders the
 captured graph, each pass's diff, the final kernel schedule, and the measured timeline. This is the
 same instinct as your `cuda-breakdown` tool, applied one level up the stack.
 
@@ -995,7 +995,7 @@ cost model, and the recipe cache key design.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Device backend registration API churn between torch versions | Build breaks on upgrade | Pin torch exactly in `requirements-dev.txt`, and have CI read that pin rather than keeping its own; isolate registration in `csrc/tessera/torch/` |
+| Device backend registration API churn between torch versions | Build breaks on upgrade | Pin torch exactly in `requirements-dev.txt`, and have CI read that pin rather than keeping its own; isolate registration in `csrc/tessiq/torch/` |
 | A dependency pinned as a range rather than exactly | CI resolves a different version than the developer and fails somewhere nobody has run | Every pin is exact. An unpinned torch is what broke the first CI run of phase 1 |
 | The local compiler is older than CI's | Warnings fire only in CI, where the loop is slowest | Keep a matching compiler installed (§3) and build with it before pushing. `-Werror` plus a strict warning set means a compiler bump is a breaking change |
 | A strict warning fires inside an inlined third-party header | Unfixable in our own code, and `-isystem` does not help because the analysis runs after inlining | Disable that one analysis for the target that includes those headers, never globally, with the reason recorded at the call site |
@@ -1015,7 +1015,7 @@ cost model, and the recipe cache key design.
 
 1. Create the conda env and install pinned torch; verify `sm_120` is in `get_arch_list()` (§3).
 2. Install cmake + ninja; confirm `nvcc` works with g++ 11.4 on a trivial `.cu` file.
-3. `git init`, push an empty `Logeswaran123/tessera` repo with README + LICENSE + this plan.
+3. `git init`, push an empty `Logeswaran123/tessiq` repo with README + LICENSE + this plan.
 4. Begin Phase 0 — and note that Phase 0 *is* the engineering-standards phase (§7). The tooling that
    enforces quality goes in before the code it will judge.
 

@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
@@ -7,10 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "tessera/support/error.h"
-#include "tessera/support/result.h"
+#include "tessiq/support/error.h"
+#include "tessiq/support/result.h"
 
-namespace tessera {
+namespace tessiq {
 namespace {
 
 Result<int> parse_positive(int value) {
@@ -75,13 +75,13 @@ TEST(ResultVoidTest, DistinguishesSuccessFromFailure) {
 // --- Propagation macros -------------------------------------------------------------------------
 
 Result<int> doubled_if_positive(int value) {
-  TESSERA_ASSIGN_OR_RETURN(const int parsed, parse_positive(value));
+  TESSIQ_ASSIGN_OR_RETURN(const int parsed, parse_positive(value));
   return parsed * 2;
 }
 
 Result<void> validate_all(const std::vector<int>& values) {
   for (const int value : values) {
-    TESSERA_RETURN_IF_ERROR(require_even(value));
+    TESSIQ_RETURN_IF_ERROR(require_even(value));
   }
   return ok();
 }
@@ -103,8 +103,8 @@ TEST(ResultMacroTest, TwoAssignmentsInOneScopeDoNotCollide) {
   // expands __LINE__ before pasting. A naive `name##__LINE__` produces one identifier for both
   // uses and fails to compile.
   const auto sum = [](int a, int b) -> Result<int> {
-    TESSERA_ASSIGN_OR_RETURN(const int first, parse_positive(a));
-    TESSERA_ASSIGN_OR_RETURN(const int second, parse_positive(b));
+    TESSIQ_ASSIGN_OR_RETURN(const int first, parse_positive(a));
+    TESSIQ_ASSIGN_OR_RETURN(const int second, parse_positive(b));
     return first + second;
   };
 
@@ -122,4 +122,4 @@ TEST(ResultMacroTest, ReturnIfErrorStopsAtTheFirstFailure) {
 }
 
 } // namespace
-} // namespace tessera
+} // namespace tessiq

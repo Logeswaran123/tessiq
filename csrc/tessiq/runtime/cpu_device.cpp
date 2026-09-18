@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
 // The CPU reference backend, and the device registry.
@@ -8,12 +8,12 @@
 #include <new>
 #include <string>
 
-#include "tessera/runtime/allocator.h"
-#include "tessera/runtime/device.h"
-#include "tessera/support/logging.h"
-#include "tessera/support/macros.h"
+#include "tessiq/runtime/allocator.h"
+#include "tessiq/runtime/device.h"
+#include "tessiq/support/logging.h"
+#include "tessiq/support/macros.h"
 
-namespace tessera {
+namespace tessiq {
 
 namespace {
 
@@ -91,7 +91,7 @@ std::string_view device_kind_name(DeviceKind kind) {
   case DeviceKind::kCuda:
     return "cuda";
   }
-  TESSERA_UNREACHABLE("unhandled DeviceKind in device_kind_name");
+  TESSIQ_UNREACHABLE("unhandled DeviceKind in device_kind_name");
 }
 
 Result<Device*> get_device(DeviceKind kind) {
@@ -101,24 +101,24 @@ Result<Device*> get_device(DeviceKind kind) {
   case DeviceKind::kCuda:
     // The CUDA backend lands with the kernels it exists to run. Until then, say so plainly
     // rather than reporting a machine without a GPU.
-    return unsupported("the cuda backend is not built into this version of tessera");
+    return unsupported("the cuda backend is not built into this version of tessiq");
   }
-  TESSERA_UNREACHABLE("unhandled DeviceKind in get_device");
+  TESSIQ_UNREACHABLE("unhandled DeviceKind in get_device");
 }
 
 Device& current_device() {
   auto device = get_device(active_kind());
-  TESSERA_CHECK(device.has_value(),
-                "the active device kind is unavailable: " +
-                    std::string(device_kind_name(active_kind())));
+  TESSIQ_CHECK(device.has_value(),
+               "the active device kind is unavailable: " +
+                   std::string(device_kind_name(active_kind())));
   return **device;
 }
 
 Result<void> set_current_device(DeviceKind kind) {
-  TESSERA_RETURN_IF_ERROR(get_device(kind));
+  TESSIQ_RETURN_IF_ERROR(get_device(kind));
   active_kind() = kind;
-  TESSERA_LOG(kInfo, "runtime") << "active backend is now " << device_kind_name(kind);
+  TESSIQ_LOG(kInfo, "runtime") << "active backend is now " << device_kind_name(kind);
   return ok();
 }
 
-} // namespace tessera
+} // namespace tessiq

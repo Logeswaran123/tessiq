@@ -1,4 +1,4 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Local gates that mirror CI (PLAN.md section 7.7). Anything enforced here is also enforced in CI:

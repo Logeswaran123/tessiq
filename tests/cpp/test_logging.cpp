@@ -1,12 +1,12 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 #include <string>
 
-#include "tessera/support/logging.h"
+#include "tessiq/support/logging.h"
 
-namespace tessera {
+namespace tessiq {
 namespace {
 
 /// Restores the log level after each test, so ordering cannot affect results.
@@ -74,23 +74,23 @@ TEST_F(LoggingTest, DisabledLogDoesNotEvaluateItsArguments) {
     return std::string("expensive");
   };
 
-  TESSERA_LOG(kTrace, "test") << expensive();
+  TESSIQ_LOG(kTrace, "test") << expensive();
   EXPECT_EQ(evaluations, 0) << "a disabled log statement evaluated its arguments";
 
   set_log_level(LogLevel::kTrace);
-  TESSERA_LOG(kTrace, "test") << expensive();
+  TESSIQ_LOG(kTrace, "test") << expensive();
   EXPECT_EQ(evaluations, 1) << "an enabled log statement did not evaluate its arguments";
 }
 
 TEST_F(LoggingTest, LogStatementBindsElseToItsOwnIf) {
-  // TESSERA_LOG expands to an if/else. A naive expansion swallows a following `else`, silently
+  // TESSIQ_LOG expands to an if/else. A naive expansion swallows a following `else`, silently
   // rebinding it. This compiles and passes only if the macro is written correctly.
   bool taken = false;
   // The constant condition is the point: the test checks that the macro's own if/else does
   // not capture the else below.
   // NOLINTNEXTLINE(readability-simplify-boolean-expr)
   if (true) {
-    TESSERA_LOG(kTrace, "test") << "inside";
+    TESSIQ_LOG(kTrace, "test") << "inside";
   } else {
     taken = true;
   }
@@ -98,4 +98,4 @@ TEST_F(LoggingTest, LogStatementBindsElseToItsOwnIf) {
 }
 
 } // namespace
-} // namespace tessera
+} // namespace tessiq

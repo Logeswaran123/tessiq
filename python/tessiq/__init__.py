@@ -1,6 +1,6 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""tessera: a from-scratch PyTorch accelerator backend.
+"""tessiq: a from-scratch PyTorch accelerator backend.
 
 The public surface is intentionally small at this stage. See PLAN.md for the architecture and
 the phase plan; the device API, the ``torch.compile`` backend and the debug tooling arrive in
@@ -14,8 +14,8 @@ from __future__ import annotations
 # carries an RPATH, but that only covers layouts where torch sits next to us.
 import torch as _torch  # noqa: F401
 
-from tessera import _C
-from tessera.device import (
+from tessiq import _C
+from tessiq.device import (
     DEVICE_NAME,
     MemoryStats,
     backend_name,
@@ -25,7 +25,7 @@ from tessera.device import (
     memory_reserved,
     memory_stats,
 )
-from tessera.device import _register as _register_backend
+from tessiq.device import _register as _register_backend
 
 __all__ = [
     "DEVICE_NAME",

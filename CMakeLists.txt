@@ -1,26 +1,26 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.26)
 
 project(
-  tessera
+  tessiq
   VERSION 0.0.1
   DESCRIPTION "A from-scratch PyTorch accelerator backend: device, graph compiler, and kernels"
   LANGUAGES CXX)
 
 # --- Options ------------------------------------------------------------------------------------
 
-option(TESSERA_BUILD_TESTS "Build the C++ test suite" ON)
-option(TESSERA_BUILD_PYTHON "Build the Python extension module" ON)
-option(TESSERA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
-option(TESSERA_ENABLE_CUDA "Build the CUDA backend" OFF)
+option(TESSIQ_BUILD_TESTS "Build the C++ test suite" ON)
+option(TESSIQ_BUILD_PYTHON "Build the Python extension module" ON)
+option(TESSIQ_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
+option(TESSIQ_ENABLE_CUDA "Build the CUDA backend" OFF)
 
 # Reserved for PLAN.md section 9.3. Declared now so the option name is fixed and documented
 # before anything depends on it; enabling it is a later phase.
-option(TESSERA_ENABLE_MLIR "Build the MLIR export target (PLAN.md phase 9)" OFF)
+option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PLAN.md phase 9)" OFF)
 
-set(TESSERA_SANITIZER "" CACHE STRING
+set(TESSIQ_SANITIZER "" CACHE STRING
     "Comma-separated sanitizers to enable, e.g. 'address,undefined'. Empty disables them.")
 
 # --- Global settings ----------------------------------------------------------------------------
@@ -38,16 +38,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
-  message(STATUS "tessera: CMAKE_BUILD_TYPE not set, defaulting to RelWithDebInfo")
+  message(STATUS "tessiq: CMAKE_BUILD_TYPE not set, defaulting to RelWithDebInfo")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)
 include(Sanitizers)
 
-if(TESSERA_ENABLE_MLIR)
+if(TESSIQ_ENABLE_MLIR)
   message(FATAL_ERROR
-          "TESSERA_ENABLE_MLIR is reserved for phase 9 (see PLAN.md section 9.3) and is not "
+          "TESSIQ_ENABLE_MLIR is reserved for phase 9 (see PLAN.md section 9.3) and is not "
           "implemented yet. Configure without it.")
 endif()
 
@@ -55,7 +55,7 @@ endif()
 
 add_subdirectory(csrc)
 
-if(TESSERA_BUILD_TESTS)
+if(TESSIQ_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests/cpp)
 endif()
@@ -63,12 +63,12 @@ endif()
 # --- Configuration summary ----------------------------------------------------------------------
 
 message(STATUS "")
-message(STATUS "tessera ${PROJECT_VERSION} configuration:")
+message(STATUS "tessiq ${PROJECT_VERSION} configuration:")
 message(STATUS "  build type ......... ${CMAKE_BUILD_TYPE}")
 message(STATUS "  compiler ........... ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
-message(STATUS "  tests .............. ${TESSERA_BUILD_TESTS}")
-message(STATUS "  python module ...... ${TESSERA_BUILD_PYTHON}")
-message(STATUS "  warnings as errors . ${TESSERA_WARNINGS_AS_ERRORS}")
-message(STATUS "  cuda backend ....... ${TESSERA_ENABLE_CUDA}")
-message(STATUS "  sanitizers ......... ${TESSERA_SANITIZER}")
+message(STATUS "  tests .............. ${TESSIQ_BUILD_TESTS}")
+message(STATUS "  python module ...... ${TESSIQ_BUILD_PYTHON}")
+message(STATUS "  warnings as errors . ${TESSIQ_WARNINGS_AS_ERRORS}")
+message(STATUS "  cuda backend ....... ${TESSIQ_ENABLE_CUDA}")
+message(STATUS "  sanitizers ......... ${TESSIQ_SANITIZER}")
 message(STATUS "")

@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
@@ -11,11 +11,11 @@
 #include <string_view>
 #include <unordered_set>
 
-#include "tessera/support/error.h"
-#include "tessera/support/logging.h"
-#include "tessera/support/macros.h"
+#include "tessiq/support/error.h"
+#include "tessiq/support/logging.h"
+#include "tessiq/support/macros.h"
 
-namespace tessera {
+namespace tessiq {
 
 namespace {
 
@@ -63,19 +63,19 @@ class LogConfig {
 
  private:
   LogConfig() {
-    if (const char* level_env = std::getenv("TESSERA_LOG_LEVEL")) {
+    if (const char* level_env = std::getenv("TESSIQ_LOG_LEVEL")) {
       LogLevel parsed = LogLevel::kWarn;
       if (parse_log_level(level_env, &parsed)) {
         level_.store(parsed, std::memory_order_relaxed);
       } else {
         // Not fatal: a typo in a debugging variable should not stop a run, but must not pass
         // silently either.
-        std::cerr << "[tessera] ignoring invalid TESSERA_LOG_LEVEL='" << level_env
+        std::cerr << "[tessiq] ignoring invalid TESSIQ_LOG_LEVEL='" << level_env
                   << "'; expected one of: error, warn, info, debug, trace\n";
       }
     }
 
-    if (const char* modules_env = std::getenv("TESSERA_LOG_MODULES")) {
+    if (const char* modules_env = std::getenv("TESSIQ_LOG_MODULES")) {
       std::string_view spec(modules_env);
       size_t start = 0;
       while (start <= spec.size()) {
@@ -105,7 +105,7 @@ class LogConfig {
 namespace detail {
 
 void check_failed(const char* file, int line, const char* condition, const std::string& message) {
-  std::cerr << "\n[tessera] CHECK FAILED at " << short_file_name(file) << ":" << line << "\n"
+  std::cerr << "\n[tessiq] CHECK FAILED at " << short_file_name(file) << ":" << line << "\n"
             << "  condition: " << condition << "\n"
             << "  message:   " << message << "\n"
             << "\nThis is an internal invariant violation, not a usage error. Please report it.\n"
@@ -133,7 +133,7 @@ std::string_view error_code_name(ErrorCode code) {
     return "internal";
   }
   // No default label: adding an ErrorCode without updating this switch is then a compile error.
-  TESSERA_UNREACHABLE("unhandled ErrorCode in error_code_name");
+  TESSIQ_UNREACHABLE("unhandled ErrorCode in error_code_name");
 }
 
 std::string Error::to_string() const {
@@ -159,11 +159,11 @@ std::string_view log_level_name(LogLevel level) {
   case LogLevel::kTrace:
     return "trace";
   }
-  TESSERA_UNREACHABLE("unhandled LogLevel in log_level_name");
+  TESSIQ_UNREACHABLE("unhandled LogLevel in log_level_name");
 }
 
 bool parse_log_level(std::string_view name, LogLevel* out) {
-  TESSERA_DCHECK(out != nullptr, "parse_log_level requires a non-null out parameter");
+  TESSIQ_DCHECK(out != nullptr, "parse_log_level requires a non-null out parameter");
   const std::string lowered = to_lower(name);
   for (const LogLevel level :
        {LogLevel::kError, LogLevel::kWarn, LogLevel::kInfo, LogLevel::kDebug, LogLevel::kTrace}) {
@@ -192,7 +192,7 @@ LogMessage::LogMessage(LogLevel level, std::string_view module, const char* file
 
 LogMessage::~LogMessage() {
   std::ostringstream line;
-  line << "[tessera:" << log_level_name(level_) << ":" << module_ << "] " << stream_.str() << " ("
+  line << "[tessiq:" << log_level_name(level_) << ":" << module_ << "] " << stream_.str() << " ("
        << short_file_name(file_) << ":" << line_ << ")\n";
 
   const std::scoped_lock guard(LogConfig::instance().output_mutex());
@@ -201,4 +201,4 @@ LogMessage::~LogMessage() {
 
 } // namespace detail
 
-} // namespace tessera
+} // namespace tessiq

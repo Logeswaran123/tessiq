@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Generated from version.h.in by CMake. Do not edit the generated copy.
@@ -9,7 +9,7 @@
 
 #pragma once
 
-namespace tessera {
+namespace tessiq {
 
 /// The project version, as "major.minor.patch".
 inline constexpr const char* kVersion = "@PROJECT_VERSION@";
@@ -18,4 +18,4 @@ inline constexpr int kVersionMajor = @PROJECT_VERSION_MAJOR@;
 inline constexpr int kVersionMinor = @PROJECT_VERSION_MINOR@;
 inline constexpr int kVersionPatch = @PROJECT_VERSION_PATCH@;
 
-}  // namespace tessera
+}  // namespace tessiq

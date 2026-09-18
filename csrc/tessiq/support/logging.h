@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -7,9 +7,9 @@
 #include <sstream>
 #include <string_view>
 
-#include "tessera/support/macros.h"
+#include "tessiq/support/macros.h"
 
-namespace tessera {
+namespace tessiq {
 
 /// Severity levels, ordered. A level is emitted when it is at or below the configured level.
 enum class LogLevel {
@@ -27,7 +27,7 @@ std::string_view log_level_name(LogLevel level);
 bool parse_log_level(std::string_view name, LogLevel* out);
 
 /// Returns true if `level` from `module` would be emitted. Thread-safe: configuration is parsed
-/// once from TESSERA_LOG_LEVEL and TESSERA_LOG_MODULES, then never mutated.
+/// once from TESSIQ_LOG_LEVEL and TESSIQ_LOG_MODULES, then never mutated.
 bool log_enabled(LogLevel level, std::string_view module);
 
 /// Thread-safe, but a message straddling the change may be filtered by either level.
@@ -45,7 +45,7 @@ class LogMessage {
 
   ~LogMessage();
 
-  TESSERA_DISALLOW_COPY_AND_MOVE(LogMessage);
+  TESSIQ_DISALLOW_COPY_AND_MOVE(LogMessage);
 
   std::ostream& stream() { return stream_; }
 
@@ -59,15 +59,15 @@ class LogMessage {
 
 } // namespace detail
 
-} // namespace tessera
+} // namespace tessiq
 
 /// Logs at `level` from `module`, if enabled.
 ///
-///   TESSERA_LOG(kDebug, "fusion") << "merged " << count << " nodes";
+///   TESSIQ_LOG(kDebug, "fusion") << "merged " << count << " nodes";
 ///
 /// The level test precedes argument evaluation, so a disabled statement costs nothing. Do not
 /// restructure this into a function taking a formatted string -- that is the whole point.
-#define TESSERA_LOG(level, module)                                                                 \
-  if (!::tessera::log_enabled(::tessera::LogLevel::level, (module))) {                             \
+#define TESSIQ_LOG(level, module)                                                                  \
+  if (!::tessiq::log_enabled(::tessiq::LogLevel::level, (module))) {                               \
   } else                                                                                           \
-    ::tessera::detail::LogMessage(::tessera::LogLevel::level, (module), __FILE__, __LINE__).stream()
+    ::tessiq::detail::LogMessage(::tessiq::LogLevel::level, (module), __FILE__, __LINE__).stream()

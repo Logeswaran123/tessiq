@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -10,10 +10,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "tessera/runtime/device.h"
-#include "tessera/support/result.h"
+#include "tessiq/runtime/device.h"
+#include "tessiq/support/result.h"
 
-namespace tessera {
+namespace tessiq {
 
 /// Counters for the Python memory-stats API and for leak assertions in tests.
 struct AllocatorStats {
@@ -105,4 +105,4 @@ class CachingAllocator {
   AllocatorStats stats_;
 };
 
-} // namespace tessera
+} // namespace tessiq

@@ -1,7 +1,7 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tessera/runtime/allocator.h"
+#include "tessiq/runtime/allocator.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -9,10 +9,10 @@
 #include <string>
 #include <utility>
 
-#include "tessera/support/logging.h"
-#include "tessera/support/macros.h"
+#include "tessiq/support/logging.h"
+#include "tessiq/support/macros.h"
 
-namespace tessera {
+namespace tessiq {
 
 namespace {
 
@@ -36,7 +36,7 @@ std::size_t CachingAllocator::round_size(std::size_t bytes) {
 }
 
 CachingAllocator::CachingAllocator(Device* device) : device_(device) {
-  TESSERA_CHECK(device != nullptr, "CachingAllocator requires a device");
+  TESSIQ_CHECK(device != nullptr, "CachingAllocator requires a device");
 }
 
 CachingAllocator::~CachingAllocator() {
@@ -44,7 +44,7 @@ CachingAllocator::~CachingAllocator() {
   // this allocator can be destroyed before the tensors that hold its memory. Logged at debug
   // rather than warn so that a routine shutdown does not cry wolf.
   if (stats_.allocated_bytes != 0) {
-    TESSERA_LOG(kDebug, kLogModule)
+    TESSIQ_LOG(kDebug, kLogModule)
         << "destroyed with " << stats_.allocated_bytes << " bytes still allocated across "
         << (stats_.allocation_count - stats_.deallocation_count) << " blocks";
   }
@@ -68,7 +68,7 @@ Result<void*> CachingAllocator::allocate(std::size_t bytes) {
     stats_.allocated_bytes += rounded;
     stats_.peak_allocated_bytes = std::max(stats_.peak_allocated_bytes, stats_.allocated_bytes);
 
-    TESSERA_LOG(kTrace, kLogModule) << "reused " << rounded << " bytes at " << ptr;
+    TESSIQ_LOG(kTrace, kLogModule) << "reused " << rounded << " bytes at " << ptr;
     return ptr;
   }
 
@@ -96,8 +96,8 @@ Result<void*> CachingAllocator::allocate(std::size_t bytes) {
     }
 
     stats_.reserved_bytes -= released;
-    TESSERA_LOG(kInfo, kLogModule) << "allocation of " << rounded << " bytes failed; released "
-                                   << released << " cached bytes and retrying";
+    TESSIQ_LOG(kInfo, kLogModule) << "allocation of " << rounded << " bytes failed; released "
+                                  << released << " cached bytes and retrying";
 
     raw = device_->raw_allocate(rounded);
     if (!raw) {
@@ -117,7 +117,7 @@ Result<void*> CachingAllocator::allocate(std::size_t bytes) {
   stats_.peak_allocated_bytes = std::max(stats_.peak_allocated_bytes, stats_.allocated_bytes);
   stats_.peak_reserved_bytes = std::max(stats_.peak_reserved_bytes, stats_.reserved_bytes);
 
-  TESSERA_LOG(kTrace, kLogModule) << "allocated " << rounded << " bytes at " << ptr;
+  TESSIQ_LOG(kTrace, kLogModule) << "allocated " << rounded << " bytes at " << ptr;
   return ptr;
 }
 
@@ -129,8 +129,8 @@ void CachingAllocator::deallocate(void* ptr) {
   const std::scoped_lock guard(mutex_);
 
   const auto it = live_blocks_.find(ptr);
-  TESSERA_CHECK(it != live_blocks_.end(),
-                "deallocate() called on a pointer this allocator did not return");
+  TESSIQ_CHECK(it != live_blocks_.end(),
+               "deallocate() called on a pointer this allocator did not return");
 
   const std::size_t size = it->second.size;
   free_blocks_[size].push_back(ptr);
@@ -138,7 +138,7 @@ void CachingAllocator::deallocate(void* ptr) {
   stats_.deallocation_count++;
   stats_.allocated_bytes -= size;
 
-  TESSERA_LOG(kTrace, kLogModule) << "cached " << size << " bytes at " << ptr;
+  TESSIQ_LOG(kTrace, kLogModule) << "cached " << size << " bytes at " << ptr;
 }
 
 std::size_t CachingAllocator::empty_cache() {
@@ -156,7 +156,7 @@ std::size_t CachingAllocator::empty_cache() {
   free_blocks_.clear();
 
   stats_.reserved_bytes -= released;
-  TESSERA_LOG(kDebug, kLogModule) << "released " << released << " cached bytes";
+  TESSIQ_LOG(kDebug, kLogModule) << "released " << released << " cached bytes";
   return released;
 }
 
@@ -165,4 +165,4 @@ AllocatorStats CachingAllocator::stats() const {
   return stats_;
 }
 
-} // namespace tessera
+} // namespace tessiq

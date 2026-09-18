@@ -6,14 +6,14 @@
 #
 #   bugprone-easily-swappable-parameters  Fires on every (width, height)-style signature.
 #   cppcoreguidelines-avoid-do-while      The assertion macros need do-while for statement safety.
-#   cppcoreguidelines-macro-usage         TESSERA_LOG must not evaluate its arguments, and the
+#   cppcoreguidelines-macro-usage         TESSIQ_LOG must not evaluate its arguments, and the
 #                                         assertion macros need __FILE__/__LINE__. A function
 #                                         cannot do either job.
 #   modernize-use-trailing-return-type    A style preference this project does not share.
 #   performance-enum-size                 These enums appear in signatures and switches, never in
 #                                         bulk storage. Shrinking them trades clarity for nothing.
 #   portability-avoid-pragma-once         Supported by every compiler this project targets.
-#   readability-inconsistent-ifelse-braces TESSERA_LOG expands to a braceless if/else by design;
+#   readability-inconsistent-ifelse-braces TESSIQ_LOG expands to a braceless if/else by design;
 #                                         this would fire at every log site in the project.
 #   readability-use-anyofallof            Suggests std::any_of for loops that carry side effects.
 #
@@ -45,7 +45,7 @@ WarningsAsErrors: '*'
 # rejects the ones it does not recognise, which would fail every file before analysis begins.
 ExtraArgsBefore: ['-Wno-unknown-warning-option']
 
-HeaderFilterRegex: '.*/csrc/tessera/.*'
+HeaderFilterRegex: '.*/csrc/tessiq/.*'
 FormatStyle: file
 
 CheckOptions:
@@ -76,6 +76,6 @@ CheckOptions:
   - key: readability-identifier-naming.ProtectedMemberSuffix
     value: _
   - key: readability-identifier-naming.MacroDefinitionPrefix
-    value: TESSERA_
+    value: TESSIQ_
   - key: readability-function-cognitive-complexity.Threshold
     value: 25

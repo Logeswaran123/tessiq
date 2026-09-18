@@ -33,7 +33,7 @@ Recoverable failures return `Result<T>`. It's `[[nodiscard]]`, so dropping one i
 Exceptions live in exactly one file, `csrc/bindings/module.cpp`, where an `Error` becomes the
 Python exception a caller would expect. Nothing throws across the C ABI.
 
-Broken invariants are a separate thing again. Those are `TESSERA_DCHECK`, because there is nothing
+Broken invariants are a separate thing again. Those are `TESSIQ_DCHECK`, because there is nothing
 useful a caller can do with "the compiler has a bug".
 
 ## Consequences
@@ -42,8 +42,8 @@ Fallibility shows up in every signature, and the compiler enforces that results 
 Classification survives propagation, so fallback logic branches on `code()` instead of grepping
 message text.
 
-The cost is ceremony: every fallible call needs a check or a macro. `TESSERA_RETURN_IF_ERROR` and
-`TESSERA_ASSIGN_OR_RETURN` take the edge off but don't remove it. And nothing stops someone mixing
+The cost is ceremony: every fallible call needs a check or a macro. `TESSIQ_RETURN_IF_ERROR` and
+`TESSIQ_ASSIGN_OR_RETURN` take the edge off but don't remove it. And nothing stops someone mixing
 the two mechanisms by accident — that's a review question, not a compiler-enforced one.
 
 Worth revisiting once `std::expected` is available across the toolchains we support, at which point
@@ -51,4 +51,4 @@ Worth revisiting once `std::expected` is available across the toolchains we supp
 
 ## See also
 
-`csrc/tessera/support/result.h`, `csrc/tessera/support/error.h`, [PLAN.md](../../PLAN.md) §7.2.
+`csrc/tessiq/support/result.h`, `csrc/tessiq/support/error.h`, [PLAN.md](../../PLAN.md) §7.2.

@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -7,7 +7,7 @@
 #include <string_view>
 #include <utility>
 
-namespace tessera {
+namespace tessiq {
 
 /// Classification of a recoverable failure. Each code must mean something different to a caller
 /// deciding what to do next.
@@ -20,7 +20,7 @@ enum class ErrorCode {
   kResourceExhausted,
   /// An external component (NVRTC, a driver API, the filesystem) reported failure.
   kExternal,
-  /// A bug in tessera reached a path that could not assert.
+  /// A bug in tessiq reached a path that could not assert.
   kInternal,
 };
 
@@ -72,4 +72,4 @@ inline Error internal_error(std::string message) {
   return {ErrorCode::kInternal, std::move(message)};
 }
 
-} // namespace tessera
+} // namespace tessiq

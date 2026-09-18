@@ -1,11 +1,11 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Everything PyTorch needs in order to treat tessera as a device.
+// Everything PyTorch needs in order to treat tessiq as a device.
 //
 // PyTorch reserves one dispatch key for out-of-tree backends. Its internal identifier is fixed in
 // PyTorch's own enum and is confined to this file (PLAN.md section 4.4); the name users see is set
-// by rename_privateuse1_backend("tessera") on the Python side.
+// by rename_privateuse1_backend("tessiq") on the Python side.
 //
 // This is the most version-fragile file in the project. If a torch upgrade breaks the build, it
 // breaks here and nowhere else.
@@ -18,12 +18,12 @@
 
 #include <torch/library.h>
 
-#include "tessera/runtime/allocator.h"
-#include "tessera/runtime/device.h"
-#include "tessera/support/logging.h"
-#include "tessera/support/macros.h"
+#include "tessiq/runtime/allocator.h"
+#include "tessiq/runtime/device.h"
+#include "tessiq/support/logging.h"
+#include "tessiq/support/macros.h"
 
-namespace tessera::torch_backend {
+namespace tessiq::torch_backend {
 
 namespace {
 
@@ -41,9 +41,9 @@ CachingAllocator& allocator() {
 ///
 /// c10 reports allocation failure by throwing, so this is one of the few places where an Error
 /// becomes an exception outside the bindings layer: the caller is torch, not us.
-struct TesseraAllocator final : c10::Allocator {
+struct TessiqAllocator final : c10::Allocator {
   c10::DataPtr allocate(std::size_t bytes) override {
-    auto ptr = tessera::torch_backend::allocator().allocate(bytes);
+    auto ptr = tessiq::torch_backend::allocator().allocate(bytes);
     if (!ptr) {
       TORCH_CHECK(false, ptr.error().to_string());
     }
@@ -57,12 +57,12 @@ struct TesseraAllocator final : c10::Allocator {
     TORCH_CHECK(result.has_value(), result.has_value() ? "" : result.error().to_string());
   }
 
-  static void release(void* ptr) { tessera::torch_backend::allocator().deallocate(ptr); }
+  static void release(void* ptr) { tessiq::torch_backend::allocator().deallocate(ptr); }
 };
 
 // REGISTER_ALLOCATOR takes a pointer to a mutable allocator, and c10 owns the lifetime from there.
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-TesseraAllocator g_allocator;
+TessiqAllocator g_allocator;
 
 /// Device and stream bookkeeping for the dispatcher.
 ///
@@ -73,7 +73,7 @@ TesseraAllocator g_allocator;
 /// registry looks up by name. The suppressions cover the house style this interface cannot follow.
 // NOLINTBEGIN(readability-identifier-naming, readability-named-parameter,
 //             modernize-use-nodiscard, clang-diagnostic-unused-const-variable)
-struct TesseraGuardImpl final : c10::impl::DeviceGuardImplInterface {
+struct TessiqGuardImpl final : c10::impl::DeviceGuardImplInterface {
   static constexpr c10::DeviceType static_type = kDeviceType;
 
   c10::DeviceType type() const override { return kDeviceType; }
@@ -87,9 +87,9 @@ struct TesseraGuardImpl final : c10::impl::DeviceGuardImplInterface {
   c10::Device getDevice() const override { return {kDeviceType, 0}; }
 
   void setDevice(c10::Device device) const override {
-    TORCH_CHECK(device.type() == kDeviceType, "expected a tessera device, got ", device);
+    TORCH_CHECK(device.type() == kDeviceType, "expected a tessiq device, got ", device);
     TORCH_CHECK(device.index() == 0 || device.index() == -1,
-                "tessera currently exposes a single device, got index ",
+                "tessiq currently exposes a single device, got index ",
                 device.index());
   }
 
@@ -111,7 +111,7 @@ struct TesseraGuardImpl final : c10::impl::DeviceGuardImplInterface {
 // NOLINTEND(readability-identifier-naming, readability-named-parameter,
 //           modernize-use-nodiscard, clang-diagnostic-unused-const-variable)
 
-C10_REGISTER_GUARD_IMPL(PrivateUse1, TesseraGuardImpl);
+C10_REGISTER_GUARD_IMPL(PrivateUse1, TessiqGuardImpl);
 
 } // namespace
 
@@ -128,9 +128,9 @@ void register_allocator() {
   // Registration happens at static initialisation via REGISTER_ALLOCATOR above. This exists so
   // that the Python module can force this translation unit to be linked in and report what it
   // found, rather than the backend silently not existing.
-  TESSERA_LOG(kInfo, kLogModule) << "tessera backend ready, " << current_device().device_count()
-                                 << " device(s) of kind "
-                                 << device_kind_name(current_device().kind());
+  TESSIQ_LOG(kInfo, kLogModule) << "tessiq backend ready, " << current_device().device_count()
+                                << " device(s) of kind "
+                                << device_kind_name(current_device().kind());
 }
 
-} // namespace tessera::torch_backend
+} // namespace tessiq::torch_backend

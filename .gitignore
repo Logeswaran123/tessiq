@@ -16,11 +16,11 @@ htmlcov/
 *.so
 
 # Caches produced at runtime
-.tessera_cache/
+.tessiq_cache/
 *.cubin
 *.ptx
 
-# IR dumps (TESSERA_DUMP_IR)
+# IR dumps (TESSIQ_DUMP_IR)
 ir_dumps/
 
 # Editors / OS

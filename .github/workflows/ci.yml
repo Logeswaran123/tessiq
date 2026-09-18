@@ -1,4 +1,4 @@
-# Copyright 2026 The Tessera Authors.
+# Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
 # CI runs on GPU-less runners and is expected to stay green there (PLAN.md section 8). That is
@@ -73,7 +73,7 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DTESSERA_BUILD_PYTHON=ON
+            -DTESSIQ_BUILD_PYTHON=ON
       - name: clang-tidy
         run: |
           status=0
@@ -112,9 +112,9 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DTESSERA_BUILD_TESTS=ON \
-            -DTESSERA_BUILD_PYTHON=ON \
-            -DTESSERA_WARNINGS_AS_ERRORS=ON
+            -DTESSIQ_BUILD_TESTS=ON \
+            -DTESSIQ_BUILD_PYTHON=ON \
+            -DTESSIQ_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build
       - name: C++ tests
@@ -145,9 +145,9 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DTESSERA_BUILD_TESTS=ON \
-            -DTESSERA_BUILD_PYTHON=OFF \
-            -DTESSERA_SANITIZER=address,undefined
+            -DTESSIQ_BUILD_TESTS=ON \
+            -DTESSIQ_BUILD_PYTHON=OFF \
+            -DTESSIQ_SANITIZER=address,undefined
       - name: Build
         run: cmake --build build
       - name: C++ tests under sanitizers

@@ -23,7 +23,7 @@ IncludeCategories:
     Priority: 1
   - Regex: '^<'
     Priority: 2
-  - Regex: '^"tessera/'
+  - Regex: '^"tessiq/'
     Priority: 5
   - Regex: '.*'
     Priority: 6

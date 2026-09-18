@@ -8,8 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Added
 
 - CMake build, scikit-build-core packaging, pybind11 extension module.
-- Support layer: `TESSERA_CHECK`/`TESSERA_DCHECK`, `Error`/`ErrorCode`, `Result<T>` with
-  `TESSERA_RETURN_IF_ERROR` and `TESSERA_ASSIGN_OR_RETURN`, and module-scoped logging that skips
+- Support layer: `TESSIQ_CHECK`/`TESSIQ_DCHECK`, `Error`/`ErrorCode`, `Result<T>` with
+  `TESSIQ_RETURN_IF_ERROR` and `TESSIQ_ASSIGN_OR_RETURN`, and module-scoped logging that skips
   argument evaluation when the level is off.
 - `ErrorCode` to Python exception mapping in the bindings, so callers can use `except` rather than
   matching on message text.
@@ -19,8 +19,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   stops a hook disagreeing with the gate it mirrors.
 - Device runtime: a `Device` interface with a CPU reference backend, and a caching allocator with
   size classes, reuse, statistics and `empty_cache()`.
-- Registration with PyTorch as the `tessera` device. `torch.randn(n, device="tessera")`,
-  `.to("tessera")` and `.cpu()` work, including for non-contiguous tensors and across dtypes.
+- Registration with PyTorch as the `tessiq` device. `torch.randn(n, device="tessiq")`,
+  `.to("tessiq")` and `.cpu()` work, including for non-contiguous tensors and across dtypes.
 - A CPU fallback for ops without a native kernel, so the whole ATen surface is usable now and
   kernels can replace it one at a time.
-- `tessera.memory_stats()`, `memory_allocated()`, `memory_reserved()` and `empty_cache()`.
+- `tessiq.memory_stats()`, `memory_allocated()`, `memory_reserved()` and `empty_cache()`.

@@ -1,4 +1,4 @@
-// Copyright 2026 The Tessera Authors.
+// Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Eager kernels, registered against the dispatch key from backend.cpp.
@@ -18,11 +18,11 @@
 
 #include <torch/library.h>
 
-#include "tessera/runtime/device.h"
-#include "tessera/support/logging.h"
-#include "tessera/torch/backend.h"
+#include "tessiq/runtime/device.h"
+#include "tessiq/support/logging.h"
+#include "tessiq/torch/backend.h"
 
-namespace tessera::torch_backend {
+namespace tessiq::torch_backend {
 
 namespace {
 
@@ -37,7 +37,7 @@ at::Tensor empty_memory_format(at::IntArrayRef size,
                                std::optional<at::Device> /*device*/,
                                std::optional<bool> /*pin_memory*/,
                                std::optional<at::MemoryFormat> memory_format) {
-  TESSERA_LOG(kTrace, kLogModule) << "empty, " << size.size() << " dims";
+  TESSIQ_LOG(kTrace, kLogModule) << "empty, " << size.size() << " dims";
   return at::detail::empty_generic(size,
                                    get_allocator(),
                                    c10::DispatchKeySet(kDispatchKey),
@@ -98,7 +98,7 @@ at::Tensor to_host(const at::Tensor& self) {
   at::Tensor host =
       at::empty_strided(self.sizes(), self.strides(), self.options().device(at::kCPU));
   TORCH_CHECK(same_layout(self, host),
-              "tessera cannot stage a tensor with storage offset ",
+              "tessiq cannot stage a tensor with storage offset ",
               self.storage_offset(),
               " through the host yet");
   check(current_device().copy_device_to_host(
@@ -111,7 +111,7 @@ void from_host(const at::Tensor& host_src, const at::Tensor& dst) {
   at::Tensor host_dst =
       at::empty_strided(dst.sizes(), dst.strides(), dst.options().device(at::kCPU));
   TORCH_CHECK(same_layout(dst, host_dst),
-              "tessera cannot stage a tensor with storage offset ",
+              "tessiq cannot stage a tensor with storage offset ",
               dst.storage_offset(),
               " through the host yet");
   host_dst.copy_(host_src);
@@ -127,7 +127,7 @@ void from_host(const at::Tensor& host_src, const at::Tensor& dst) {
 /// once the kernel library exists.
 at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blocking) {
   TORCH_CHECK(self.sizes() == dst.sizes(),
-              "tessera copy requires matching shapes, got ",
+              "tessiq copy requires matching shapes, got ",
               self.sizes(),
               " and ",
               dst.sizes());
@@ -135,7 +135,7 @@ at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blo
   const bool src_on_device = self.device().type() == kDeviceType;
   const bool dst_on_device = dst.device().type() == kDeviceType;
   TORCH_CHECK(src_on_device || dst_on_device,
-              "tessera _copy_from called with neither tensor on a tessera device");
+              "tessiq _copy_from called with neither tensor on a tessiq device");
 
   if (same_layout(self, dst)) {
     copy_storage(self, dst, src_on_device, dst_on_device);
@@ -161,7 +161,7 @@ at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blo
 /// storage avoids a free and realloc on every shrink.
 void grow_storage(at::TensorImpl* impl, std::size_t new_bytes) {
   const c10::Storage& storage = impl->unsafe_storage();
-  TORCH_CHECK(storage, "tessera tensor has no storage to resize");
+  TORCH_CHECK(storage, "tessiq tensor has no storage to resize");
 
   const std::size_t current_bytes = storage.nbytes();
   if (new_bytes <= current_bytes) {
@@ -180,7 +180,7 @@ void grow_storage(at::TensorImpl* impl, std::size_t new_bytes) {
 
 /// Native resize_, which the CPU fallback depends on.
 ///
-/// Left to the fallback, resizing a tessera tensor moves it to the host, resizes it there, and
+/// Left to the fallback, resizing a tessiq tensor moves it to the host, resizes it there, and
 /// copies back by calling resize_ again. That recursion crashed rather than erroring, which is
 /// why this one is native.
 /// The schema returns Tensor(a!) -- the same tensor, aliased -- so the return type has to be a
@@ -196,7 +196,7 @@ const at::Tensor& resize(const at::Tensor& self,
 
   if (memory_format.has_value()) {
     TORCH_CHECK(*memory_format != at::MemoryFormat::Preserve,
-                "tessera resize_ does not accept MemoryFormat::Preserve");
+                "tessiq resize_ does not accept MemoryFormat::Preserve");
     impl->empty_tensor_restride(*memory_format);
   }
   // Returning the parameter by const reference can dangle when the caller passed a temporary.
@@ -227,7 +227,7 @@ at::Tensor copy_from_and_resize(const at::Tensor& self, const at::Tensor& dst) {
 /// The compiler path treats the same question as partitioning (PLAN.md section 5.4): ops without a
 /// kernel are cut out of the graph and left on the host.
 void cpu_fallback(const c10::OperatorHandle& op, torch::jit::Stack* stack) {
-  TESSERA_LOG(kDebug, kLogModule) << "cpu fallback for " << op.schema().operator_name().name;
+  TESSIQ_LOG(kDebug, kLogModule) << "cpu fallback for " << op.schema().operator_name().name;
   at::native::cpu_fallback(op, stack);
 }
 
@@ -245,4 +245,4 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
 
 } // namespace
 
-} // namespace tessera::torch_backend
+} // namespace tessiq::torch_backend
