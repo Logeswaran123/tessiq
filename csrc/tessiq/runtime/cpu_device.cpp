@@ -3,6 +3,7 @@
 //
 // The CPU reference backend.
 
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <memory>

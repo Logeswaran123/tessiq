@@ -15,6 +15,8 @@
 #include <c10/core/DeviceType.h>
 #include <c10/core/impl/DeviceGuardImplInterface.h>
 #include <cstddef>
+#include <mutex>
+#include <unordered_map>
 
 #include <torch/library.h>
 

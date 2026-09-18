@@ -56,6 +56,28 @@ tessiq_enable_sanitizers(tessiq_runtime)
 
 add_library(tessiq::runtime ALIAS tessiq_runtime)
 
+# --- tessiq_ir ------------------------------------------------------------------------------
+#
+# The IR, its textual form, and the pass infrastructure. Depends on support and nothing else: the
+# compiler has to be testable without torch, without CUDA and without a GPU, which is what keeps
+# `tessiq-opt` a plain binary and pass tests a matter of text in, text out.
+
+add_library(tessiq_ir STATIC
+  tessiq/ir/graph.cpp
+  tessiq/ir/text.cpp
+  tessiq/ir/types.cpp
+  tessiq/passes/const_fold.cpp
+  tessiq/passes/cse.cpp
+  tessiq/passes/dce.cpp
+  tessiq/passes/pass.cpp)
+
+target_link_libraries(tessiq_ir PUBLIC tessiq::support)
+
+tessiq_set_warnings(tessiq_ir)
+tessiq_enable_sanitizers(tessiq_ir)
+
+add_library(tessiq::ir ALIAS tessiq_ir)
+
 # --- Python extension module ----------------------------------------------------------------
 
 if(TESSIQ_BUILD_PYTHON)

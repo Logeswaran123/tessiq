@@ -110,14 +110,14 @@ source of corruption that reproduces once a week and never under a debugger.
 saying what they do, what they raise, and anything a caller cannot infer from the signature.
 
 The native module is typed by a hand-written stub, `python/tessiq/_C.pyi`. It does not update
-itself. If you add to `csrc/bindings/module.cpp`, update the stub in the same commit — mypy will
+itself. If you add to `csrc/bindings/module.cpp`, update the stub in the same commit. mypy will
 catch you, but only for code that calls the new function.
 
 ## Tests
 
 Every pass gets golden tests: textual IR in, textual IR out. A pass test should show both a case it
 fires on and a case it correctly refuses. CUDA results are checked against the CPU reference, which
-is never optimised — its value is being obviously correct.
+is never optimised. Its value is being obviously correct.
 
 CUDA tests are marked `@pytest.mark.cuda` and deselected in CI, which has no GPU. Run them locally
 with `pytest -m cuda`.
@@ -157,6 +157,25 @@ reconstruct from the diff:
 Not in the body: evidence, metrics, search results, a list of what you verified, or a tour of the
 files you touched. That goes in the PR. If the reasoning needs paragraphs, it is a design decision
 and belongs in `docs/design_notes/`.
+
+## Pull requests
+
+Keep a pull request small enough that someone can review it properly. A phase of work should
+arrive as several pull requests rather than one.
+
+Split it along the seams the work already has. Build the data structure first. Then add the code
+that fills it. Then add the code that consumes it. Each pull request should land working and tested
+on its own.
+
+Branches are named `dev-<major>.<phase>`. When a phase takes several pull requests, number them
+`dev-0.4.1`, `dev-0.4.2` and so on.
+
+The description should carry what a reviewer needs in order to judge the change. Say what it does.
+Explain the decisions that the diff does not make obvious. Point out anything that deserves close
+attention. State what you left out on purpose.
+
+If the description runs to pages, most of it is background rather than review material. Keep that
+somewhere else and link to it.
 
 ## Performance
 

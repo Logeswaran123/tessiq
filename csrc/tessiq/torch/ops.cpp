@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <c10/core/ScalarType.h>
 #include <cstddef>
+#include <optional>
 
 #include <torch/library.h>
 

@@ -18,7 +18,7 @@ might need a fallback, so the decision gets made by whoever remembers. Pattern m
 thousands of times per compilation with "no match" as the expected result, and paying for a throw
 on the expected path is backwards.
 
-**Sentinels** — `nullptr`, `-1`, `std::optional`. Cheap, but they throw away the reason. "No kernel
+**Sentinels**, meaning `nullptr`, `-1` or `std::optional`. Cheap, but they throw away the reason. "No kernel
 exists" and "a kernel exists but not for f64" lead somewhere different, and `nullopt` can't tell
 them apart. Easy to ignore, too.
 
@@ -44,7 +44,7 @@ message text.
 
 The cost is ceremony: every fallible call needs a check or a macro. `TESSIQ_RETURN_IF_ERROR` and
 `TESSIQ_ASSIGN_OR_RETURN` take the edge off but don't remove it. And nothing stops someone mixing
-the two mechanisms by accident — that's a review question, not a compiler-enforced one.
+the two mechanisms by accident. That is a review question rather than a compiler-enforced one.
 
 Worth revisiting once `std::expected` is available across the toolchains we support, at which point
 `Result<T>` should become an alias rather than its own implementation.

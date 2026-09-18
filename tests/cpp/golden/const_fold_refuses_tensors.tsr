@@ -1,0 +1,16 @@
+// RUN: const-fold,dce
+// Folding a tensor would materialise it as a dense attribute, which belongs in a constant pool
+// rather than in the IR text.
+graph @g() -> f32[4] {
+  %a = const() {value = 2.0} : f32[4]
+  %b = const() {value = 3.0} : f32[4]
+  %out = mul(%a, %b) : f32[4]
+  return %out
+}
+// ---
+graph @g() -> f32[4] {
+  %a = const() {value = 2.0} : f32[4]
+  %b = const() {value = 3.0} : f32[4]
+  %out = mul(%a, %b) : f32[4]
+  return %out
+}

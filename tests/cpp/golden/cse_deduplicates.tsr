@@ -1,0 +1,13 @@
+// RUN: cse,dce
+graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
+  %s0 = add(%a, %b) : f32[4]
+  %s1 = add(%a, %b) : f32[4]
+  %out = mul(%s0, %s1) : f32[4]
+  return %out
+}
+// ---
+graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
+  %s0 = add(%a, %b) : f32[4]
+  %out = mul(%s0, %s0) : f32[4]
+  return %out
+}

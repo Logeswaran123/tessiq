@@ -59,6 +59,8 @@ endif()
 
 add_subdirectory(csrc)
 
+add_subdirectory(tools)
+
 if(TESSIQ_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests/cpp)

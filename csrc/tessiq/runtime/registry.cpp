@@ -3,6 +3,7 @@
 //
 // The device table and the per-thread current index.
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
