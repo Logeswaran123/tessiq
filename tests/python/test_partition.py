@@ -95,6 +95,43 @@ def test_clustering_without_marking_is_refused() -> None:
         tessiq.run_passes(ir, "cluster")
 
 
+# --- the partition entry point ------------------------------------------------------------------
+
+
+def test_partition_reports_which_cluster_each_node_landed_in() -> None:
+    def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return torch.tanh(torch.relu(a + b) @ b)
+
+    _, clusters = tessiq.partition(_capture(model, torch.randn(4, 4), torch.randn(4, 4)))
+
+    assert clusters["add"] == clusters["relu"], "both are supported and adjacent"
+    assert "mm" not in clusters, "mm has no kernel, so it runs on the host"
+    assert clusters["tanh"] != clusters["add"], "the host node splits the graph"
+
+
+def test_partition_keys_match_the_fx_node_names() -> None:
+    # The executor looks nodes up by the name fx gave them, so the round trip through the IR has
+    # to preserve those names exactly.
+    graph_module = _capture(lambda a, b: torch.relu(a + b), torch.randn(4), torch.randn(4))
+    _, clusters = tessiq.partition(graph_module)
+
+    fx_names = {node.name for node in graph_module.graph.nodes}
+    assert set(clusters).issubset(fx_names), set(clusters) - fx_names
+
+
+def test_partition_returns_the_ir_too() -> None:
+    ir, _ = tessiq.partition(_capture(lambda a: torch.relu(a), torch.randn(4)))
+    assert ir.startswith("graph @forward(")
+    assert "tessiq.cluster" in ir
+
+
+def test_a_fully_unsupported_model_clusters_nothing() -> None:
+    _, clusters = tessiq.partition(
+        _capture(lambda a, b: a @ b, torch.randn(4, 4), torch.randn(4, 4))
+    )
+    assert clusters == {}
+
+
 def test_an_unknown_pass_names_what_exists() -> None:
     with pytest.raises(KeyError, match="cluster"):
         tessiq.run_passes("graph @g() -> () {\n  return\n}\n", "no-such-pass")

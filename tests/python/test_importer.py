@@ -124,6 +124,27 @@ def test_a_node_without_shape_information_is_refused() -> None:
         tessiq.import_graph(graph_module)
 
 
+def test_a_none_in_the_output_is_not_a_result() -> None:
+    # A backward graph returns None at every position whose input takes no gradient. Nothing is
+    # computed there, so the IR carries no value for it, and the remaining results keep their
+    # order.
+    graph_module = capture(lambda a, b: a * b, torch.randn(4), torch.randn(4))
+    output = next(node for node in graph_module.graph.nodes if node.op == "output")
+    output.args = ((None, *output.args[0], None),)
+
+    text = tessiq.import_graph(graph_module)
+    assert text.rstrip().endswith("return %mul\n}")
+
+
+def test_a_constant_in_the_output_says_what_it_was() -> None:
+    graph_module = capture(lambda a: a + a, torch.randn(4))
+    output = next(node for node in graph_module.graph.nodes if node.op == "output")
+    output.args = ((7, *output.args[0]),)
+
+    with pytest.raises(TypeError, match="constant '7'"):
+        tessiq.import_graph(graph_module)
+
+
 def test_the_result_is_valid_ir() -> None:
     # import_fx verifies before returning, so reaching here means the graph satisfied every
     # structural invariant: operands defined before use, no duplicate names, intact use lists.

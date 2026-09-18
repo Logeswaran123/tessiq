@@ -50,6 +50,7 @@ pybind11_add_module(_C MODULE
   module.cpp
   ../tessiq/torch/backend.cpp
   ../tessiq/torch/importer.cpp
+  ../tessiq/torch/partition.cpp
   ../tessiq/torch/ops.cpp)
 
 # WHOLE_ARCHIVE because passes register themselves at static initialisation, and a static

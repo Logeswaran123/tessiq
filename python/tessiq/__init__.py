@@ -29,7 +29,8 @@ from tessiq.device import (
     memory_reserved,
     memory_stats,
 )
-from tessiq.fx import import_graph, pass_names, run_passes
+from tessiq.executor import execute
+from tessiq.fx import import_graph, partition, pass_names, run_passes
 
 __all__ = [
     "DEVICE_NAME",
@@ -39,6 +40,7 @@ __all__ = [
     "cpu",
     "device_count",
     "empty_cache",
+    "execute",
     "get_log_level",
     "gpu",
     "gpu_at",
@@ -47,6 +49,7 @@ __all__ = [
     "memory_allocated",
     "memory_reserved",
     "memory_stats",
+    "partition",
     "pass_names",
     "run_passes",
     "set_log_level",

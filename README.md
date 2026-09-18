@@ -7,9 +7,22 @@ a chip behind `model.to(...)` and `torch.compile`.
 Named after *tessera*, the Latin word for a mosaic tile, which is what the compiler makes of a
 graph: pieces cut to fit, then set into one surface. Said `/ˈtɛs.ɪk/`.
 
-Phases 1 to 3 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
-its own caching allocator, and a CPU fallback covers every op that has no kernel yet. The IR, its
-textual form and the pass pipeline exist; nothing feeds graphs into them yet.
+Phases 1 to 4 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
+its own caching allocator, and a CPU fallback covers every op that has no kernel yet.
+`torch.compile(model, backend="tessiq")` captures a graph, imports it into the IR, partitions it
+into the parts the backend claims, and runs them. Forward and backward both go through it.
+
+```python
+import torch
+
+model = torch.nn.Sequential(torch.nn.Linear(16, 32), torch.nn.Tanh(), torch.nn.Linear(32, 4))
+compiled = torch.compile(model, backend="tessiq")  # the name resolves without importing tessiq
+batch = torch.randn(8, 16)
+
+torch.allclose(compiled(batch), model(batch))
+```
+
+The device is usable on its own, without the compiler:
 
 ```python
 import torch, tessiq
