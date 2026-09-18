@@ -1,0 +1,12 @@
+// RUN: dce
+graph @g(%a: f32[4]) -> f32[4] {
+  %x = neg(%a) : f32[4]
+  %y = neg(%x) : f32[4]
+  return %y
+}
+// ---
+graph @g(%a: f32[4]) -> f32[4] {
+  %x = neg(%a) : f32[4]
+  %y = neg(%x) : f32[4]
+  return %y
+}

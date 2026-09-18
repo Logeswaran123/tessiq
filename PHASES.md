@@ -12,8 +12,8 @@ work it describes.
 | 0 | Scaffolding and engineering standards | done |
 | 1 | Device runtime and eager path | done |
 | 2 | The CUDA device, and choosing a backend per tensor | done |
-| 3 | IR and pass infrastructure | next |
-| 4 | Graph capture | |
+| 3 | IR and pass infrastructure | done |
+| 4 | Graph capture | next |
 | 5 | Shape inference, memory planning, recipe cache | |
 | 6 | Fusion and CUDA codegen | |
 | 7 | Op coverage and real models | |
@@ -73,7 +73,7 @@ fail in their own confusing way. Landing them next to fusion and runtime codegen
 debugging three unfamiliar things at once, and every one of them can produce a wrong number
 rather than an error.
 
-### Phase 3 — IR and pass infrastructure
+### Phase 3 — IR and pass infrastructure — **done**
 Graph/Node/Value, TensorType, builder, verifier, printer, parser. PassManager + registry. `dce`,
 `cse`, `const-fold`. `tessiq-opt` CLI. Golden test harness.
 **Milestone:** `tessiq-opt --passes=dce,cse in.tsr` produces expected output; parse/print roundtrip

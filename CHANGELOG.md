@@ -28,3 +28,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `tessiq.gpu_at(n)` the rest. Each device has its own allocator, so memory statistics are per
   backend rather than pooled.
 - Copies between backends, staged through the host.
+- An SSA IR with a textual form: `Graph`, `Node`, `Value`, `TensorType` with dynamic dimensions,
+  use-def chains, a verifier, and a printer and parser that round-trip.
+- Pass infrastructure: a `Pass` interface, a name-keyed registry, and a `PassManager` that
+  verifies the graph after each pass in debug builds.
+- `dce`, `cse` and `const-fold`.
+- `tessiq-opt`, which runs a named pipeline over textual IR, and golden-file pass tests.

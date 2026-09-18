@@ -2,7 +2,7 @@
 
 | | | |
 |---|---|---|
-| `tessiq-opt` | Reads textual IR, runs a pass pipeline, prints the result | phase 3 |
+| `tessiq-opt` | Reads textual IR, runs a pass pipeline, prints the result | **built** |
 | `gen_ops.py` | Generates C++ and docs from `ops/*.yaml` | phase 7 |
 | `tessiq-explain` | Shows a model's whole compilation: graph, per-pass diffs, kernel schedule | phase 8 |
 

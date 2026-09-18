@@ -1,0 +1,15 @@
+// RUN: cse,dce
+// Same op and operands, different attributes, so these compute different things.
+graph @g(%a: f32[4]) -> f32[4] {
+  %x = scale(%a) {factor = 2.0} : f32[4]
+  %y = scale(%a) {factor = 3.0} : f32[4]
+  %out = add(%x, %y) : f32[4]
+  return %out
+}
+// ---
+graph @g(%a: f32[4]) -> f32[4] {
+  %x = scale(%a) {factor = 2.0} : f32[4]
+  %y = scale(%a) {factor = 3.0} : f32[4]
+  %out = add(%x, %y) : f32[4]
+  return %out
+}

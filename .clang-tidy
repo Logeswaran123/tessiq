@@ -5,6 +5,12 @@
 # a YAML folded scalar, so a '#' there becomes part of the check list rather than a comment.
 #
 #   bugprone-easily-swappable-parameters  Fires on every (width, height)-style signature.
+#   cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
+#                                         Fires on every operator[], including indexing a loop
+#                                         already bounded by size(). Rewriting those as at() adds
+#                                         a redundant branch to the IR printer, parser and every
+#                                         pass, which are the hot paths. Out-of-range indexing is
+#                                         caught by the sanitizer builds instead.
 #   cppcoreguidelines-avoid-do-while      The assertion macros need do-while for statement safety.
 #   cppcoreguidelines-macro-usage         TESSIQ_LOG must not evaluate its arguments, and the
 #                                         assertion macros need __FILE__/__LINE__. A function
@@ -28,6 +34,7 @@ Checks: >
   -bugprone-easily-swappable-parameters,
   -cppcoreguidelines-avoid-do-while,
   -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
   -cppcoreguidelines-macro-usage,
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
   -cppcoreguidelines-pro-type-reinterpret-cast,

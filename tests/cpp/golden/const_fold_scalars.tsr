@@ -1,0 +1,14 @@
+// RUN: const-fold,dce
+graph @g(%x: f32[4]) -> f32[4] {
+  %two = const() {value = 2.0} : f32[]
+  %three = const() {value = 3.0} : f32[]
+  %six = mul(%two, %three) : f32[]
+  %out = mul(%x, %six) : f32[4]
+  return %out
+}
+// ---
+graph @g(%x: f32[4]) -> f32[4] {
+  %six_f = const() {value = 6.0} : f32[]
+  %out = mul(%x, %six_f) : f32[4]
+  return %out
+}

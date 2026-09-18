@@ -7,8 +7,9 @@ a chip behind `model.to(...)` and `torch.compile`.
 Named after *tessera*, the Latin word for a mosaic tile, which is what the compiler makes of a
 graph: pieces cut to fit, then set into one surface. Said `/ˈtɛs.ɪk/`.
 
-Phases 1 and 2 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
-its own caching allocator, and a CPU fallback covers every op that has no kernel yet.
+Phases 1 to 3 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
+its own caching allocator, and a CPU fallback covers every op that has no kernel yet. The IR, its
+textual form and the pass pipeline exist; nothing feeds graphs into them yet.
 
 ```python
 import torch, tessiq
@@ -18,6 +19,17 @@ fast = reference.to(tessiq.gpu)  # real GPU memory
 
 torch.allclose(fast.to(tessiq.cpu), reference)
 tessiq.memory_stats(tessiq.gpu).allocated_bytes
+```
+
+Passes are exercised as text in, text out:
+
+```console
+$ tessiq-opt --passes=cse,dce graph.tsr
+graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
+  %s0 = add(%a, %b) : f32[4,8]
+  %out = mul(%s0, %s0) : f32[4,8]
+  return %out
+}
 ```
 
 **Arithmetic still runs on the host.** Every op reaches PyTorch's CPU kernels through the fallback,
