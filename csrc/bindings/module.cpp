@@ -9,11 +9,13 @@
 #include <stdexcept>
 #include <string>
 
+#include "tessiq/ir/text.h"
 #include "tessiq/runtime/allocator.h"
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/error.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/torch/backend.h"
+#include "tessiq/torch/importer.h"
 #include "tessiq/version.h"
 
 namespace py = pybind11;
@@ -112,6 +114,21 @@ PYBIND11_MODULE(_C, m) {
         &tessiq::torch_backend::allocator_stats,
         py::arg("index"),
         "Allocator counters for one device.");
+
+  m.def(
+      "import_fx",
+      [](const py::object& graph_module, const std::string& name) {
+        auto graph = tessiq::torch_backend::import_fx(graph_module, name);
+        if (!graph) {
+          raise_from_error(graph.error());
+        }
+        // Returns the printed IR rather than the graph itself. Nothing downstream consumes a
+        // graph yet, and text is what the tests compare and what tessiq-opt reads.
+        return tessiq::ir::print(**graph);
+      },
+      py::arg("graph_module"),
+      py::arg("name") = "forward",
+      "Converts a torch.fx.GraphModule into tessiq IR and returns its textual form.");
 
   // Exercises the Result -> exception mapping from tests; a mapping nothing tests rots.
   m.def(

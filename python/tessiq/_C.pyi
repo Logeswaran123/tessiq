@@ -32,3 +32,7 @@ class AllocatorStats:
     cache_misses: int
 
 def memory_stats(index: int) -> AllocatorStats: ...
+
+# --- compiler --------------------------------------------------------------------------------
+
+def import_fx(graph_module: object, name: str = ...) -> str: ...

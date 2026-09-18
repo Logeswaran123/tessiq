@@ -29,6 +29,7 @@ from tessiq.device import (
     memory_reserved,
     memory_stats,
 )
+from tessiq.fx import import_graph
 
 __all__ = [
     "DEVICE_NAME",
@@ -42,6 +43,7 @@ __all__ = [
     "gpu",
     "gpu_at",
     "gpu_count",
+    "import_graph",
     "memory_allocated",
     "memory_reserved",
     "memory_stats",

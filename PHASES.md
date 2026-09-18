@@ -80,8 +80,9 @@ Graph/Node/Value, TensorType, builder, verifier, printer, parser. PassManager + 
 is property-tested; no torch dependency in any of it.
 
 ### Phase 4: Graph capture
-FX importer, `torch.compile` backend registration, capability partitioner, CPU fallback for
-unsupported ops, naive lowering (one kernel per node, no fusion yet).
+FX importer, capability partitioner, `torch.compile` backend registration, CPU fallback for
+unsupported ops, naive lowering (one kernel per node, no fusion yet). Delivered as three pull
+requests: the importer, then the partitioner, then the backend registration that joins them.
 **Milestone:** `torch.compile(mlp, backend="tessiq")` runs an MLP end-to-end with correct results,
 and a graph containing a deliberately unsupported op still produces correct results via fallback.
 
