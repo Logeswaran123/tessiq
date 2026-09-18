@@ -44,3 +44,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq
   device, everything else on the host, results back on the host.
+- `torch.compile(model, backend="tessiq")`, declared as a `torch_dynamo_backends` entry point
+  so the name resolves without importing tessiq first. Forward and backward both go through
+  the compiler. `options={"device": "tessiq:1"}` picks which device clusters run on.

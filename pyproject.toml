@@ -40,6 +40,11 @@ dev = [
   "ruff>=0.6",
 ]
 
+# Discovered by torch._dynamo, which loads it the first time a compile asks for backend="tessiq".
+# It means `torch.compile(model, backend="tessiq")` works without an `import tessiq` beforehand.
+[project.entry-points."torch_dynamo_backends"]
+tessiq = "tessiq.backend:compile_graph"
+
 [project.urls]
 Homepage = "https://github.com/Logeswaran123/tessiq"
 Repository = "https://github.com/Logeswaran123/tessiq"
