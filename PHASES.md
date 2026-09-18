@@ -88,7 +88,9 @@ and a graph containing a deliberately unsupported op still produces correct resu
 
 ### Phase 5: Shape inference, memory planning, recipe cache
 Shape inference pass, canonicalization set, liveness analysis, memory planner, `Recipe`, recipe cache
-with signature hashing.
+with signature hashing. `Recipe` carries an output spec, because a backward graph returns `None` at
+every position whose input takes no gradient and the IR records only the values a graph computes.
+See `docs/design_notes/0002-output-structure-is-calling-convention.md`.
 **Milestone:** second call with same shapes hits the cache (assert via counter); measured peak memory
 below naive allocation; measured reduction in per-call overhead.
 
