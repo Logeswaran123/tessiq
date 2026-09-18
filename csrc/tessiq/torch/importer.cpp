@@ -183,8 +183,15 @@ Result<void> import_output(const py::object& fx_node,
   std::vector<ir::Value*> results;
   for (const py::handle returned : returned_values) {
     const auto value = py::reinterpret_borrow<py::object>(returned);
+    // A backward graph returns None at every position whose input takes no gradient. Nothing is
+    // computed there, so there is no value to record. The FX graph stays the authority on output
+    // arity; results() holds the values the graph computes, which is what the passes need.
+    if (value.is_none()) {
+      continue;
+    }
     if (!is_fx_node(value)) {
-      return unsupported("a graph returning a constant is not supported yet");
+      return unsupported("a graph returning the constant '" + py::str(value).cast<std::string>() +
+                         "' is not supported yet; only tensors and None can be returned");
     }
     const auto name = value.attr("name").cast<std::string>();
     const auto it = scope.find(name);
