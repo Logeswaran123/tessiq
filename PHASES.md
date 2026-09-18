@@ -13,8 +13,8 @@ work it describes.
 | 1 | Device runtime and eager path | done |
 | 2 | The CUDA device, and choosing a backend per tensor | done |
 | 3 | IR and pass infrastructure | done |
-| 4 | Graph capture | next |
-| 5 | Shape inference, memory planning, recipe cache | |
+| 4 | Graph capture | done |
+| 5 | Shape inference, memory planning, recipe cache | next |
 | 6 | Fusion and CUDA codegen | |
 | 7 | Op coverage and real models | |
 | 8 | Training, dynamic shapes, tooling | |
