@@ -56,6 +56,11 @@ target_link_libraries(_C PRIVATE
   tessera::support
   ${TORCH_LIBRARIES})
 
+# torch's headers have moved past C++17: recent releases use std::strong_ordering and requires
+# clauses, which do not parse under -std=c++17 no matter what we write. Only the code that
+# includes them is built this way; the core stays at C++17 so it keeps compiling anywhere.
+target_compile_features(_C PRIVATE cxx_std_20)
+
 # torch's Python bindings live in libtorch_python, which TORCH_LIBRARIES does not include.
 find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
 target_link_libraries(_C PRIVATE "${TORCH_PYTHON_LIBRARY}")

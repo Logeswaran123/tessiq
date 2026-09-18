@@ -18,10 +18,14 @@ pytest==9.1.1
 pytest-benchmark==5.3.0
 ruff==0.16.8
 
-# The extension links libtorch, so torch is needed to build and to run the Python tests. Not
-# pinned to an exact version here because the right wheel depends on the machine's CUDA; pin it
-# in your own environment and record the version in the README.
-torch>=2.6
+# Pinned exactly, like everything else here. Left as >=2.6 it resolved to a different version
+# in CI than on the development machine, and the newer one needs C++20 headers -- the build broke
+# somewhere nobody had run it.
+#
+# 2.11.0 is the ceiling for CUDA 12.8: torch 2.12 and later ship cu129 and above, so bumping this
+# means moving the local CUDA toolkit too. Bump it in its own commit, with the test run that
+# justifies it.
+torch==2.11.0
 
 # Build tooling
 cmake>=3.26

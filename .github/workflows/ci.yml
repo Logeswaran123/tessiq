@@ -33,7 +33,11 @@ jobs:
           python-version: "3.12"
       - name: Install pinned tooling
         run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The
+          # version is read from requirements-dev.txt so there is one pin rather than two that
+          # can drift apart.
+          torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
+          pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements-dev.txt
       - name: ruff check
         run: ruff check .
@@ -54,7 +58,11 @@ jobs:
           python-version: "3.12"
       - name: Install pinned tooling
         run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The
+          # version is read from requirements-dev.txt so there is one pin rather than two that
+          # can drift apart.
+          torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
+          pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements-dev.txt
       - name: clang-format
         run: |
@@ -94,7 +102,11 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install pinned tooling
         run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The
+          # version is read from requirements-dev.txt so there is one pin rather than two that
+          # can drift apart.
+          torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
+          pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements-dev.txt
       - name: Configure
         run: |
@@ -123,7 +135,11 @@ jobs:
           python-version: "3.12"
       - name: Install pinned tooling
         run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The
+          # version is read from requirements-dev.txt so there is one pin rather than two that
+          # can drift apart.
+          torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
+          pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements-dev.txt
       - name: Configure
         run: |

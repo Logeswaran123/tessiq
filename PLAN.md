@@ -98,6 +98,7 @@ Verified on this machine as of 2026-09-17:
 |---|---|---|
 | GPU | NVIDIA RTX 5080, 16 GB, **sm_120** (Blackwell) | Set `CMAKE_CUDA_ARCHITECTURES=120` |
 | CUDA toolkit | 12.8 (`/usr/local/cuda-12.8`) | Supports sm_120; NVRTC ships with it |
+| PyTorch | pinned to **2.11.0** | The last release with `cu128` wheels. 2.12+ need cu129 or newer, so bumping torch means bumping the toolkit |
 | Host compiler | g++ 11.4.0 (Ubuntu 22.04, WSL2) | C++17; check nvcc host-compiler compatibility |
 | Python | 3.13.11 (miniconda) | |
 | CPU / RAM | 32 cores / 15 GB | RAM is the build constraint — cap `-j` (§12) |
@@ -458,7 +459,12 @@ and they are not negotiable per-file.
 
 ### 7.1 C++ standards
 
-- **C++17**, no compiler extensions. `-Wall -Wextra -Wpedantic -Werror` in CI; warnings are build
+- **C++17 in the core, C++20 for the torch-facing code.** The runtime, IR, passes and kernels are
+  C++17 and depend on nothing but the standard library, which is what keeps them testable
+  without torch or a GPU. `csrc/tessera/torch/` is built at C++20 because recent torch headers
+  use `std::strong_ordering` and `requires` clauses and will not parse otherwise. The split is
+  enforced per target, not per file.
+- No compiler extensions. `-Wall -Wextra -Wpedantic -Werror` in CI; warnings are build
   failures, not noise to scroll past.
 - **RAII everywhere.** No raw `new`/`delete` outside a resource wrapper's implementation. Every
   device allocation, stream, event, and NVRTC program is owned by a type whose destructor releases it.
@@ -912,7 +918,8 @@ cost model, and the recipe cache key design.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Device backend registration API churn between torch versions | Build breaks on upgrade | Pin torch exactly; isolate all registration in `csrc/runtime/register.cpp`; document the version contract |
+| Device backend registration API churn between torch versions | Build breaks on upgrade | Pin torch exactly in `requirements-dev.txt`, and have CI read that pin rather than keeping its own; isolate registration in `csrc/tessera/torch/` |
+| A dependency pinned as a range rather than exactly | CI resolves a different version than the developer and fails somewhere nobody has run | Every pin is exact. An unpinned torch is what broke the first CI run of phase 1 |
 | sm_120 support gaps in torch/cuDNN builds | CUDA path fails at runtime | Verify `torch.cuda.get_arch_list()` on day one (§3); CPU backend keeps the project viable regardless |
 | 15 GB RAM with 32 cores | OOM during parallel C++ builds | Cap at `-j8`; use ninja; enable ccache; keep translation units small |
 | Scope creep — "one more op" | Never reaching a demo | Phase milestones are the gate; op *breadth* is explicitly Phase 6, not earlier |

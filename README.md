@@ -57,7 +57,8 @@ cmake --build build -j8
 ctest --test-dir build
 ```
 
-Python 3.10+, CMake 3.26+, C++17. The extension links libtorch, so PyTorch is needed to import
+Python 3.10+, CMake 3.26+, and a compiler with C++20 for the torch-facing code (the core is
+C++17). The extension links libtorch, so PyTorch is needed to import
 tessera. The C++ core builds and tests without it, which is what keeps the compiler testable on a
 machine with neither torch nor a GPU:
 
