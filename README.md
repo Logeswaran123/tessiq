@@ -106,6 +106,8 @@ and the pre-commit hooks run the same versions CI does. The rules that come up m
 never reaches an assert, every pass states why its transformation is legal, and no performance
 claim ships without the script that produced it.
 
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest, and the commands to run every gate locally.
+
 ## Benchmarks
 
 Nothing worth showing before phase 6. Numbers land here when they exist, next to the scripts that
