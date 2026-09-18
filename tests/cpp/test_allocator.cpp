@@ -6,6 +6,7 @@
 #include <cstring>
 #include <gtest/gtest.h>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "tessiq/runtime/allocator.h"

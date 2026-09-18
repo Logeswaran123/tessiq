@@ -6,9 +6,13 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <numeric>
 #include <string>
+#include <vector>
 
 #include "tessiq/support/macros.h"
 

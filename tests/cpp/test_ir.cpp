@@ -1,8 +1,10 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <string>
+#include <vector>
 
 #include "tessiq/ir/graph.h"
 #include "tessiq/ir/text.h"

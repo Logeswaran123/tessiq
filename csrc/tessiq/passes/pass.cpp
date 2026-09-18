@@ -5,6 +5,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "tessiq/ir/text.h"
 #include "tessiq/support/logging.h"

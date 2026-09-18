@@ -1,6 +1,7 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <vector>
 
 #include "tessiq/passes/pass.h"

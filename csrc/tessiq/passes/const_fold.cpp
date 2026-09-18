@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
+#include <cstdint>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "tessiq/passes/pass.h"

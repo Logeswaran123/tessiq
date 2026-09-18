@@ -7,6 +7,7 @@
 // no GPU and no fixture. It is also the fastest way to see what a pass does to a graph you wrote
 // by hand.
 
+#include <cstddef>
 #include <fstream>
 #include <iostream>
 #include <sstream>

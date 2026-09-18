@@ -4,9 +4,16 @@
 #include "tessiq/ir/graph.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <sstream>
+#include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
+#include <vector>
 
 #include "tessiq/support/macros.h"
 

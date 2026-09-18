@@ -5,7 +5,10 @@
 
 #ifdef TESSIQ_WITH_CUDA
 
+#include <cstddef>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include <cuda_runtime.h>
 

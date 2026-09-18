@@ -4,6 +4,7 @@
 // Pass tests are golden files: textual IR in, textual IR out, with the pipeline named in the file
 // itself. Adding a case means adding a file, and reviewing one means reading a diff.
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
