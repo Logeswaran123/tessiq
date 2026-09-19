@@ -43,6 +43,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `shape-infer`, which derives result types from operand types and checks the ones already
   recorded. Resolves dimensions a graph left unknown, and reports a disagreement between two
   known sizes rather than overwriting one with the other.
+- `algebraic-simplify`, which replaces operations whose result is already available: multiply
+  or divide by one, add or subtract an integer zero, double negation, and repeated `relu` or
+  `abs`. The additive identities are integer-only because `(-0.0) + 0.0` is `+0.0`.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq

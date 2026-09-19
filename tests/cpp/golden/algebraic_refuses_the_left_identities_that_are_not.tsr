@@ -1,0 +1,17 @@
+// RUN: algebraic-simplify,dce
+// 1/x is not x and 0-x is not x. Only the right-hand forms are identities.
+graph @g(%x: f32[4], %n: i32[4]) -> f32[4] {
+  %one = const() {value = 1.0} : f32[]
+  %zero = const() {value = 0} : i32[]
+  %a = div(%one, %x) : f32[4]
+  %b = sub(%zero, %n) : i32[4]
+  %c = mul(%a, %a) : f32[4]
+  return %c
+}
+// ---
+graph @g(%x: f32[4], %n: i32[4]) -> f32[4] {
+  %one = const() {value = 1.0} : f32[]
+  %a = div(%one, %x) : f32[4]
+  %c = mul(%a, %a) : f32[4]
+  return %c
+}
