@@ -41,4 +41,10 @@ tessiq_set_warnings(tessiq_tests)
 tessiq_enable_sanitizers(tessiq_tests)
 
 include(GoogleTest)
-gtest_discover_tests(tessiq_tests)
+# PRE_TEST rather than the default POST_BUILD, because golden cases are found by walking a
+# directory when the binary starts rather than by anything the compiler sees. Discovering at build
+# time meant the list ctest holds only changed when something relinked, so adding a golden file
+# left it out of the run and deleting one left an entry behind that passed: a filter matching no
+# test is not an error. PRE_TEST asks the binary for its tests each time ctest runs, so both cases
+# are right.
+gtest_discover_tests(tessiq_tests DISCOVERY_MODE PRE_TEST)
