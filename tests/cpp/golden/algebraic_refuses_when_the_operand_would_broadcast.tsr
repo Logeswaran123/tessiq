@@ -1,0 +1,14 @@
+// RUN: algebraic-simplify,dce
+// %x is i32[1] and the result is i32[4], so %x cannot stand in for the add: the zeros are what
+// gave the result its shape.
+graph @g(%x: i32[1]) -> i32[4] {
+  %zeros = const() {value = 0} : i32[4]
+  %a = add(%x, %zeros) : i32[4]
+  return %a
+}
+// ---
+graph @g(%x: i32[1]) -> i32[4] {
+  %zeros = const() {value = 0} : i32[4]
+  %a = add(%x, %zeros) : i32[4]
+  return %a
+}

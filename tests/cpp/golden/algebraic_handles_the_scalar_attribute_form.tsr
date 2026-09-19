@@ -1,0 +1,12 @@
+// RUN: algebraic-simplify,dce
+// The importer turns a Python scalar into an attribute, so `x * 1.0` arrives with one operand.
+graph @g(%x: f32[4]) -> f32[4] {
+  %a = aten.mul.Tensor(%x) {arg1 = 1.0} : f32[4]
+  %b = aten.relu.default(%a) : f32[4]
+  return %b
+}
+// ---
+graph @g(%x: f32[4]) -> f32[4] {
+  %b = aten.relu.default(%x) : f32[4]
+  return %b
+}

@@ -66,6 +66,7 @@ add_library(tessiq_ir STATIC
   tessiq/ir/graph.cpp
   tessiq/ir/text.cpp
   tessiq/ir/types.cpp
+  tessiq/passes/algebraic.cpp
   tessiq/passes/cluster.cpp
   tessiq/passes/const_fold.cpp
   tessiq/passes/cse.cpp

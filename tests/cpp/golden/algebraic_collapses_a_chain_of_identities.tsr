@@ -1,0 +1,17 @@
+// RUN: algebraic-simplify,dce
+// Multiply by one, divide by one, negate twice, relu twice. Everything but one relu goes.
+graph @g(%x: f32[4]) -> f32[4] {
+  %one = const() {value = 1.0} : f32[]
+  %a = mul(%x, %one) : f32[4]
+  %b = div(%a, %one) : f32[4]
+  %c = neg(%b) : f32[4]
+  %d = neg(%c) : f32[4]
+  %e = relu(%d) : f32[4]
+  %f = relu(%e) : f32[4]
+  return %f
+}
+// ---
+graph @g(%x: f32[4]) -> f32[4] {
+  %e = relu(%x) : f32[4]
+  return %e
+}
