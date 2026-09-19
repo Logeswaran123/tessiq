@@ -1,0 +1,10 @@
+// RUN: shape-infer
+graph @g(%a: f32[4,16], %b: f32[16,2]) -> f32[?,?] {
+  %m = aten.mm.default(%a, %b) : f32[?,?]
+  return %m
+}
+// ---
+graph @g(%a: f32[4,16], %b: f32[16,2]) -> f32[4,2] {
+  %m = aten.mm.default(%a, %b) : f32[4,2]
+  return %m
+}

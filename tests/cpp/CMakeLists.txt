@@ -23,7 +23,8 @@ add_executable(tessiq_tests
   test_logging.cpp
   test_op_support.cpp
   test_passes.cpp
-  test_result.cpp)
+  test_result.cpp
+  test_shape_rules.cpp)
 
 # WHOLE_ARCHIVE for the same reason tessiq-opt needs it: passes register themselves at static
 # initialisation, and a static library only contributes objects something already references.

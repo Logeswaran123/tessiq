@@ -40,6 +40,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `cluster` groups neighbouring supported nodes into units, refusing any merge that would make the
   graph unexecutable.
 - `tessiq.run_passes(ir, pipeline)` and `tessiq.pass_names()`.
+- `shape-infer`, which derives result types from operand types and checks the ones already
+  recorded. Resolves dimensions a graph left unknown, and reports a disagreement between two
+  known sizes rather than overwriting one with the other.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq

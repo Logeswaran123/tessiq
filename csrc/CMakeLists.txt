@@ -72,7 +72,9 @@ add_library(tessiq_ir STATIC
   tessiq/passes/dce.cpp
   tessiq/passes/mark_supported.cpp
   tessiq/passes/op_support.cpp
-  tessiq/passes/pass.cpp)
+  tessiq/passes/pass.cpp
+  tessiq/passes/shape_infer.cpp
+  tessiq/passes/shape_rules.cpp)
 
 target_link_libraries(tessiq_ir PUBLIC tessiq::support)
 

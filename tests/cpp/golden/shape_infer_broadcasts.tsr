@@ -1,0 +1,13 @@
+// RUN: shape-infer
+// A rank difference reads as leading ones, and a 1 stretches to meet the other side.
+graph @g(%a: f32[3,4,8], %b: f32[8], %c: f32[4,1]) -> f32[?,?,?] {
+  %s = add(%a, %b) : f32[?,?,?]
+  %t = mul(%s, %c) : f32[?,?,?]
+  return %t
+}
+// ---
+graph @g(%a: f32[3,4,8], %b: f32[8], %c: f32[4,1]) -> f32[3,4,8] {
+  %s = add(%a, %b) : f32[3,4,8]
+  %t = mul(%s, %c) : f32[3,4,8]
+  return %t
+}
