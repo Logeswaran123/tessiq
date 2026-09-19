@@ -1,0 +1,13 @@
+// RUN: shape-infer
+// The graph was written with unknown result shapes. Operand types determine all of them.
+graph @g(%a: f32[4,8], %b: f32[4,8]) -> f32[?,?] {
+  %s = add(%a, %b) : f32[?,?]
+  %r = relu(%s) : f32[?,?]
+  return %r
+}
+// ---
+graph @g(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
+  %s = add(%a, %b) : f32[4,8]
+  %r = relu(%s) : f32[4,8]
+  return %r
+}

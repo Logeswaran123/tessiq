@@ -167,6 +167,57 @@ TEST(ClusterTest, RefusesToRunBeforeMarkSupported) {
       << reports.error().message();
 }
 
+TEST(ShapeInferenceTest, RejectsAContradiction) {
+  // The recorded type and the operands cannot both be right, and the pass says which is which
+  // rather than quietly overwriting one with the other.
+  auto graph = ir::parse(R"(graph @g(%a: f32[4,8], %b: f32[4,8]) -> f32[4,9] {
+  %s = add(%a, %b) : f32[4,9]
+  return %s
+}
+)");
+  ASSERT_TRUE(graph.has_value());
+
+  PassManager manager;
+  ASSERT_TRUE(manager.add_from_pipeline("shape-infer").has_value());
+
+  auto reports = manager.run(**graph);
+  ASSERT_FALSE(reports.has_value());
+  EXPECT_NE(reports.error().message().find("recorded as f32[4,9]"), std::string::npos)
+      << reports.error().message();
+}
+
+TEST(ShapeInferenceTest, RejectsARankDisagreement) {
+  // `?` is an unknown size, not an unknown rank, so a rank-1 result cannot describe what a rank-2
+  // operand produces.
+  auto graph = ir::parse(R"(graph @g(%a: f32[4,8]) -> f32[?] {
+  %r = relu(%a) : f32[?]
+  return %r
+}
+)");
+  ASSERT_TRUE(graph.has_value());
+
+  PassManager manager;
+  ASSERT_TRUE(manager.add_from_pipeline("shape-infer").has_value());
+  EXPECT_FALSE(manager.run(**graph).has_value());
+}
+
+TEST(ShapeInferenceTest, RejectsShapesThatCannotBroadcast) {
+  auto graph = ir::parse(R"(graph @g(%a: f32[4,8], %b: f32[3,8]) -> f32[?,?] {
+  %s = add(%a, %b) : f32[?,?]
+  return %s
+}
+)");
+  ASSERT_TRUE(graph.has_value());
+
+  PassManager manager;
+  ASSERT_TRUE(manager.add_from_pipeline("shape-infer").has_value());
+
+  auto reports = manager.run(**graph);
+  ASSERT_FALSE(reports.has_value());
+  EXPECT_NE(reports.error().message().find("4 against 3"), std::string::npos)
+      << reports.error().message();
+}
+
 TEST(PassManagerTest, PassesAreIdempotent) {
   // Running a pass twice should be a no-op the second time. A pass that keeps reporting changes
   // would spin forever under fixpoint iteration.

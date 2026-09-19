@@ -57,6 +57,13 @@ TEST(TypeTest, DynamicDimensionsAreTrackedOnTheType) {
   EXPECT_EQ(TensorType(DType::kF32, shape).to_string(), "f32[4,?]");
 }
 
+TEST(TypeTest, ShapePrintsWithoutItsDtype) {
+  // TensorType::to_string is this plus a dtype prefix, so the two cannot drift apart.
+  EXPECT_EQ(Shape({4, 8}).to_string(), "[4,8]");
+  EXPECT_EQ(Shape(std::vector<std::int64_t>{}).to_string(), "[]");
+  EXPECT_EQ(Shape({4, kDynamic}).to_string(), "[4,?]");
+}
+
 TEST(TypeTest, ElementCountMultipliesTheDimensions) {
   EXPECT_EQ(Shape({4, 8}).element_count(), 32);
   EXPECT_EQ(Shape(std::vector<std::int64_t>{}).element_count(), 1) << "a scalar holds one element";

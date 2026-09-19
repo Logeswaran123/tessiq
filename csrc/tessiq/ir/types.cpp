@@ -105,18 +105,20 @@ std::int64_t Shape::element_count() const {
   return std::accumulate(dims_.begin(), dims_.end(), std::int64_t{1}, std::multiplies<>());
 }
 
-std::string TensorType::to_string() const {
-  std::string text(dtype_name(dtype_));
-  text += '[';
-  for (std::size_t i = 0; i < shape_.rank(); ++i) {
+std::string Shape::to_string() const {
+  std::string text("[");
+  for (std::size_t i = 0; i < dims_.size(); ++i) {
     if (i != 0) {
       text += ',';
     }
-    const std::int64_t dim = shape_.dims()[i];
-    text += dim == kDynamic ? "?" : std::to_string(dim);
+    text += dims_[i] == kDynamic ? "?" : std::to_string(dims_[i]);
   }
   text += ']';
   return text;
+}
+
+std::string TensorType::to_string() const {
+  return std::string(dtype_name(dtype_)) + shape_.to_string();
 }
 
 Result<TensorType> parse_tensor_type(std::string_view text) {
