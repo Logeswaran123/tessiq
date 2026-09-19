@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include "tessiq/ir/memory_plan.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
 
@@ -28,6 +29,7 @@ Reads textual IR from a file or stdin, runs a pass pipeline, and prints the resu
   --list           list the registered passes and exit
   --verify-only    parse and verify, print nothing
   --stats          report per-pass timings and whether each changed anything
+  --memory-plan    print the arena plan for the result instead of the graph
   -o FILE          write to FILE instead of stdout
   -h, --help       this message
 
@@ -41,6 +43,7 @@ struct Options {
   bool list = false;
   bool verify_only = false;
   bool stats = false;
+  bool memory_plan = false;
   bool help = false;
 };
 
@@ -56,6 +59,8 @@ tessiq::Result<Options> parse_args(const std::vector<std::string_view>& args) {
       options.verify_only = true;
     } else if (arg == "--stats") {
       options.stats = true;
+    } else if (arg == "--memory-plan") {
+      options.memory_plan = true;
     } else if (arg.rfind("--passes=", 0) == 0) {
       options.pipeline = std::string(arg.substr(9));
     } else if (arg == "-o") {
@@ -89,6 +94,31 @@ tessiq::Result<std::string> read_input(const std::string& path) {
   return buffer.str();
 }
 
+void print_pass_list() {
+  for (const std::string& name : tessiq::passes::PassRegistry::instance().names()) {
+    auto pass = tessiq::passes::PassRegistry::instance().create(name);
+    // Padded to the widest name plus a gap, so adding a longer pass name does not silently
+    // collapse the column.
+    constexpr std::size_t kColumn = 18;
+    const std::size_t pad = name.size() < kColumn ? kColumn - name.size() : 1;
+    std::cout << "  " << name << std::string(pad, ' ') << (*pass)->description() << "\n";
+  }
+}
+
+/// What to print for the finished graph.
+tessiq::Result<std::string> render(const tessiq::ir::Graph& graph, bool memory_plan) {
+  if (!memory_plan) {
+    return tessiq::ir::print(graph);
+  }
+  // 512 is the alignment every Device promises, which is what lets a kernel assume an aligned
+  // pointer rather than testing for one. The planner takes it as an argument because the IR does
+  // not know what hardware it is planning for, so the number belongs to whoever does.
+  constexpr std::size_t kDeviceAlignment = 512;
+  TESSIQ_ASSIGN_OR_RETURN(const tessiq::ir::MemoryPlan plan,
+                          tessiq::ir::plan_memory(graph, kDeviceAlignment));
+  return plan.to_string();
+}
+
 int run(const std::vector<std::string_view>& args) {
   auto options = parse_args(args);
   if (!options) {
@@ -102,14 +132,7 @@ int run(const std::vector<std::string_view>& args) {
   }
 
   if (options->list) {
-    for (const std::string& name : tessiq::passes::PassRegistry::instance().names()) {
-      auto pass = tessiq::passes::PassRegistry::instance().create(name);
-      // Padded to the widest name plus a gap, so adding a longer pass name does not silently
-      // collapse the column.
-      constexpr std::size_t kColumn = 18;
-      const std::size_t pad = name.size() < kColumn ? kColumn - name.size() : 1;
-      std::cout << "  " << name << std::string(pad, ' ') << (*pass)->description() << "\n";
-    }
+    print_pass_list();
     return 0;
   }
 
@@ -150,7 +173,12 @@ int run(const std::vector<std::string_view>& args) {
     }
   }
 
-  const std::string printed = tessiq::ir::print(**graph);
+  auto rendered = render(**graph, options->memory_plan);
+  if (!rendered) {
+    std::cerr << "tessiq-opt: " << rendered.error().message() << "\n";
+    return 1;
+  }
+  const std::string& printed = *rendered;
   if (options->output.empty()) {
     std::cout << printed;
   } else {

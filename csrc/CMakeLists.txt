@@ -65,6 +65,7 @@ add_library(tessiq::runtime ALIAS tessiq_runtime)
 add_library(tessiq_ir STATIC
   tessiq/ir/graph.cpp
   tessiq/ir/liveness.cpp
+  tessiq/ir/memory_plan.cpp
   tessiq/ir/text.cpp
   tessiq/ir/types.cpp
   tessiq/passes/algebraic.cpp
