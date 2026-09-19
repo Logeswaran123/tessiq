@@ -63,6 +63,9 @@ class Shape {
   /// Elements in the tensor. Meaningless unless is_static(), so callers check first.
   [[nodiscard]] std::int64_t element_count() const;
 
+  /// Renders as the textual IR spells it: `[4,8]`, `[]`, `[?,16]`.
+  [[nodiscard]] std::string to_string() const;
+
   friend bool operator==(const Shape& a, const Shape& b) { return a.dims_ == b.dims_; }
 
   friend bool operator!=(const Shape& a, const Shape& b) { return !(a == b); }
