@@ -21,6 +21,7 @@ add_executable(tessiq_tests
   test_error.cpp
   test_ir.cpp
   test_logging.cpp
+  test_liveness.cpp
   test_op_support.cpp
   test_passes.cpp
   test_result.cpp
