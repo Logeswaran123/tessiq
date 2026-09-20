@@ -49,6 +49,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - Liveness analysis, and a memory planner that packs every intermediate into one arena,
   reusing space between values that are never live at the same time. `tessiq-opt
   --memory-plan` prints the result, including what the same buffers would cost with no reuse.
+- `tessiq.build_recipe(gm, device)`, which lowers a graph into a recipe: the steps to run,
+  which device each runs on, which of them need their arguments moved first, the arena size,
+  and the shape of the returned tuple. `tessiq.execute(recipe)` runs one.
+- **Changed.** `tessiq.execute` takes a recipe rather than a graph and a cluster map.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq

@@ -1,11 +1,12 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""Running a partitioned graph.
+"""Running a recipe.
 
-Clustered nodes run with their tensors on a tessiq device; everything else runs on the host. Until
-kernels exist, a tessiq op reaches PyTorch's CPU kernel through the fallback, so this is slower
-than not compiling at all. What it buys is that the whole path is exercised and checked against
-eager, which is the agreement a lowered recipe will have to keep.
+Everything that can be decided without seeing the tensors was decided when the recipe was built,
+so a call is a walk over the graph doing only what the recipe says. Until kernels exist, a tessiq
+operation reaches PyTorch's CPU kernel through the fallback, so this is slower than not compiling
+at all. What it buys is that the whole path is exercised and checked against eager, which is the
+agreement a lowered recipe will have to keep.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Any
 
 import torch
 
-from tessiq.device import cpu
+from tessiq.recipe import Recipe
 
 
 def _move(value: Any, device: torch.device) -> Any:
@@ -31,83 +32,71 @@ def _move(value: Any, device: torch.device) -> Any:
     return value
 
 
-class PartitionedExecutor(torch.fx.Interpreter):
-    """Executes an FX graph, sending clustered nodes to a tessiq device.
+class RecipeExecutor(torch.fx.Interpreter):
+    """Executes the graph a recipe was built from, following what the recipe decided.
 
-    A node in a cluster has its tensor arguments moved to the device before it runs, so the
-    operation dispatches through tessiq. Results stay there, so the next node in the same cluster
-    finds them already in place and no transfer happens between them. A node on the host has its
-    arguments moved back.
-
-    Not thread-safe, and not reusable. One instance per call.
+    Not thread-safe, and not reusable. One instance per call, which is what `execute` does.
 
     Args:
-        graph_module: The module a ``torch.compile`` backend receives.
-        clusters: Map from FX node name to cluster number, as ``tessiq.partition`` returns it. A
-            node absent from the map runs on the host.
-        device: Where clustered nodes run. Defaults to ``tessiq.cpu``.
+        recipe: The compiled graph to run.
     """
 
-    def __init__(
-        self,
-        graph_module: torch.fx.GraphModule,
-        clusters: dict[str, int],
-        device: torch.device | None = None,
-    ) -> None:
-        super().__init__(graph_module)
-        self._clusters = clusters
-        self._device = device if device is not None else cpu
+    def __init__(self, recipe: Recipe) -> None:
+        super().__init__(recipe.graph_module)
+        self._devices = recipe.devices
+        self._needs_move = recipe.needs_move
+        self._output_spec = recipe.output_spec
+        self._host = torch.device("cpu")
         self._node: torch.fx.Node | None = None
 
     def run_node(self, n: torch.fx.Node) -> Any:
         # Recorded because call_function is handed the target and the arguments, not the node, and
-        # the cluster is a property of the node.
+        # where a step runs is a property of the node.
         self._node = n
         return super().run_node(n)
 
     def call_function(self, target: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        device = self._device_for(self._node)
+        name = self._node.name if self._node is not None else ""
+        if name not in self._needs_move:
+            # Everything this reads is already where it has to be, which is the common case in the
+            # middle of a cluster. Moving again would be two transfers that cancel out.
+            return super().call_function(target, args, kwargs)
+
+        device = self._devices.get(name, self._host)
         return super().call_function(
             target,
             tuple(_move(value, device) for value in args),
-            {name: _move(value, device) for name, value in kwargs.items()},
+            {key: _move(value, device) for key, value in kwargs.items()},
         )
 
     def output(self, target: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        # The graph returns to whoever called the model, so results come back to the host whatever
-        # device the last node ran on.
-        host = torch.device("cpu")
-        return super().output(
-            target,
-            tuple(_move(value, host) for value in args),
-            {name: _move(value, host) for name, value in kwargs.items()},
+        produced = args[0]
+        if not isinstance(produced, (tuple, list)):
+            produced = (produced,)
+
+        # Rebuilt from the recipe's spec rather than passed through, so every call checks that the
+        # spec still describes the graph. strict=True is the check: a spec of the wrong length
+        # raises here instead of handing the autograd engine a tuple whose positions have shifted.
+        rebuilt = tuple(
+            None if name is None else _move(value, self._host)
+            for name, value in zip(self._output_spec, produced, strict=True)
         )
-
-    def _device_for(self, node: torch.fx.Node | None) -> torch.device:
-        if node is not None and node.name in self._clusters:
-            return self._device
-        return torch.device("cpu")
+        return super().output(target, (rebuilt,), kwargs)
 
 
-def execute(
-    graph_module: torch.fx.GraphModule,
-    clusters: dict[str, int],
-    device: torch.device | None = None,
-) -> Callable[..., Any]:
-    """Build a callable that runs a partitioned graph.
+def execute(recipe: Recipe) -> Callable[..., Any]:
+    """Build a callable that runs `recipe`.
 
     Args:
-        graph_module: The module a ``torch.compile`` backend receives.
-        clusters: Map from FX node name to cluster number, as ``tessiq.partition`` returns it.
-        device: Where clustered nodes run. Defaults to ``tessiq.cpu``.
+        recipe: A compiled graph, from `tessiq.build_recipe`.
 
     Returns:
-        A callable taking the arguments ``graph_module.forward`` takes and returning what it
-        returns, on the host. It holds no state between calls, so it can be called repeatedly and
-        from more than one thread.
+        A callable taking the arguments the graph takes and returning what it returns, on the
+        host. It holds no state between calls, so it can be called repeatedly and from more than
+        one thread.
     """
 
     def run(*args: Any) -> Any:
-        return PartitionedExecutor(graph_module, clusters, device).run(*args)
+        return RecipeExecutor(recipe).run(*args)
 
     return run

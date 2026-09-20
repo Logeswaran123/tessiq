@@ -31,12 +31,15 @@ from tessiq.device import (
 )
 from tessiq.executor import execute
 from tessiq.fx import import_graph, partition, pass_names, run_passes
+from tessiq.recipe import Recipe, build_recipe
 
 __all__ = [
     "DEVICE_NAME",
     "MemoryStats",
+    "Recipe",
     "__version__",
     "backend_name",
+    "build_recipe",
     "cpu",
     "device_count",
     "empty_cache",

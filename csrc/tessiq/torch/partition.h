@@ -3,10 +3,12 @@
 
 #pragma once
 
+#include <cstddef>
 #include <map>
 #include <pybind11/pybind11.h>
 #include <string>
 
+#include "tessiq/ir/recipe.h"
 #include "tessiq/support/result.h"
 
 namespace tessiq::torch_backend {
@@ -27,5 +29,12 @@ struct PartitionResult {
 /// produced it, so the caller can map a cluster back onto the graph it started with. That is what
 /// lets the executor decide, node by node, what runs where.
 Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::string name);
+
+/// Imports an FX graph, partitions it, and lowers the result into a recipe.
+///
+/// `alignment` is the device's, passed in because the compiler does not know which device the
+/// caller means to run on.
+Result<ir::Recipe>
+build_recipe_fx(const pybind11::object& graph_module, std::string name, std::size_t alignment);
 
 } // namespace tessiq::torch_backend

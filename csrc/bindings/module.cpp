@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "tessiq/ir/recipe.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
 #include "tessiq/runtime/allocator.h"
@@ -145,6 +146,37 @@ PYBIND11_MODULE(_C, m) {
       py::arg("name") = "forward",
       "Imports and partitions an FX graph. Returns the IR and a map from node name to cluster; "
       "a node absent from the map runs on the host.");
+
+  py::class_<tessiq::ir::Step>(m, "Step")
+      .def_readonly("op", &tessiq::ir::Step::op)
+      .def_readonly("results", &tessiq::ir::Step::results)
+      .def_readonly("cluster", &tessiq::ir::Step::cluster);
+
+  py::class_<tessiq::ir::Buffer>(m, "Buffer")
+      .def_readonly("name", &tessiq::ir::Buffer::name)
+      .def_readonly("offset", &tessiq::ir::Buffer::offset)
+      .def_readonly("size", &tessiq::ir::Buffer::size);
+
+  py::class_<tessiq::ir::Recipe>(m, "Recipe")
+      .def_readonly("steps", &tessiq::ir::Recipe::steps)
+      .def_readonly("buffers", &tessiq::ir::Recipe::buffers)
+      .def_readonly("arena_bytes", &tessiq::ir::Recipe::arena_bytes)
+      .def_readonly("naive_bytes", &tessiq::ir::Recipe::naive_bytes)
+      .def("__str__", &tessiq::ir::Recipe::to_string);
+
+  m.def(
+      "build_recipe_fx",
+      [](const py::object& graph_module, const std::string& name, std::size_t alignment) {
+        auto result = tessiq::torch_backend::build_recipe_fx(graph_module, name, alignment);
+        if (!result) {
+          raise_from_error(result.error());
+        }
+        return std::move(*result);
+      },
+      py::arg("graph_module"),
+      py::arg("name") = "forward",
+      py::arg("alignment") = 512,
+      "Imports, partitions and lowers an FX graph into a recipe.");
 
   m.def(
       "run_passes",
