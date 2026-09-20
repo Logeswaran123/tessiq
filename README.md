@@ -7,10 +7,11 @@ a chip behind `model.to(...)` and `torch.compile`.
 Named after *tessera*, the Latin word for a mosaic tile, which is what the compiler makes of a
 graph: pieces cut to fit, then set into one surface. Said `/ˈtɛs.ɪk/`.
 
-Phases 1 to 4 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
+Phases 1 to 5 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
 its own caching allocator, and a CPU fallback covers every op that has no kernel yet.
 `torch.compile(model, backend="tessiq")` captures a graph, imports it into the IR, partitions it
-into the parts the backend claims, and runs them. Forward and backward both go through it.
+into the parts the backend claims, lowers that into a recipe, and runs it. Forward and backward
+both go through it, and a graph compiled once is not compiled again.
 
 ```python
 import torch
@@ -47,9 +48,18 @@ graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
 
 **Arithmetic still runs on the host.** Every op reaches PyTorch's CPU kernels through the fallback,
 so a GPU tensor pays two transfers per operation and is slower than plain CPU. What exists is the
-plumbing underneath: a real device, real device memory, per-backend accounting, and two backends
-that can be checked against each other. Kernels arrive with the compiler.
-[PHASES.md](PHASES.md) has the full breakdown.
+plumbing underneath: a real device, real device memory, per-backend accounting, two backends that
+can be checked against each other, and a compiler that decides what to take and plans where it
+goes. Kernels arrive next. [PHASES.md](PHASES.md) has the full breakdown.
+
+The compiler's own numbers, on a 61-step elementwise graph, from
+[`bench/compile_overhead.py`](bench/compile_overhead.py):
+
+| | |
+|---|---|
+| Compiling a graph | 440 us |
+| Answering from the recipe cache | 110 us |
+| Intermediates, planned into one arena | 8 KB against 240 KB unplanned |
 
 ## How it fits together
 
