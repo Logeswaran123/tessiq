@@ -1,0 +1,12 @@
+// RUN: mark-supported,cluster,fuse-elementwise
+// A group of one is a kernel per operation, which is what not fusing already means, so it gets no
+// attribute rather than a group nobody else is in.
+graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {
+  %s = aten.add.Tensor(%a, %b) : f32[8]
+  return %s
+}
+// ---
+graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {
+  %s = aten.add.Tensor(%a, %b) {tessiq.cluster = 0, tessiq.supported = true} : f32[8]
+  return %s
+}

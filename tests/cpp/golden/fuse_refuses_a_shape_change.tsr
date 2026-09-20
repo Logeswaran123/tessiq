@@ -1,0 +1,14 @@
+// RUN: mark-supported,cluster,fuse-elementwise
+// The consumer broadcasts, so it writes 32 elements where the producer wrote 8. One loop cannot
+// serve both.
+graph @g(%small: f32[8], %big: f32[4,8]) -> f32[4,8] {
+  %p = aten.relu.default(%small) : f32[8]
+  %c = aten.add.Tensor(%p, %big) : f32[4,8]
+  return %c
+}
+// ---
+graph @g(%small: f32[8], %big: f32[4,8]) -> f32[4,8] {
+  %p = aten.relu.default(%small) {tessiq.cluster = 0, tessiq.supported = true} : f32[8]
+  %c = aten.add.Tensor(%p, %big) {tessiq.cluster = 0, tessiq.supported = true} : f32[4,8]
+  return %c
+}

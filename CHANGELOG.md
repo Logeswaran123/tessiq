@@ -57,6 +57,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   device it was lowered for. `tessiq.cache_stats()` reports hits, misses, entries and
   evictions; `tessiq.clear_cache()` empties it. Bounded and least-recently-used, because a
   recipe holds the graph it was built from.
+- `fuse-elementwise`, which groups chains of elementwise operations that can run as one
+  kernel. A value read twice, returned by the graph, or changing shape stays out, because
+  each of those means it has to be written to memory anyway.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq
