@@ -53,6 +53,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   which device each runs on, which of them need their arguments moved first, the arena size,
   and the shape of the returned tuple. `tessiq.execute(recipe)` runs one.
 - **Changed.** `tessiq.execute` takes a recipe rather than a graph and a cluster map.
+- A recipe cache, keyed on the graph's structure, the type of every value in it, and the
+  device it was lowered for. `tessiq.cache_stats()` reports hits, misses, entries and
+  evictions; `tessiq.clear_cache()` empties it. Bounded and least-recently-used, because a
+  recipe holds the graph it was built from.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq

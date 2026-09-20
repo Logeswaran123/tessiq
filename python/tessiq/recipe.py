@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import torch
 
 from tessiq import _C
+from tessiq.cache import lookup, signature, store
 from tessiq.device import cpu
 
 #: The cluster of a step the backend does not claim, matching `tessiq::ir::kHost`.
@@ -70,6 +71,8 @@ def build_recipe(
     graph_module: torch.fx.GraphModule,
     device: torch.device | None = None,
     name: str = "forward",
+    *,
+    use_cache: bool = True,
 ) -> Recipe:
     """Compile an FX graph for `device`.
 
@@ -77,9 +80,12 @@ def build_recipe(
         graph_module: The module a ``torch.compile`` backend receives.
         device: Where clustered operations run. Defaults to ``tessiq.cpu``.
         name: The name the resulting IR graph carries.
+        use_cache: Whether to consult the recipe cache. False forces a compile, which is what a
+            benchmark measuring compilation wants and what nothing else should.
 
     Returns:
-        A recipe that can be run any number of times, from any thread.
+        A recipe that can be run any number of times, from any thread. A cached recipe is shared
+        between callers, which is safe because a recipe never changes after it is built.
 
     Raises:
         ValueError: If a node carries no shape information, if a shape is not static, or if the
@@ -87,6 +93,20 @@ def build_recipe(
         TypeError: If the graph uses a dtype or node kind the IR cannot represent.
     """
     target = device if device is not None else cpu
+
+    key = signature(graph_module, target) if use_cache else ""
+    if use_cache:
+        cached = lookup(key)
+        if cached is not None:
+            return cached
+
+    recipe = _compile(graph_module, target, name)
+    if use_cache:
+        store(key, recipe)
+    return recipe
+
+
+def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str) -> Recipe:
     host = torch.device("cpu")
     native = _C.build_recipe_fx(graph_module, name, 512)
 

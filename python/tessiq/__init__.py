@@ -15,6 +15,7 @@ from __future__ import annotations
 import torch as _torch  # noqa: F401
 
 from tessiq import _C
+from tessiq.cache import CacheStats, cache_stats, clear_cache
 from tessiq.device import (
     DEVICE_NAME,
     MemoryStats,
@@ -35,11 +36,14 @@ from tessiq.recipe import Recipe, build_recipe
 
 __all__ = [
     "DEVICE_NAME",
+    "CacheStats",
     "MemoryStats",
     "Recipe",
     "__version__",
     "backend_name",
     "build_recipe",
+    "cache_stats",
+    "clear_cache",
     "cpu",
     "device_count",
     "empty_cache",
