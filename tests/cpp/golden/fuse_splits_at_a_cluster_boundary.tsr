@@ -1,0 +1,20 @@
+// RUN: mark-supported,cluster,fuse-elementwise
+// A matrix multiply has no kernel and is not elementwise, so it ends one group and the operations
+// after it start another.
+graph @g(%a: f32[4,4], %b: f32[4,4]) -> f32[4,4] {
+  %x = aten.add.Tensor(%a, %b) : f32[4,4]
+  %r = aten.relu.default(%x) : f32[4,4]
+  %m = aten.mm.default(%r, %b) : f32[4,4]
+  %t = aten.tanh.default(%m) : f32[4,4]
+  %s = aten.sigmoid.default(%t) : f32[4,4]
+  return %s
+}
+// ---
+graph @g(%a: f32[4,4], %b: f32[4,4]) -> f32[4,4] {
+  %x = aten.add.Tensor(%a, %b) {tessiq.cluster = 0, tessiq.fusion = 0, tessiq.supported = true} : f32[4,4]
+  %r = aten.relu.default(%x) {tessiq.cluster = 0, tessiq.fusion = 0, tessiq.supported = true} : f32[4,4]
+  %m = aten.mm.default(%r, %b) {tessiq.supported = false} : f32[4,4]
+  %t = aten.tanh.default(%m) {tessiq.cluster = 1, tessiq.fusion = 1, tessiq.supported = true} : f32[4,4]
+  %s = aten.sigmoid.default(%t) {tessiq.cluster = 1, tessiq.fusion = 1, tessiq.supported = true} : f32[4,4]
+  return %s
+}
