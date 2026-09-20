@@ -58,6 +58,7 @@ pybind11_add_module(_C MODULE
 # the pass registry is empty.
 target_link_libraries(_C PRIVATE
   "$<LINK_LIBRARY:WHOLE_ARCHIVE,tessiq_ir>"
+  tessiq::codegen
   tessiq::runtime
   tessiq::support
   ${TORCH_LIBRARIES})

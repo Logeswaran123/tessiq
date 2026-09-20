@@ -15,6 +15,8 @@
 #include <string_view>
 #include <vector>
 
+#include "tessiq/codegen/emitter.h"
+#include "tessiq/codegen/kernel.h"
 #include "tessiq/ir/memory_plan.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
@@ -30,6 +32,7 @@ Reads textual IR from a file or stdin, runs a pass pipeline, and prints the resu
   --verify-only    parse and verify, print nothing
   --stats          report per-pass timings and whether each changed anything
   --memory-plan    print the arena plan for the result instead of the graph
+  --emit-cuda      print CUDA source for each fusion group instead of the graph
   -o FILE          write to FILE instead of stdout
   -h, --help       this message
 
@@ -44,6 +47,7 @@ struct Options {
   bool verify_only = false;
   bool stats = false;
   bool memory_plan = false;
+  bool emit_cuda = false;
   bool help = false;
 };
 
@@ -61,6 +65,8 @@ tessiq::Result<Options> parse_args(const std::vector<std::string_view>& args) {
       options.stats = true;
     } else if (arg == "--memory-plan") {
       options.memory_plan = true;
+    } else if (arg == "--emit-cuda") {
+      options.emit_cuda = true;
     } else if (arg.rfind("--passes=", 0) == 0) {
       options.pipeline = std::string(arg.substr(9));
     } else if (arg == "-o") {
@@ -103,6 +109,30 @@ void print_pass_list() {
     const std::size_t pad = name.size() < kColumn ? kColumn - name.size() : 1;
     std::cout << "  " << name << std::string(pad, ' ') << (*pass)->description() << "\n";
   }
+}
+
+/// Source for every fusion group in the graph, in group order.
+tessiq::Result<std::string> render_cuda(const tessiq::ir::Graph& graph) {
+  const auto groups = tessiq::codegen::fusion_groups(graph);
+  if (groups.empty()) {
+    return std::string(
+        "// no fusion groups; run --passes=mark-supported,cluster,fuse-elementwise\n");
+  }
+
+  std::string out;
+  for (const std::int64_t group : groups) {
+    TESSIQ_ASSIGN_OR_RETURN(const tessiq::codegen::FusedKernel kernel,
+                            tessiq::codegen::extract_kernel(graph, group));
+    const tessiq::codegen::Emitter& emitter = tessiq::codegen::cuda_emitter();
+    if (!emitter.supports(kernel)) {
+      return tessiq::unsupported("the cuda emitter cannot emit fusion group " +
+                                 std::to_string(group));
+    }
+    TESSIQ_ASSIGN_OR_RETURN(const std::string source, emitter.emit(kernel));
+    out += source;
+    out += "\n";
+  }
+  return out;
 }
 
 /// What to print for the finished graph.
@@ -173,7 +203,7 @@ int run(const std::vector<std::string_view>& args) {
     }
   }
 
-  auto rendered = render(**graph, options->memory_plan);
+  auto rendered = options->emit_cuda ? render_cuda(**graph) : render(**graph, options->memory_plan);
   if (!rendered) {
     std::cerr << "tessiq-opt: " << rendered.error().message() << "\n";
     return 1;

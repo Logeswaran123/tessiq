@@ -77,3 +77,20 @@ def run_passes(ir: str, pipeline: str) -> str:
 def pass_names() -> list[str]:
     """Names of the registered passes, sorted."""
     return list(_C.pass_names())
+
+
+def emit_cuda(ir: str) -> str:
+    """CUDA source for every fusion group in `ir`, in group order.
+
+    Args:
+        ir: A graph in tessiq's textual IR, already through ``fuse-elementwise``. A graph with no
+            fusion groups returns a comment saying so rather than an empty string.
+
+    Returns:
+        The source, one ``__global__`` function per group.
+
+    Raises:
+        ValueError: If the IR does not parse, or a group is not something one loop can express.
+        TypeError: If a group uses a dtype the emitter has no spelling for.
+    """
+    return str(_C.emit_cuda(ir))

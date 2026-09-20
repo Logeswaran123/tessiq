@@ -31,7 +31,7 @@ from tessiq.device import (
     memory_stats,
 )
 from tessiq.executor import execute
-from tessiq.fx import import_graph, partition, pass_names, run_passes
+from tessiq.fx import emit_cuda, import_graph, partition, pass_names, run_passes
 from tessiq.recipe import Recipe, build_recipe
 
 __all__ = [
@@ -46,6 +46,7 @@ __all__ = [
     "clear_cache",
     "cpu",
     "device_count",
+    "emit_cuda",
     "empty_cache",
     "execute",
     "get_log_level",

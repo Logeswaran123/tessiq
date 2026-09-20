@@ -60,6 +60,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `fuse-elementwise`, which groups chains of elementwise operations that can run as one
   kernel. A value read twice, returned by the graph, or changing shape stays out, because
   each of those means it has to be written to memory anyway.
+- A code generator: `tessiq.emit_cuda(ir)` and `tessiq-opt --emit-cuda` turn a fusion group
+  into a CUDA kernel, with the intermediates in registers. One `Emitter` interface, so a
+  second target is a second class rather than a second path.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq

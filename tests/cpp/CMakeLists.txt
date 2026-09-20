@@ -17,6 +17,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(tessiq_tests
   test_allocator.cpp
+  test_codegen.cpp
   test_device.cpp
   test_error.cpp
   test_ir.cpp
@@ -34,6 +35,7 @@ add_executable(tessiq_tests
 # initialisation, and a static library only contributes objects something already references.
 target_link_libraries(tessiq_tests PRIVATE
   "$<LINK_LIBRARY:WHOLE_ARCHIVE,tessiq_ir>"
+  tessiq::codegen
   tessiq::runtime
   tessiq::support
   GTest::gtest_main)

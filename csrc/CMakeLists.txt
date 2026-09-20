@@ -89,6 +89,23 @@ tessiq_enable_sanitizers(tessiq_ir)
 
 add_library(tessiq::ir ALIAS tessiq_ir)
 
+# --- tessiq_codegen ---------------------------------------------------------------------------
+#
+# Turning a fused group into source text. Its own target rather than part of tessiq_ir, because
+# compiling that source needs the CUDA toolkit and the IR and the passes have to keep building
+# without one. Emitting the text does not, which is why this half is testable anywhere.
+
+add_library(tessiq_codegen STATIC
+  tessiq/codegen/cuda_emitter.cpp
+  tessiq/codegen/kernel.cpp)
+
+target_link_libraries(tessiq_codegen PUBLIC tessiq::ir)
+
+tessiq_set_warnings(tessiq_codegen)
+tessiq_enable_sanitizers(tessiq_codegen)
+
+add_library(tessiq::codegen ALIAS tessiq_codegen)
+
 # --- Python extension module ----------------------------------------------------------------
 
 if(TESSIQ_BUILD_PYTHON)
