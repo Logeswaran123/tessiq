@@ -25,6 +25,7 @@ add_executable(tessiq_tests
   test_memory_plan.cpp
   test_op_support.cpp
   test_passes.cpp
+  test_recipe.cpp
   test_result.cpp
   test_shape_rules.cpp)
 
