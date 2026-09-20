@@ -3,13 +3,16 @@
 
 #include "tessiq/torch/partition.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <variant>
 
 #include "tessiq/ir/graph.h"
+#include "tessiq/ir/recipe.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
 #include "tessiq/support/logging.h"
@@ -27,14 +30,21 @@ constexpr std::string_view kLogModule = "partition";
 /// something a caller should be choosing per graph.
 constexpr std::string_view kPipeline = "mark-supported,cluster";
 
-} // namespace
-
-Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::string name) {
+/// Imports and runs the pipeline. Shared by both entry points so they cannot disagree about what
+/// the backend claims.
+Result<std::unique_ptr<ir::Graph>> prepare(const pybind11::object& graph_module, std::string name) {
   TESSIQ_ASSIGN_OR_RETURN(auto graph, import_fx(graph_module, std::move(name)));
 
   passes::PassManager manager;
   TESSIQ_RETURN_IF_ERROR(manager.add_from_pipeline(kPipeline));
   TESSIQ_RETURN_IF_ERROR(manager.run(*graph));
+  return graph;
+}
+
+} // namespace
+
+Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::string name) {
+  TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name)));
 
   PartitionResult result;
   result.ir = ir::print(*graph);
@@ -58,6 +68,15 @@ Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::
   TESSIQ_LOG(kDebug, kLogModule) << result.clusters.size() << " of " << graph->node_count()
                                  << " node(s) clustered";
   return result;
+}
+
+Result<ir::Recipe>
+build_recipe_fx(const pybind11::object& graph_module, std::string name, std::size_t alignment) {
+  TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name)));
+  TESSIQ_ASSIGN_OR_RETURN(ir::Recipe recipe, ir::build_recipe(*graph, alignment));
+  TESSIQ_LOG(kDebug, kLogModule) << "recipe with " << recipe.steps.size() << " step(s), arena "
+                                 << recipe.arena_bytes << " bytes";
+  return recipe;
 }
 
 } // namespace tessiq::torch_backend

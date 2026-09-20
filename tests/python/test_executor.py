@@ -1,6 +1,6 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""Running a partitioned graph.
+"""Running a recipe.
 
 Every test checks the result against eager. That is the only property that matters here: the
 compiler may route an operation wherever it likes, but the number it produces has to be the number
@@ -17,11 +17,11 @@ import torch
 from torch._dynamo.backends.common import aot_autograd
 
 import tessiq
-from tessiq import execute
+from tessiq import build_recipe, execute
 
 
-def compiled(fn: Callable[..., Any], *inputs: torch.Tensor) -> Callable[..., Any]:
-    """Capture, partition, and return something that runs the result."""
+def captured_graph(fn: Callable[..., Any], *inputs: torch.Tensor) -> torch.fx.GraphModule:
+    """The graph a backend receives for `fn`, after AOTAutograd."""
     captured: list[torch.fx.GraphModule] = []
 
     def backend(graph_module: torch.fx.GraphModule, _inputs: object) -> Callable[..., object]:
@@ -29,8 +29,12 @@ def compiled(fn: Callable[..., Any], *inputs: torch.Tensor) -> Callable[..., Any
         return graph_module.forward
 
     torch.compile(fn, backend=aot_autograd(fw_compiler=backend), dynamic=False)(*inputs)
-    _, clusters = tessiq.partition(captured[0])
-    return execute(captured[0], clusters)
+    return captured[0]
+
+
+def compiled(fn: Callable[..., Any], *inputs: torch.Tensor) -> Callable[..., Any]:
+    """Capture, compile to a recipe, and return something that runs it."""
+    return execute(build_recipe(captured_graph(fn, *inputs)))
 
 
 def assert_matches_eager(fn: Callable[..., Any], *inputs: torch.Tensor) -> None:
@@ -114,18 +118,9 @@ def test_clusters_can_run_on_the_gpu() -> None:
         pytest.skip("needs a gpu")
 
     inputs = (torch.randn(16), torch.randn(16))
-    captured: list[torch.fx.GraphModule] = []
-
-    def backend(graph_module: torch.fx.GraphModule, _inputs: object) -> Callable[..., object]:
-        captured.append(graph_module)
-        return graph_module.forward
-
-    torch.compile(
-        lambda a, b: torch.relu(a + b), backend=aot_autograd(fw_compiler=backend), dynamic=False
-    )(*inputs)
-    _, clusters = tessiq.partition(captured[0])
+    graph = captured_graph(lambda a, b: torch.relu(a + b), *inputs)
 
     before = tessiq.memory_stats(tessiq.gpu).allocation_count
-    produced = execute(captured[0], clusters, tessiq.gpu)(*inputs)
+    produced = execute(build_recipe(graph, tessiq.gpu))(*inputs)
     assert tessiq.memory_stats(tessiq.gpu).allocation_count > before
     assert torch.allclose(produced[0], torch.relu(inputs[0] + inputs[1]), atol=1e-5)

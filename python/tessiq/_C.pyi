@@ -39,3 +39,22 @@ def import_fx(graph_module: object, name: str = ...) -> str: ...
 def partition_fx(graph_module: object, name: str = ...) -> tuple[str, dict[str, int]]: ...
 def run_passes(ir: str, pipeline: str) -> str: ...
 def pass_names() -> list[str]: ...
+
+class Step:
+    op: str
+    results: list[str]
+    cluster: int
+
+class Buffer:
+    name: str
+    offset: int
+    size: int
+
+class Recipe:
+    steps: list[Step]
+    buffers: list[Buffer]
+    arena_bytes: int
+    naive_bytes: int
+    def __str__(self) -> str: ...
+
+def build_recipe_fx(graph_module: object, name: str = ..., alignment: int = ...) -> Recipe: ...

@@ -20,7 +20,7 @@ from torch._functorch._aot_autograd.utils import make_boxed_func
 
 from tessiq.device import DEVICE_NAME, _resolve
 from tessiq.executor import execute
-from tessiq.fx import partition
+from tessiq.recipe import build_recipe
 
 _OPTIONS = frozenset({"device"})
 
@@ -56,11 +56,10 @@ def compile_graph(
     device = _device_from(options)
 
     def compile_forward(traced: torch.fx.GraphModule, _inputs: Sequence[Any]) -> Callable[..., Any]:
-        _, clusters = partition(traced)
         # Boxed, so AOTAutograd hands the arguments over in a list it can drop its own reference
         # to. Unboxed it holds every input alive for the length of the call, which in training is
         # the whole activation set.
-        return make_boxed_func(execute(traced, clusters, device))
+        return make_boxed_func(execute(build_recipe(traced, device)))
 
     # AOTAutograd is what makes the graph importable: it functionalises the mutations Dynamo leaves
     # in and lowers to core ATen, which is the op set the passes and the support table assume. The
