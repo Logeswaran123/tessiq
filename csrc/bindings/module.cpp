@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "tessiq/codegen/emitter.h"
+#include "tessiq/codegen/kernel.h"
 #include "tessiq/ir/recipe.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
@@ -53,6 +55,36 @@ void set_log_level_from_string(const std::string& level_name) {
                                  "'; expected one of: error, warn, info, debug, trace"));
   }
   tessiq::set_log_level(level);
+}
+
+/// CUDA source for every fusion group in a graph.
+///
+/// A free function rather than a lambda in the module initialiser, which is one function and gets
+/// long enough to trip the complexity limit if everything is written inline.
+std::string emit_cuda_source(const std::string& ir) {
+  auto graph = tessiq::ir::parse(ir);
+  if (!graph) {
+    raise_from_error(graph.error());
+  }
+  const auto groups = tessiq::codegen::fusion_groups(**graph);
+  if (groups.empty()) {
+    return "// no fusion groups in this graph\n";
+  }
+
+  std::string out;
+  for (const std::int64_t group : groups) {
+    auto kernel = tessiq::codegen::extract_kernel(**graph, group);
+    if (!kernel) {
+      raise_from_error(kernel.error());
+    }
+    auto source = tessiq::codegen::cuda_emitter().emit(*kernel);
+    if (!source) {
+      raise_from_error(source.error());
+    }
+    out += *source;
+    out += "\n";
+  }
+  return out;
 }
 
 } // namespace
@@ -198,6 +230,12 @@ PYBIND11_MODULE(_C, m) {
       py::arg("pipeline"),
       "Runs a named pass pipeline over textual IR and returns the result. Text in and text out, "
       "for tests and debugging; the compiler keeps the graph in memory instead.");
+
+  m.def("emit_cuda",
+        &emit_cuda_source,
+        py::arg("ir"),
+        "CUDA source for every fusion group in a graph, which must have been through "
+        "fuse-elementwise.");
 
   m.def(
       "pass_names",

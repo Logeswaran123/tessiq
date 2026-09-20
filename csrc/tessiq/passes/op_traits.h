@@ -21,6 +21,17 @@ namespace tessiq::passes {
 /// the other.
 [[nodiscard]] bool is_elementwise(std::string_view op);
 
+/// Arguments `op` takes, counting constants that arrived as attributes. Zero when `op` is not
+/// elementwise.
+[[nodiscard]] int elementwise_arity(std::string_view op);
+
+/// The scalar expression `op` computes, with `$0` and `$1` standing for its arguments.
+///
+/// Written in the subset of C++ that a device compiler and a host compiler both accept, with
+/// `scalar_t` for the element type, so one spelling serves every target. Empty when `op` is not
+/// elementwise.
+[[nodiscard]] std::string_view elementwise_expression(std::string_view op);
+
 /// Elementwise operation names, sorted, for diagnostics.
 [[nodiscard]] std::vector<std::string> elementwise_ops();
 
