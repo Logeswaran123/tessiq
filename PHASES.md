@@ -14,8 +14,8 @@ work it describes.
 | 2 | The CUDA device, and choosing a backend per tensor | done |
 | 3 | IR and pass infrastructure | done |
 | 4 | Graph capture | done |
-| 5 | Shape inference, memory planning, recipe cache | next |
-| 6 | Fusion and CUDA codegen | |
+| 5 | Shape inference, memory planning, recipe cache | done |
+| 6 | Fusion and CUDA codegen | next |
 | 7 | Op coverage and real models | |
 | 8 | Training, dynamic shapes, tooling | |
 | 9 | Triton emitter | optional |
