@@ -96,10 +96,20 @@ add_library(tessiq::ir ALIAS tessiq_ir)
 # without one. Emitting the text does not, which is why this half is testable anywhere.
 
 add_library(tessiq_codegen STATIC
+  tessiq/codegen/cubin_cache.cpp
   tessiq/codegen/cuda_emitter.cpp
-  tessiq/codegen/kernel.cpp)
+  tessiq/codegen/kernel.cpp
+  tessiq/codegen/nvrtc.cpp)
 
 target_link_libraries(tessiq_codegen PUBLIC tessiq::ir)
+
+# NVRTC compiles generated source at run time. Guarded the same way the CUDA backend is: without
+# the toolkit the compiler reports that this build has none, and everything above it carries on.
+if(TESSIQ_ENABLE_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  target_link_libraries(tessiq_codegen PRIVATE CUDA::nvrtc)
+  target_compile_definitions(tessiq_codegen PRIVATE TESSIQ_WITH_CUDA)
+endif()
 
 tessiq_set_warnings(tessiq_codegen)
 tessiq_enable_sanitizers(tessiq_codegen)
