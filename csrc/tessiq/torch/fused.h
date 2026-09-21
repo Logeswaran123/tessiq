@@ -1,0 +1,55 @@
+// Copyright 2026 The Tessiq Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <ATen/core/Tensor.h>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "tessiq/codegen/program.h"
+#include "tessiq/ir/graph.h"
+#include "tessiq/support/result.h"
+
+namespace tessiq::torch_backend {
+
+/// One fusion group, compiled and ready to run.
+///
+/// Names are IR value names, which the importer took from the FX nodes, so the caller can find the
+/// tensors a group reads and the one it writes in the graph it started with.
+struct FusedKernel {
+  std::int64_t group = 0;
+
+  /// Values the group reads, in the order the kernel takes them.
+  std::vector<std::string> inputs;
+
+  /// The value the group writes.
+  std::string output;
+
+  /// Every value the group computes, the output included. The caller skips these when walking the
+  /// graph, because the kernel computes all of them in one pass.
+  std::vector<std::string> members;
+
+  /// Elements every buffer holds. Fusion refuses a shape change, so there is one count.
+  std::int64_t elements = 0;
+
+  /// Loaded and owned by the codegen layer, which keeps it for the life of the process.
+  const codegen::Program* program = nullptr;
+
+  /// Runs the kernel. `inputs` and `output` must be contiguous tensors on the device this was
+  /// compiled for, and `output` must already be the right size.
+  ///
+  /// Asynchronous, like any launch. The caller orders the result against whatever reads it.
+  [[nodiscard]] Result<void> launch(const std::vector<at::Tensor>& tensors,
+                                    const at::Tensor& out) const;
+};
+
+/// Compiles every fusion group in `graph` for CUDA device `ordinal`.
+///
+/// Returns an empty list rather than an error when there is nothing to compile, when this build
+/// has no CUDA toolkit, or when a group uses something the emitter has no code for. None of those
+/// is a failure: the caller runs those operations one at a time, which always works.
+Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordinal);
+
+} // namespace tessiq::torch_backend

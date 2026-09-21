@@ -6,8 +6,13 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+
+// Teaches pybind11 how to convert a Python torch.Tensor to an at::Tensor. Without it a
+// binding taking at::Tensor rejects every tensor it is given.
 #include <stdexcept>
 #include <string>
+
+#include <torch/csrc/utils/pybind.h>
 
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
@@ -19,6 +24,7 @@
 #include "tessiq/support/error.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/torch/backend.h"
+#include "tessiq/torch/fused.h"
 #include "tessiq/torch/importer.h"
 #include "tessiq/torch/partition.h"
 #include "tessiq/version.h"
@@ -196,10 +202,38 @@ PYBIND11_MODULE(_C, m) {
       .def_readonly("naive_bytes", &tessiq::ir::Recipe::naive_bytes)
       .def("__str__", &tessiq::ir::Recipe::to_string);
 
+  py::class_<tessiq::torch_backend::FusedKernel>(m, "FusedKernel")
+      .def_readonly("group", &tessiq::torch_backend::FusedKernel::group)
+      .def_readonly("inputs", &tessiq::torch_backend::FusedKernel::inputs)
+      .def_readonly("output", &tessiq::torch_backend::FusedKernel::output)
+      .def_readonly("members", &tessiq::torch_backend::FusedKernel::members)
+      .def_readonly("elements", &tessiq::torch_backend::FusedKernel::elements)
+      .def(
+          "launch",
+          [](const tessiq::torch_backend::FusedKernel& kernel,
+             const std::vector<at::Tensor>& inputs,
+             const at::Tensor& out) {
+            auto result = kernel.launch(inputs, out);
+            if (!result) {
+              raise_from_error(result.error());
+            }
+          },
+          py::arg("inputs"),
+          py::arg("out"),
+          "Runs the kernel. Asynchronous, so the caller orders the result against what reads it.");
+
+  py::class_<tessiq::torch_backend::CompiledGraph>(m, "CompiledGraph")
+      .def_readonly("recipe", &tessiq::torch_backend::CompiledGraph::recipe)
+      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels);
+
   m.def(
       "build_recipe_fx",
-      [](const py::object& graph_module, const std::string& name, std::size_t alignment) {
-        auto result = tessiq::torch_backend::build_recipe_fx(graph_module, name, alignment);
+      [](const py::object& graph_module,
+         const std::string& name,
+         std::size_t alignment,
+         int ordinal) {
+        auto result =
+            tessiq::torch_backend::build_recipe_fx(graph_module, name, alignment, ordinal);
         if (!result) {
           raise_from_error(result.error());
         }
@@ -208,7 +242,9 @@ PYBIND11_MODULE(_C, m) {
       py::arg("graph_module"),
       py::arg("name") = "forward",
       py::arg("alignment") = 512,
-      "Imports, partitions and lowers an FX graph into a recipe.");
+      py::arg("ordinal") = -1,
+      "Imports, partitions, fuses and lowers an FX graph. A negative ordinal skips compiling "
+      "kernels.");
 
   m.def(
       "run_passes",

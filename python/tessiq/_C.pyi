@@ -7,6 +7,8 @@ mypy checks the Python package against this file, so drift here is a silent loss
 rather than an error.
 """
 
+from typing import Any
+
 __version__: str
 
 def version() -> str: ...
@@ -58,4 +60,18 @@ class Recipe:
     naive_bytes: int
     def __str__(self) -> str: ...
 
-def build_recipe_fx(graph_module: object, name: str = ..., alignment: int = ...) -> Recipe: ...
+class FusedKernel:
+    group: int
+    inputs: list[str]
+    output: str
+    members: list[str]
+    elements: int
+    def launch(self, inputs: list[Any], out: Any) -> None: ...
+
+class CompiledGraph:
+    recipe: Recipe
+    kernels: list[FusedKernel]
+
+def build_recipe_fx(
+    graph_module: object, name: str = ..., alignment: int = ..., ordinal: int = ...
+) -> CompiledGraph: ...

@@ -16,7 +16,7 @@ import torch
 
 from tessiq import _C
 from tessiq.cache import lookup, signature, store
-from tessiq.device import cpu
+from tessiq.device import DEVICE_NAME, backend_name, cpu
 
 #: The cluster of a step the backend does not claim, matching `tessiq::ir::kHost`.
 HOST = -1
@@ -40,6 +40,10 @@ class Recipe:
             than something the caller can work out.
         arena_bytes: What one allocation holding every intermediate would need.
         naive_bytes: What the same intermediates would cost with no reuse.
+        kernels: Compiled fusion groups, keyed by the node whose value the kernel writes. Empty
+            unless the target is a GPU and the toolkit is present.
+        fused_away: Nodes a kernel computes on the way to its output. Running them separately
+            would compute the same values twice, so the executor skips them.
     """
 
     graph_module: torch.fx.GraphModule
@@ -48,6 +52,8 @@ class Recipe:
     output_spec: tuple[str | None, ...]
     arena_bytes: int
     naive_bytes: int
+    kernels: dict[str, _C.FusedKernel]
+    fused_away: frozenset[str]
 
 
 def _output_spec(graph_module: torch.fx.GraphModule) -> tuple[str | None, ...]:
@@ -106,12 +112,24 @@ def build_recipe(
     return recipe
 
 
+def _cuda_ordinal(target: torch.device) -> int:
+    """Which CUDA device to compile kernels for, or -1 for none.
+
+    Index 0 is the host reference, which has no kernels to compile, so only 1 and above map onto a
+    GPU. Returning -1 rather than raising is what lets the same code path serve both.
+    """
+    index = target.index or 0
+    if target.type != DEVICE_NAME or index < 1:
+        return -1
+    return index - 1 if backend_name(target) == "cuda" else -1
+
+
 def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str) -> Recipe:
     host = torch.device("cpu")
-    native = _C.build_recipe_fx(graph_module, name, 512)
+    native = _C.build_recipe_fx(graph_module, name, 512, _cuda_ordinal(target))
 
     devices: dict[str, torch.device] = {}
-    for step in native.steps:
+    for step in native.recipe.steps:
         if not step.results:
             continue
         devices[step.results[0]] = host if step.cluster == HOST else target
@@ -127,11 +145,18 @@ def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str
         if any(source != here for source in sources) or (not sources and here != host):
             needs_move.add(node.name)
 
+    kernels = {kernel.output: kernel for kernel in native.kernels}
+    fused_away = {
+        name for kernel in native.kernels for name in kernel.members if name != kernel.output
+    }
+
     return Recipe(
         graph_module=graph_module,
         devices=devices,
         needs_move=frozenset(needs_move),
         output_spec=_output_spec(graph_module),
-        arena_bytes=native.arena_bytes,
-        naive_bytes=native.naive_bytes,
+        arena_bytes=native.recipe.arena_bytes,
+        naive_bytes=native.recipe.naive_bytes,
+        kernels=kernels,
+        fused_away=frozenset(fused_away),
     )

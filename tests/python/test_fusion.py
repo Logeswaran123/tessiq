@@ -113,18 +113,14 @@ def test_a_matmul_splits_the_chain() -> None:
     assert sorted(counts.values()) == [2, 2], ir
 
 
-def test_fusion_is_not_in_the_compile_path_yet() -> None:
-    # Nothing consumes the groups, so the pipeline the backend runs is unchanged. Asserted rather
-    # than assumed, because adding a pass to that pipeline is a one-line change with no test to
-    # stop it landing early.
-    graph = tessiq.import_graph(
-        _capture(lambda a, b: torch.relu(a + b), torch.randn(8), torch.randn(8))
-    )
-    _, clusters = tessiq.partition(
-        _capture(lambda a, b: torch.relu(a + b), torch.randn(8), torch.randn(8))
+def test_fusion_runs_in_the_compile_path() -> None:
+    # The backend's pipeline includes fusion now, so the IR a compile produces carries the groups
+    # and a recipe can turn them into kernels.
+    ir, clusters = tessiq.partition(
+        _capture(lambda a, b: torch.relu(a + b) * b, torch.randn(8), torch.randn(8))
     )
     assert clusters
-    assert "tessiq.fusion" not in tessiq.run_passes(graph, "mark-supported,cluster")
+    assert "tessiq.fusion" in ir
 
 
 def _capture(fn: Callable[..., Any], *inputs: torch.Tensor) -> torch.fx.GraphModule:

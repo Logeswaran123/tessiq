@@ -91,6 +91,30 @@ TEST(ExtractTest, AConstantArgumentBecomesALiteral) {
   EXPECT_EQ(kernel->body.front().args[1].text, "2.0");
 }
 
+TEST(ExtractTest, AConstantBeforeATensorKeepsItsPosition) {
+  // `1 - x` imports as sub with the constant at position 0 and the tensor at position 1, which a
+  // backward graph produces constantly. Appending constants after operands would emit `x - 1`:
+  // same shape, same type, wrong number, and only visible as a gradient that is subtly off.
+  auto graph = fused(R"(graph @g(%a: f32[8]) -> f32[8] {
+  %s = aten.sub.Tensor(%a) {arg0 = 1.0} : f32[8]
+  %r = aten.relu.default(%s) : f32[8]
+  return %r
+}
+)");
+  ASSERT_NE(graph, nullptr);
+
+  const auto kernel = extract_kernel(*graph, 0);
+  ASSERT_TRUE(kernel.has_value()) << (kernel.has_value() ? "" : kernel.error().to_string());
+  ASSERT_EQ(kernel->body.front().args.size(), 2U);
+  EXPECT_FALSE(kernel->body.front().args[0].is_value) << "the constant moved off position 0";
+  EXPECT_EQ(kernel->body.front().args[0].text, "1.0");
+  EXPECT_TRUE(kernel->body.front().args[1].is_value);
+
+  const auto source = cuda_emitter().emit(*kernel);
+  ASSERT_TRUE(source.has_value());
+  EXPECT_NE(source->find("scalar_t v_s = (1.0 - v_a);"), std::string::npos) << *source;
+}
+
 TEST(ExtractTest, AGroupThatIsNotThereIsReported) {
   auto graph = fused(std::string(kChain));
   ASSERT_NE(graph, nullptr);
