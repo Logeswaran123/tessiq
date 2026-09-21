@@ -177,8 +177,10 @@ def test_an_operation_with_several_results() -> None:
         torch.randn(4),
         torch.randn(4),
     )
-    assert "%native_layer_norm, %native_layer_norm.1, %native_layer_norm.2 =" in text, text
-    assert "getitem" not in text, text
+    # The read result takes the reading getitem's FX name, because the executor runs the FX graph
+    # and looks its tensors up by that name. The unread ones are named after their position.
+    assert "%getitem, %native_layer_norm.1, %native_layer_norm.2 =" in text, text
+    assert "function getitem" not in text, text
 
 
 def test_two_multi_result_nodes_do_not_collide() -> None:
@@ -190,7 +192,7 @@ def test_two_multi_result_nodes_do_not_collide() -> None:
 
     text = imported(model, torch.randn(2, 4), torch.randn(4), torch.randn(4))
     assert "%native_layer_norm.1" in text, text
-    assert "%native_layer_norm_1," in text, text
+    assert "%native_layer_norm_1.1" in text, text
 
 
 def test_an_opaque_torch_label_is_carried_rather_than_refused() -> None:
