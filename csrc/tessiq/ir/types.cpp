@@ -117,8 +117,36 @@ std::string Shape::to_string() const {
   return text;
 }
 
+Strides contiguous_strides(const Shape& shape) {
+  const std::size_t rank = shape.rank();
+  Strides strides(rank, 1);
+  for (std::size_t i = rank; i > 1; --i) {
+    // Walking from the last axis back, each step is the one after it times that axis's extent.
+    const std::int64_t extent = shape.dims()[i - 1];
+    strides[i - 2] = strides[i - 1] * (extent == kDynamic ? 1 : extent);
+  }
+  return strides;
+}
+
+TensorType::TensorType(DType dtype, Shape shape, Strides strides)
+    : dtype_(dtype), shape_(std::move(shape)) {
+  if (strides != contiguous_strides(shape_)) {
+    strides_ = std::move(strides);
+  }
+}
+
 std::string TensorType::to_string() const {
-  return std::string(dtype_name(dtype_)) + shape_.to_string();
+  std::string text = std::string(dtype_name(dtype_)) + shape_.to_string();
+  if (strides_.empty()) {
+    return text;
+  }
+  // Written inside the brackets after a colon, so a strided type reads as the shape it has plus
+  // the steps it takes: f32[2,4:1,2].
+  text.pop_back();
+  for (std::size_t i = 0; i < strides_.size(); ++i) {
+    text += (i == 0 ? ":" : ",") + std::to_string(strides_[i]);
+  }
+  return text + "]";
 }
 
 Result<TensorType> parse_tensor_type(std::string_view text) {
@@ -132,6 +160,14 @@ Result<TensorType> parse_tensor_type(std::string_view text) {
 
   std::vector<std::int64_t> dims;
   std::string_view body = text.substr(open + 1, text.size() - open - 2);
+
+  // Everything after a colon is the layout. Absent means contiguous.
+  std::string_view stride_text;
+  if (const std::size_t colon = body.find(':'); colon != std::string_view::npos) {
+    stride_text = body.substr(colon + 1);
+    body = body.substr(0, colon);
+  }
+
   while (!body.empty()) {
     const std::size_t comma = body.find(',');
     const std::string_view token = body.substr(0, comma);
@@ -151,7 +187,30 @@ Result<TensorType> parse_tensor_type(std::string_view text) {
     body.remove_prefix(comma + 1);
   }
 
-  return TensorType(dtype, Shape(std::move(dims)));
+  Shape shape(std::move(dims));
+  if (stride_text.empty()) {
+    return TensorType(dtype, std::move(shape));
+  }
+
+  Strides strides;
+  while (!stride_text.empty()) {
+    const std::size_t comma = stride_text.find(',');
+    auto value = parse_int(stride_text.substr(0, comma));
+    if (!value) {
+      return invalid_argument("bad stride in type '" + std::string(text) + "'");
+    }
+    strides.push_back(*value);
+    if (comma == std::string_view::npos) {
+      break;
+    }
+    stride_text.remove_prefix(comma + 1);
+  }
+  if (strides.size() != shape.rank()) {
+    return invalid_argument("type '" + std::string(text) + "' has " +
+                            std::to_string(strides.size()) + " stride(s) for " +
+                            std::to_string(shape.rank()) + " dimension(s)");
+  }
+  return TensorType(dtype, std::move(shape), std::move(strides));
 }
 
 } // namespace tessiq::ir

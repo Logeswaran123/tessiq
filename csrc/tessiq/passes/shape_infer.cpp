@@ -44,7 +44,9 @@ ir::TensorType merge(const ir::TensorType& recorded, const ir::TensorType& infer
     const std::int64_t have = recorded.shape().dims()[i];
     dims.push_back(have == ir::kDynamic ? inferred.shape().dims()[i] : have);
   }
-  return {recorded.dtype(), ir::Shape(std::move(dims))};
+  // The recorded layout survives. A shape rule says what an operation computes, not how the
+  // result is laid out, so inferring a shape must not quietly make a strided value contiguous.
+  return {recorded.dtype(), ir::Shape(std::move(dims)), recorded.strides()};
 }
 
 /// Derives result types from operand types, and checks the ones already recorded.
