@@ -68,6 +68,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `TESSIQ_CACHE_DIR` to move it; a directory it cannot write only makes compiling slower.
 - Loading and launching generated kernels through the CUDA driver, with modules kept for the
   life of the process. `device_capability()` reports what a cubin has to be built for.
+- Fused kernels run. `torch.compile(model, backend="tessiq", options={"device": "tessiq:1"})`
+  compiles each fusion group into one kernel and launches it in place of the operations it covers.
+  On a 4M-element `(a*b + c).relu().sigmoid()` that is one launch instead of four and 5.7x faster
+  than the same graph without kernels. See `bench/fusion.py`.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq

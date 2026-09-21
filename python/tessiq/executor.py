@@ -42,18 +42,50 @@ class RecipeExecutor(torch.fx.Interpreter):
     """
 
     def __init__(self, recipe: Recipe) -> None:
-        super().__init__(recipe.graph_module)
+        # Values are kept for the whole call rather than dropped once FX thinks they are dead. A
+        # fused group reads its inputs at the node that writes the group's output, which is later
+        # than the last use FX can see, since the uses in between belong to nodes the kernel
+        # subsumes. With collection on, an input is freed before the kernel asks for it.
+        super().__init__(recipe.graph_module, garbage_collect_values=not recipe.kernels)
         self._devices = recipe.devices
         self._needs_move = recipe.needs_move
         self._output_spec = recipe.output_spec
+        self._kernels = recipe.kernels
+        self._fused_away = recipe.fused_away
+        self._nodes = {node.name: node for node in recipe.graph_module.graph.nodes}
         self._host = torch.device("cpu")
         self._node: torch.fx.Node | None = None
 
     def run_node(self, n: torch.fx.Node) -> Any:
+        if n.name in self._fused_away:
+            # A kernel computes this on its way to the group's output, so running it here would
+            # compute the same value twice. Nothing reads what this returns: every consumer is
+            # inside the same group, which is the condition that let it fuse.
+            return None
+
+        kernel = self._kernels.get(n.name)
+        if kernel is not None:
+            return self._run_kernel(kernel, n)
+
         # Recorded because call_function is handed the target and the arguments, not the node, and
         # where a step runs is a property of the node.
         self._node = n
         return super().run_node(n)
+
+    def _run_kernel(self, kernel: Any, node: torch.fx.Node) -> torch.Tensor:
+        """Runs a whole fusion group as one launch."""
+        device = self._devices.get(node.name, self._host)
+        inputs = [_move(self.env[self._nodes[name]], device).contiguous() for name in kernel.inputs]
+
+        meta = node.meta["val"]
+        out = torch.empty(meta.shape, dtype=meta.dtype, device=device)
+
+        # The launch goes to the default stream and the transfers the runtime does go to the
+        # device's own, which is a blocking stream. The legacy default stream orders itself
+        # against those, so a copy issued after this waits for the kernel without an explicit
+        # synchronise here.
+        kernel.launch(inputs, out)
+        return out
 
     def call_function(self, target: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         name = self._node.name if self._node is not None else ""

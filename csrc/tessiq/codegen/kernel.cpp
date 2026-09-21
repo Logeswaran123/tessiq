@@ -67,24 +67,29 @@ Result<Step> build_step(const ir::Node* node,
   step.op = node->op();
   step.result = node->result(0)->name();
 
-  for (std::size_t i = 0; i < node->operand_count(); ++i) {
-    const ir::Value* operand = node->operand(i);
+  // Arguments are rebuilt position by position rather than operands first. The importer keys a
+  // non-tensor argument by the position it occupied, so a constant can come before a tensor:
+  // `1 - sigmoid(x)` in a backward graph is `sub` with the constant at position 0. Appending the
+  // constants after the operands would compute `sigmoid(x) - 1`, which is the same shape, the
+  // same type, and the wrong number.
+  const auto arity = static_cast<std::size_t>(passes::elementwise_arity(node->op()));
+  std::size_t next_operand = 0;
+  for (std::size_t position = 0; position < arity; ++position) {
+    if (const ir::Attribute* attribute = node->attribute("arg" + std::to_string(position));
+        attribute != nullptr) {
+      step.args.push_back({ir::attribute_to_string(*attribute), false});
+      continue;
+    }
+    if (next_operand >= node->operand_count()) {
+      return invalid_argument("'" + node->op() + "' takes " + std::to_string(arity) +
+                              " arguments but has only " + std::to_string(node->operand_count()) +
+                              " operands and no arg" + std::to_string(position));
+    }
+    const ir::Value* operand = node->operand(next_operand++);
     step.args.push_back({operand->name(), true});
     if (inside.count(operand->producer()) == 0 && seen.insert(operand->name()).second) {
       inputs.push_back(operand->name());
     }
-  }
-
-  // Positional constants follow the tensor operands, matching how the importer numbers them.
-  const auto arity = static_cast<std::size_t>(passes::elementwise_arity(node->op()));
-  for (std::size_t i = node->operand_count(); i < arity; ++i) {
-    const ir::Attribute* attribute = node->attribute("arg" + std::to_string(i));
-    if (attribute == nullptr) {
-      return invalid_argument("'" + node->op() + "' takes " + std::to_string(arity) +
-                              " arguments but has " + std::to_string(node->operand_count()) +
-                              " operands and no arg" + std::to_string(i));
-    }
-    step.args.push_back({ir::attribute_to_string(*attribute), false});
   }
 
   return step;

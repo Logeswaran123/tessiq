@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -21,7 +22,7 @@ from torch._dynamo.backends.common import aot_autograd
 
 import tessiq
 from tessiq import build_recipe, execute
-from tessiq.recipe import HOST, Recipe
+from tessiq.recipe import HOST
 
 
 def forward_graph(fn: Callable[..., Any], *inputs: torch.Tensor) -> torch.fx.GraphModule:
@@ -138,14 +139,9 @@ def test_a_spec_of_the_wrong_length_is_caught() -> None:
     # describes the graph fails here rather than handing the caller shifted positions.
     graph = forward_graph(lambda a: torch.relu(a), torch.randn(8))
     good = build_recipe(graph)
-    broken = Recipe(
-        graph_module=good.graph_module,
-        devices=good.devices,
-        needs_move=good.needs_move,
-        output_spec=(*good.output_spec, None),
-        arena_bytes=good.arena_bytes,
-        naive_bytes=good.naive_bytes,
-    )
+    # replace rather than a fresh Recipe, so a new field does not break this test instead of the
+    # thing it is testing.
+    broken = replace(good, output_spec=(*good.output_spec, None))
     with pytest.raises(ValueError, match=r"argument 2 is shorter|zip"):
         execute(broken)(torch.randn(8))
 

@@ -7,9 +7,11 @@
 #include <map>
 #include <pybind11/pybind11.h>
 #include <string>
+#include <vector>
 
 #include "tessiq/ir/recipe.h"
 #include "tessiq/support/result.h"
+#include "tessiq/torch/fused.h"
 
 namespace tessiq::torch_backend {
 
@@ -30,11 +32,23 @@ struct PartitionResult {
 /// lets the executor decide, node by node, what runs where.
 Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::string name);
 
-/// Imports an FX graph, partitions it, and lowers the result into a recipe.
+/// A graph compiled as far as the compiler goes: a plan, and the kernels for it.
+struct CompiledGraph {
+  ir::Recipe recipe;
+
+  /// One per fusion group the emitter could write code for. Empty on a build with no CUDA
+  /// toolkit, and short of the number of groups when the emitter declined one.
+  std::vector<FusedKernel> kernels;
+};
+
+/// Imports an FX graph, partitions it, fuses it, and lowers the result.
 ///
 /// `alignment` is the device's, passed in because the compiler does not know which device the
-/// caller means to run on.
-Result<ir::Recipe>
-build_recipe_fx(const pybind11::object& graph_module, std::string name, std::size_t alignment);
+/// caller means to run on. `ordinal` is the CUDA device to compile kernels for, or negative to
+/// skip compiling them, which is what a caller targeting the host reference wants.
+Result<CompiledGraph> build_recipe_fx(const pybind11::object& graph_module,
+                                      std::string name,
+                                      std::size_t alignment,
+                                      int ordinal);
 
 } // namespace tessiq::torch_backend

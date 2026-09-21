@@ -16,6 +16,7 @@
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
 #include "tessiq/support/logging.h"
+#include "tessiq/torch/fused.h"
 #include "tessiq/torch/importer.h"
 
 namespace tessiq::torch_backend {
@@ -28,7 +29,7 @@ constexpr std::string_view kLogModule = "partition";
 ///
 /// Named here rather than passed in: what the backend can run is a property of the backend, not
 /// something a caller should be choosing per graph.
-constexpr std::string_view kPipeline = "mark-supported,cluster";
+constexpr std::string_view kPipeline = "mark-supported,cluster,fuse-elementwise";
 
 /// Imports and runs the pipeline. Shared by both entry points so they cannot disagree about what
 /// the backend claims.
@@ -70,13 +71,22 @@ Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::
   return result;
 }
 
-Result<ir::Recipe>
-build_recipe_fx(const pybind11::object& graph_module, std::string name, std::size_t alignment) {
+Result<CompiledGraph> build_recipe_fx(const pybind11::object& graph_module,
+                                      std::string name,
+                                      std::size_t alignment,
+                                      int ordinal) {
   TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name)));
-  TESSIQ_ASSIGN_OR_RETURN(ir::Recipe recipe, ir::build_recipe(*graph, alignment));
-  TESSIQ_LOG(kDebug, kLogModule) << "recipe with " << recipe.steps.size() << " step(s), arena "
-                                 << recipe.arena_bytes << " bytes";
-  return recipe;
+
+  CompiledGraph compiled;
+  TESSIQ_ASSIGN_OR_RETURN(compiled.recipe, ir::build_recipe(*graph, alignment));
+  if (ordinal >= 0) {
+    TESSIQ_ASSIGN_OR_RETURN(compiled.kernels, compile_fused(*graph, ordinal));
+  }
+
+  TESSIQ_LOG(kDebug, kLogModule) << "recipe with " << compiled.recipe.steps.size()
+                                 << " step(s), arena " << compiled.recipe.arena_bytes << " bytes, "
+                                 << compiled.kernels.size() << " kernel(s)";
+  return compiled;
 }
 
 } // namespace tessiq::torch_backend
