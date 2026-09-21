@@ -78,15 +78,13 @@ arity = 1
 expression = "(scalar_t(1) / (scalar_t(1) + exp(-$0)))"
 kernel = true
 
-# Elementwise, and no kernel. The two are separate questions and this row is what the difference
-# looks like: a chain containing sqrt fuses either side of it and not through it.
 [[op]]
 name = "sqrt"
 aten = ["aten.sqrt.default"]
 category = "elementwise"
 arity = 1
 expression = "sqrt($0)"
-kernel = false
+kernel = true
 
 [[op]]
 name = "sub"
@@ -102,6 +100,206 @@ aten = ["aten.tanh.default"]
 category = "elementwise"
 arity = 1
 expression = "tanh($0)"
+kernel = true
+
+
+# --- exponentials and logarithms ----------------------------------------------------------------
+
+[[op]]
+name = "exp"
+aten = ["aten.exp.default"]
+category = "elementwise"
+arity = 1
+expression = "exp($0)"
+kernel = true
+
+# expm1 and log1p exist because exp(x)-1 and log(1+x) lose most of their precision near zero.
+# Emitting them as the composite would be correct on paper and wrong in the digits that matter.
+[[op]]
+name = "expm1"
+aten = ["aten.expm1.default"]
+category = "elementwise"
+arity = 1
+expression = "expm1($0)"
+kernel = true
+
+[[op]]
+name = "log"
+aten = ["aten.log.default"]
+category = "elementwise"
+arity = 1
+expression = "log($0)"
+kernel = true
+
+[[op]]
+name = "log1p"
+aten = ["aten.log1p.default"]
+category = "elementwise"
+arity = 1
+expression = "log1p($0)"
+kernel = true
+
+[[op]]
+name = "log2"
+aten = ["aten.log2.default"]
+category = "elementwise"
+arity = 1
+expression = "log2($0)"
+kernel = true
+
+[[op]]
+name = "log10"
+aten = ["aten.log10.default"]
+category = "elementwise"
+arity = 1
+expression = "log10($0)"
+kernel = true
+
+[[op]]
+name = "pow"
+aten = ["aten.pow.Tensor_Scalar"]
+category = "elementwise"
+arity = 2
+expression = "pow($0, $1)"
+kernel = true
+
+# The reciprocal square root, which normalisation layers use constantly. Written as a division
+# rather than rsqrt() so the zero and negative cases match what a division gives: rsqrt(0) is an
+# infinity and rsqrt of a negative is a NaN either way.
+[[op]]
+name = "rsqrt"
+aten = ["aten.rsqrt.default"]
+category = "elementwise"
+arity = 1
+expression = "(scalar_t(1) / sqrt($0))"
+kernel = true
+
+[[op]]
+name = "reciprocal"
+aten = ["aten.reciprocal.default"]
+category = "elementwise"
+arity = 1
+expression = "(scalar_t(1) / $0)"
+kernel = true
+
+# --- trigonometry -------------------------------------------------------------------------------
+
+[[op]]
+name = "sin"
+aten = ["aten.sin.default"]
+category = "elementwise"
+arity = 1
+expression = "sin($0)"
+kernel = true
+
+[[op]]
+name = "cos"
+aten = ["aten.cos.default"]
+category = "elementwise"
+arity = 1
+expression = "cos($0)"
+kernel = true
+
+[[op]]
+name = "tan"
+aten = ["aten.tan.default"]
+category = "elementwise"
+arity = 1
+expression = "tan($0)"
+kernel = true
+
+[[op]]
+name = "asin"
+aten = ["aten.asin.default"]
+category = "elementwise"
+arity = 1
+expression = "asin($0)"
+kernel = true
+
+[[op]]
+name = "acos"
+aten = ["aten.acos.default"]
+category = "elementwise"
+arity = 1
+expression = "acos($0)"
+kernel = true
+
+[[op]]
+name = "atan"
+aten = ["aten.atan.default"]
+category = "elementwise"
+arity = 1
+expression = "atan($0)"
+kernel = true
+
+[[op]]
+name = "sinh"
+aten = ["aten.sinh.default"]
+category = "elementwise"
+arity = 1
+expression = "sinh($0)"
+kernel = true
+
+[[op]]
+name = "cosh"
+aten = ["aten.cosh.default"]
+category = "elementwise"
+arity = 1
+expression = "cosh($0)"
+kernel = true
+
+# --- rounding -----------------------------------------------------------------------------------
+
+[[op]]
+name = "floor"
+aten = ["aten.floor.default"]
+category = "elementwise"
+arity = 1
+expression = "floor($0)"
+kernel = true
+
+[[op]]
+name = "ceil"
+aten = ["aten.ceil.default"]
+category = "elementwise"
+arity = 1
+expression = "ceil($0)"
+kernel = true
+
+[[op]]
+name = "trunc"
+aten = ["aten.trunc.default"]
+category = "elementwise"
+arity = 1
+expression = "trunc($0)"
+kernel = true
+
+# rint, not round. C's round() sends a half away from zero and torch sends it to the nearest even
+# number, so round(0.5) is 1 there and 0 here, and rint is what agrees.
+[[op]]
+name = "round"
+aten = ["aten.round.default"]
+category = "elementwise"
+arity = 1
+expression = "rint($0)"
+kernel = true
+
+# --- error function -----------------------------------------------------------------------------
+
+[[op]]
+name = "erf"
+aten = ["aten.erf.default"]
+category = "elementwise"
+arity = 1
+expression = "erf($0)"
+kernel = true
+
+[[op]]
+name = "erfc"
+aten = ["aten.erfc.default"]
+category = "elementwise"
+arity = 1
+expression = "erfc($0)"
 kernel = true
 
 # Reads positions it is not writing, so it can never join an elementwise loop however many kernels

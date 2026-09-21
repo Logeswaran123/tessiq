@@ -20,6 +20,7 @@ from torch._decomp import core_aten_decompositions
 from torch._dynamo.backends.common import aot_autograd
 
 import tessiq
+from conftest import load_operations
 from tessiq.recipe import build_recipe
 
 pytestmark = pytest.mark.cuda
@@ -145,3 +146,90 @@ def test_the_host_reference_compiles_no_kernels() -> None:
     recipe = build_recipe(captured(chain, *inputs), tessiq.cpu, use_cache=False)
     assert recipe.kernels == {}
     assert recipe.fused_away == frozenset()
+
+
+# --- the operations added for coverage -------------------------------------------------------
+
+# Every operation needs inputs it is defined on, and there are only a few shapes of answer to that
+# question. Anything not named here is fine with a plain normal sample.
+POSITIVE = "positive"
+ABOVE_MINUS_ONE = "above -1"
+UNIT = "unit interval"
+NONZERO = "nonzero"
+
+DOMAINS = {
+    "log": POSITIVE,
+    "log2": POSITIVE,
+    "log10": POSITIVE,
+    "sqrt": POSITIVE,
+    "rsqrt": POSITIVE,
+    "pow": POSITIVE,
+    "log1p": ABOVE_MINUS_ONE,
+    "asin": UNIT,
+    "acos": UNIT,
+    "reciprocal": NONZERO,
+}
+
+# Applied with a trailing multiply, because a single operation is a group of one and a group of one
+# is not fused. Two operations is the shortest thing that produces a kernel.
+CALLS: dict[str, Callable[..., torch.Tensor]] = {
+    "pow": lambda x: torch.pow(x, 1.7),
+}
+
+
+def sample(name: str, count: int = 4096) -> torch.Tensor:
+    generator = torch.Generator().manual_seed(len(name))
+    values = torch.randn(count, generator=generator)
+    domain = DOMAINS.get(name)
+    if domain == POSITIVE:
+        return values.abs() + 0.125
+    if domain == ABOVE_MINUS_ONE:
+        return values.abs() - 0.5
+    if domain == UNIT:
+        return torch.rand(count, generator=generator) * 1.8 - 0.9
+    if domain == NONZERO:
+        return values + torch.sign(values) * 0.125
+    return values
+
+
+ARITY = {str(op["name"]): int(op["arity"]) for op in load_operations()}
+
+
+def elementwise_with_kernels() -> list[str]:
+    return sorted(
+        str(op["name"])
+        for op in load_operations()
+        if op["kernel"] and op["category"] == "elementwise"
+    )
+
+
+def second_operand(count: int = 4096) -> torch.Tensor:
+    """The right-hand side of a binary operation: positive, so it is safe as a divisor too."""
+    generator = torch.Generator().manual_seed(17)
+    return torch.randn(count, generator=generator).abs() + 0.125
+
+
+@pytest.mark.parametrize("name", elementwise_with_kernels())
+def test_an_elementwise_kernel_agrees_with_eager(name: str) -> None:
+    # Driven by the table, so an operation cannot be added to ops.toml without its numbers being
+    # checked here. What it checks is narrow and the only thing worth checking: the value the
+    # generated kernel writes is the value PyTorch would have written.
+    call: Callable[..., torch.Tensor] = CALLS.get(name, getattr(torch, name))
+
+    def model(*args: torch.Tensor) -> torch.Tensor:
+        return call(*args) * 2.0
+
+    inputs: tuple[torch.Tensor, ...] = (sample(name),)
+    if ARITY[name] == 2 and name not in CALLS:
+        inputs = (*inputs, second_operand())
+
+    recipe = build_recipe(captured(model, *inputs), tessiq.gpu, use_cache=False)
+    assert len(recipe.kernels) == 1, f"{name} produced no kernel: {recipe.kernels}"
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    # One tolerance for every operation, and a tight one. These are the CUDA math library's own
+    # functions compared against PyTorch's CPU implementations, so anything looser would be hiding
+    # a wrong expression rather than accommodating float32.
+    torch.testing.assert_close(compiled(*inputs), model(*inputs), rtol=1e-6, atol=1e-5)

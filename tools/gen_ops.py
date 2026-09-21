@@ -65,14 +65,17 @@ def escape(text: str) -> str:
 
 
 def table(ops: list[dict[str, Any]]) -> str:
+    rows = spellings(ops)
     lines = [
         f"// {BANNER}",
         "//",
-        "// Included inside the array initialiser in op_table.cpp, which is what keeps the layout",
-        "// in one place and this file free of anything but rows.",
+        "// Included at namespace scope in op_table.cpp. The declaration is here rather than there",
+        "// because the element count is one per aten spelling and not one per operation, so the",
+        "// generator is the only thing that can keep it right.",
         "// clang-format off",
+        f"constexpr std::array<OpInfo, {len(rows)}> kOps{{{{",
     ]
-    for row in spellings(ops):
+    for row in rows:
         expression = escape(row.get("expression", ""))
         lines.append(
             f'    {{"{row["spelling"]}", '
@@ -81,6 +84,7 @@ def table(ops: list[dict[str, Any]]) -> str:
             f'"{expression}", '
             f"{'true' if row['kernel'] else 'false'}}},"
         )
+    lines.append("}};")
     lines.append("// clang-format on")
     return "\n".join(lines) + "\n"
 

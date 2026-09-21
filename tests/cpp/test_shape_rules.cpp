@@ -3,9 +3,11 @@
 
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <string>
 #include <vector>
 
 #include "tessiq/ir/types.h"
+#include "tessiq/passes/op_table.h"
 #include "tessiq/passes/shape_rules.h"
 
 namespace tessiq::passes {
@@ -115,6 +117,28 @@ TEST(ShapeRuleTest, MatmulAcceptsAnUnknownInnerDimension) {
 TEST(ShapeRuleTest, TheWrongOperandCountIsAnError) {
   const auto result = infer_result_types("aten.relu.default", {f32({4}), f32({4})});
   ASSERT_FALSE(result.has_value());
+}
+
+TEST(ShapeRuleTest, EveryOperationInTheTableHasARule) {
+  // The rules are derived from the table rather than listed beside it, so this holds by
+  // construction. It is here because it did not used to: the two were separate lists, and an
+  // operation could be fusable, have a kernel, and still have no idea what shape it produced.
+  for (const std::string& name : op_names()) {
+    EXPECT_TRUE(has_shape_rule(name)) << name << " is in the table with no shape rule";
+  }
+}
+
+TEST(ShapeRuleTest, AUnaryOperationCarriesItsOperandTypeThrough) {
+  for (const std::string& name : op_names()) {
+    const OpInfo* info = find_op(name);
+    ASSERT_NE(info, nullptr) << name;
+    if (info->category != OpCategory::kElementwise || info->arity != 1) {
+      continue;
+    }
+    const auto result = infer_result_types(name, {f32({4, 8})});
+    ASSERT_TRUE(result.has_value()) << name << ": " << result.error().to_string();
+    EXPECT_EQ(result->front(), f32({4, 8})) << name;
+  }
 }
 
 } // namespace
