@@ -98,12 +98,12 @@ Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordin
       members.push_back(step.result);
     }
 
-    compiled.push_back({group,
-                        description.inputs,
-                        description.output,
-                        std::move(members),
-                        description.elements,
-                        program});
+    compiled.push_back({.group = group,
+                        .inputs = description.inputs,
+                        .output = description.output,
+                        .members = std::move(members),
+                        .elements = description.elements,
+                        .program = program});
   }
 
   TESSIQ_LOG(kDebug, kLogModule) << "compiled " << compiled.size() << " of " << groups.size()
