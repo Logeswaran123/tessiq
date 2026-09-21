@@ -17,7 +17,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import tomllib
+# tomllib is standard from 3.11. The project supports 3.10, where tomli is the same parser under
+# its original name.
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "ops.toml"

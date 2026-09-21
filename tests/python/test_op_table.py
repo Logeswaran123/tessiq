@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import tomllib
+
+# tomllib is standard from 3.11. The project supports 3.10, where tomli is the same parser under
+# its original name.
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 import tessiq
 

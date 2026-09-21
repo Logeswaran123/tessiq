@@ -17,8 +17,10 @@
 #   expression  the scalar computation, $0 and $1 for the arguments. Elementwise only
 #   kernel      whether the backend can run it. An operation without one falls back to the host
 #
-# TOML rather than YAML because tomllib is in the standard library and PyYAML would be a
-# dependency for one file.
+# TOML rather than YAML. On 3.11 and later the parser is in the standard library, and on 3.10,
+# which this project still supports, it is tomli: the same parser under its original name, listed
+# in requirements-dev.txt and needed only to regenerate. PyYAML would be a dependency on every
+# version.
 
 [[op]]
 name = "abs"
