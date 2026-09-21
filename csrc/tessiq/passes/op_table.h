@@ -53,6 +53,7 @@ struct OpInfo {
 /// Spellings whose operation has a kernel, sorted.
 [[nodiscard]] std::vector<std::string> ops_with_kernels();
 
-[[nodiscard]] std::size_t op_count();
+/// How many rows the table holds, which is one per aten spelling rather than one per operation.
+[[nodiscard]] std::size_t spelling_count();
 
 } // namespace tessiq::passes

@@ -14,12 +14,10 @@ namespace tessiq::passes {
 
 namespace {
 
-/// The rows come from ops.toml. Sorted by name there, so a lookup could binary search; it walks
-/// instead, because the table is small enough that the search would be the more complicated half
-/// of this file.
-constexpr std::array<OpInfo, 26> kOps{{
+/// kOps comes from ops.toml, by way of tools/gen_ops.py. Sorted by name there, so a lookup could
+/// binary search; it walks instead, because the table is small enough that the search would be the
+/// more complicated half of this file.
 #include "tessiq/passes/op_table.inc"
-}};
 
 std::vector<std::string> names_where(bool (*keep)(const OpInfo&)) {
   std::vector<std::string> names;
@@ -48,6 +46,6 @@ std::vector<std::string> ops_with_kernels() {
   return names_where([](const OpInfo& op) { return op.has_kernel; });
 }
 
-std::size_t op_count() { return kOps.size(); }
+std::size_t spelling_count() { return kOps.size(); }
 
 } // namespace tessiq::passes

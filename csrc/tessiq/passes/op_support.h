@@ -39,10 +39,9 @@ class OpSupport {
 
 /// The set partitioning uses when nothing else is supplied.
 ///
-/// Hand-listed for now. Nothing has a native kernel yet, so asking the kernel registry would say
-/// no to everything and produce no clusters at all, leaving the partitioner untested until phase 7.
-/// A small honest list keeps the clustering exercised in the meantime, and this function is the one
-/// place that changes when the registry arrives.
+/// Seeded from the generated operation table, so an operation is claimed here exactly when
+/// ops.toml says it has a kernel. It is a mutable global because partitioning reads it without
+/// being handed one; a test that wants a different answer changes it and changes it back.
 OpSupport& default_op_support();
 
 } // namespace tessiq::passes

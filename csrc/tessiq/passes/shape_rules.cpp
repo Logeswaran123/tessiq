@@ -4,14 +4,15 @@
 #include "tessiq/passes/shape_rules.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "tessiq/ir/types.h"
+#include "tessiq/passes/op_table.h"
 #include "tessiq/support/macros.h"
 
 namespace tessiq::passes {
@@ -31,51 +32,25 @@ enum class RuleKind {
   kMatmul,
 };
 
-struct OpRule {
-  std::string_view op;
-  RuleKind kind;
-};
-
-/// One table, so an op cannot be half-added.
+/// The rule for `op`, derived from the generated operation table, or nothing if it has none.
 ///
-/// Both spellings appear because both occur in practice. Graphs imported from torch carry the
-/// ATen name; graphs written by hand for a pass test carry the short one, and a rule that only
-/// knew one of them would be untestable in the place it is easiest to test.
-constexpr std::array<OpRule, 26> kRules{{
-    {"abs", RuleKind::kUnaryElementwise},
-    {"neg", RuleKind::kUnaryElementwise},
-    {"relu", RuleKind::kUnaryElementwise},
-    {"sigmoid", RuleKind::kUnaryElementwise},
-    {"sqrt", RuleKind::kUnaryElementwise},
-    {"tanh", RuleKind::kUnaryElementwise},
-    {"aten.abs.default", RuleKind::kUnaryElementwise},
-    {"aten.neg.default", RuleKind::kUnaryElementwise},
-    {"aten.relu.default", RuleKind::kUnaryElementwise},
-    {"aten.sigmoid.default", RuleKind::kUnaryElementwise},
-    {"aten.sqrt.default", RuleKind::kUnaryElementwise},
-    {"aten.tanh.default", RuleKind::kUnaryElementwise},
-
-    {"add", RuleKind::kBinaryElementwise},
-    {"div", RuleKind::kBinaryElementwise},
-    {"mul", RuleKind::kBinaryElementwise},
-    {"sub", RuleKind::kBinaryElementwise},
-    {"aten.add.Tensor", RuleKind::kBinaryElementwise},
-    {"aten.div.Tensor", RuleKind::kBinaryElementwise},
-    {"aten.mul.Tensor", RuleKind::kBinaryElementwise},
-    {"aten.sub.Tensor", RuleKind::kBinaryElementwise},
-    {"aten.add.Scalar", RuleKind::kBinaryElementwise},
-    {"aten.div.Scalar", RuleKind::kBinaryElementwise},
-    {"aten.mul.Scalar", RuleKind::kBinaryElementwise},
-    {"aten.sub.Scalar", RuleKind::kBinaryElementwise},
-
-    {"mm", RuleKind::kMatmul},
-    {"aten.mm.default", RuleKind::kMatmul},
-}};
-
-const OpRule* find_rule(std::string_view op) {
-  const auto* const it = std::find_if(
-      kRules.begin(), kRules.end(), [op](const OpRule& rule) { return rule.op == op; });
-  return it == kRules.end() ? nullptr : it;
+/// There is no second list here. A rule kind is a function of what ops.toml already says: an
+/// elementwise operation takes its operands' type through unchanged, and how many operands it has
+/// is its arity. Keeping a separate table meant every operation added to ops.toml also had to be
+/// added here, and an operation that fused correctly but had no shape rule was the failure that
+/// produced.
+std::optional<RuleKind> find_rule(std::string_view op) {
+  const OpInfo* info = find_op(op);
+  if (info == nullptr) {
+    return std::nullopt;
+  }
+  switch (info->category) {
+  case OpCategory::kElementwise:
+    return info->arity == 1 ? RuleKind::kUnaryElementwise : RuleKind::kBinaryElementwise;
+  case OpCategory::kMatmul:
+    return RuleKind::kMatmul;
+  }
+  TESSIQ_UNREACHABLE("unhandled OpCategory");
 }
 
 std::string operand_summary(const std::vector<ir::TensorType>& operands) {
@@ -174,15 +149,15 @@ Result<ir::Shape> broadcast_shapes(const ir::Shape& a, const ir::Shape& b) {
   return ir::Shape(std::move(dims));
 }
 
-bool has_shape_rule(std::string_view op) { return find_rule(op) != nullptr; }
+bool has_shape_rule(std::string_view op) { return find_rule(op).has_value(); }
 
 Result<std::vector<ir::TensorType>>
 infer_result_types(std::string_view op, const std::vector<ir::TensorType>& operands) {
-  const OpRule* rule = find_rule(op);
-  TESSIQ_CHECK(rule != nullptr,
+  const std::optional<RuleKind> rule = find_rule(op);
+  TESSIQ_CHECK(rule.has_value(),
                "infer_result_types for '" + std::string(op) + "', which has no rule");
 
-  switch (rule->kind) {
+  switch (*rule) {
   case RuleKind::kUnaryElementwise:
     return infer_unary(op, operands);
   case RuleKind::kBinaryElementwise:

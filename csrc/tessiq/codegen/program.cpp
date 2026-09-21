@@ -110,7 +110,33 @@ std::mutex& programs_mutex() {
   return mutex;
 }
 
-/// Loaded modules, keyed by the bytes and the device they were loaded onto.
+/// FNV-1a over a cubin's bytes, as sixteen hex digits.
+///
+/// The loaded-module map is keyed on this rather than on the cubin's length. Every fused kernel is
+/// named tessiq_fused_<group>, so two unrelated graphs routinely produce a kernel with the same
+/// name for the same device, and two such cubins are very often the same number of bytes: the same
+/// loop with one arithmetic instruction changed compiles to the same size. Keying on length made
+/// the second one load the first one's module and launch the wrong kernel, with no error anywhere.
+std::string content_digest(const std::vector<char>& data) {
+  constexpr std::uint64_t kOffsetBasis = 1469598103934665603ULL;
+  constexpr std::uint64_t kPrime = 1099511628211ULL;
+
+  std::uint64_t hash = kOffsetBasis;
+  for (const char byte : data) {
+    hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(byte));
+    hash *= kPrime;
+  }
+
+  constexpr std::string_view kDigits = "0123456789abcdef";
+  std::string text(16, '0');
+  for (std::size_t position = 16; position > 0; --position) {
+    text[position - 1] = kDigits[hash & 0xFU];
+    hash >>= 4U;
+  }
+  return text;
+}
+
+/// Loaded modules, keyed by the function, its cubin's contents, and the device it was loaded onto.
 std::unordered_map<std::string, std::unique_ptr<CudaProgram>>& programs() {
   static std::unordered_map<std::string, std::unique_ptr<CudaProgram>> map;
   return map;
@@ -145,7 +171,7 @@ std::size_t loaded_program_count() {
 
 Result<const Program*> load_program(const Cubin& cubin, std::string_view function, int ordinal) {
   const std::string key = std::string(function) + "@" + std::to_string(ordinal) + "#" +
-                          std::to_string(cubin.data.size()) + ":" + cubin.architecture;
+                          content_digest(cubin.data) + ":" + cubin.architecture;
 
   const std::scoped_lock guard(programs_mutex());
   if (const auto it = programs().find(key); it != programs().end()) {

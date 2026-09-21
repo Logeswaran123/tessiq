@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import tessiq
+from conftest import load_operations
 
 nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
 needs_nvcc = pytest.mark.skipif(not Path(nvcc).exists(), reason="no CUDA toolkit")
@@ -74,29 +75,39 @@ def test_a_float_kernel_uses_no_double_arithmetic(tmp_path: Path) -> None:
     assert re.search(r"ex2\.approx[a-z.]*\.f32", text), "sigmoid did not become a float exponent"
 
 
+def chain_over_every_kernel(dtype: str = "f32", count: int = 64) -> tuple[str, int]:
+    """A single chain applying every operation that claims a kernel, and how many there are.
+
+    Built from ops.toml rather than written out, so an operation added to the table is compiled
+    here without anyone remembering to add it. Unary operations take the previous result, binary
+    ones take the previous result and a second input.
+    """
+    lines = []
+    previous = "%a"
+    length = 0
+    for op in load_operations():
+        if not op["kernel"]:
+            continue
+        length += 1
+        result = f"%o{length}"
+        arguments = previous if op["arity"] == 1 else f"{previous}, %b"
+        lines.append(f"  {result} = {op['aten'][0]}({arguments}) : {dtype}[{count}]")
+        previous = result
+    body = "\n".join(lines)
+    header = f"graph @g(%a: {dtype}[{count}], %b: {dtype}[{count}]) -> {dtype}[{count}]"
+    return f"{header} {{\n{body}\n  return {previous}\n}}\n", length
+
+
 @needs_nvcc
 def test_every_supported_operation_compiles(tmp_path: Path) -> None:
-    # One group touching each operation the emitter has an expression for. A malformed expression
-    # is a compile error rather than a wrong number, so this is the cheapest way to check them.
-    ops = "\n".join(
-        [
-            "  %o1 = aten.add.Tensor(%a, %b) : f32[64]",
-            "  %o2 = aten.sub.Tensor(%o1, %b) : f32[64]",
-            "  %o3 = aten.mul.Tensor(%o2, %b) : f32[64]",
-            "  %o4 = aten.div.Tensor(%o3, %b) : f32[64]",
-            "  %o5 = aten.abs.default(%o4) : f32[64]",
-            "  %o6 = aten.sqrt.default(%o5) : f32[64]",
-            "  %o7 = aten.neg.default(%o6) : f32[64]",
-            "  %o8 = aten.relu.default(%o7) : f32[64]",
-            "  %o9 = aten.sigmoid.default(%o8) : f32[64]",
-            "  %o10 = aten.tanh.default(%o9) : f32[64]",
-        ]
-    )
-    graph = f"graph @g(%a: f32[64], %b: f32[64]) -> f32[64] {{\n{ops}\n  return %o10\n}}\n"
+    # Every operation the emitter has an expression for, in one group. A malformed expression is a
+    # compile error rather than a wrong number, so this is the cheapest way to check all of them.
+    graph, length = chain_over_every_kernel()
+    assert length > 20, f"only {length} operations claim a kernel, which looks wrong"
 
-    # sqrt has no kernel, so the chain splits. Both halves still have to compile.
     source = tessiq.emit_cuda(tessiq.run_passes(graph, PIPELINE))
-    assert source.count("__global__") == 2, source
+    # Everything in the chain is supported and fusable, so it is one kernel however long it gets.
+    assert source.count("__global__") == 1, source
     compile_cuda(source, tmp_path)
 
 

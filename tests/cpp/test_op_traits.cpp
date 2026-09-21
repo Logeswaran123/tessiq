@@ -64,7 +64,25 @@ TEST(OpTraitsTest, EverythingTheBackendSupportsIsElementwise) {
 TEST(OpTraitsTest, TheListIsSortedAndComplete) {
   const std::vector<std::string> names = elementwise_ops();
   EXPECT_TRUE(std::is_sorted(names.begin(), names.end()));
-  EXPECT_EQ(names.size(), 24U) << "an operation was added or removed without updating this count";
+  EXPECT_EQ(names.size(), 70U) << "an operation was added or removed without updating this count";
+}
+
+TEST(OpTraitsTest, EveryElementwiseRowCanBeEmitted) {
+  // The emitter substitutes $0 and $1 into the expression and nothing else, so a row whose arity
+  // and expression disagree produces a kernel that either drops an input or reads past its
+  // arguments. Checking it here means a bad ops.toml row fails the suite rather than the GPU.
+  for (const std::string& name : elementwise_ops()) {
+    const int arity = elementwise_arity(name);
+    const std::string_view expression = elementwise_expression(name);
+    EXPECT_GE(arity, 1) << name;
+    EXPECT_LE(arity, 2) << name;
+    EXPECT_FALSE(expression.empty()) << name << " is elementwise with no expression";
+    EXPECT_NE(expression.find("$0"), std::string_view::npos)
+        << name << " never reads its first input";
+    const bool reads_second = expression.find("$1") != std::string_view::npos;
+    EXPECT_EQ(reads_second, arity == 2) << name << " reads $1 but is not binary, or the reverse";
+    EXPECT_EQ(expression.find("$2"), std::string_view::npos) << name << " reads a third input";
+  }
 }
 
 } // namespace

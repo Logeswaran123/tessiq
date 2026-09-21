@@ -16,14 +16,8 @@ from typing import Any
 
 import pytest
 
-# tomllib is standard from 3.11. The project supports 3.10, where tomli is the same parser under
-# its original name.
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
-
 import tessiq
+from conftest import load_operations
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "ops.toml"
@@ -31,8 +25,7 @@ GENERATOR = ROOT / "tools" / "gen_ops.py"
 
 
 def operations() -> list[dict[str, Any]]:
-    with SOURCE.open("rb") as handle:
-        return list(tomllib.load(handle)["op"])
+    return load_operations()
 
 
 def test_the_generated_files_are_up_to_date() -> None:
@@ -94,10 +87,15 @@ def test_the_backend_claims_what_the_table_says() -> None:
 
 
 def test_an_operation_without_a_kernel_is_not_claimed() -> None:
-    graph = (
-        "graph @g(%a: f32[4]) -> f32[4] {\n  %x = aten.sqrt.default(%a) : f32[4]\n  return %x\n}\n"
-    )
-    assert "tessiq.supported = false" in tessiq.run_passes(graph, "mark-supported")
+    # The other direction of the test above. Named from the table rather than hardcoded, so that
+    # giving one of these a kernel moves it to the claimed side instead of failing here.
+    unclaimed = [op for op in operations() if not op["kernel"]]
+    assert unclaimed, "every operation has a kernel, so this test no longer checks anything"
+    for op in unclaimed:
+        for name in (str(a) for a in op["aten"]):
+            graph = f"graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {{\n  %x = {name}(%a, %b) : f32[4]\n  return %x\n}}\n"
+            marked = tessiq.run_passes(graph, "mark-supported")
+            assert "tessiq.supported = false" in marked, f"{name} has no kernel and was claimed"
 
 
 def test_the_coverage_document_matches_the_source() -> None:

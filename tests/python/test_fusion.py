@@ -88,19 +88,21 @@ def test_every_supported_operation_fuses_under_its_aten_name() -> None:
     assert groups(ir) == {0: 9}, ir
 
 
-def test_an_elementwise_operation_the_backend_does_not_claim_splits_the_group() -> None:
-    # sqrt is elementwise, so it could fuse in principle, and the backend has no kernel for it, so
-    # it is not in a cluster. Those are two different tables answering two different questions,
-    # and this is what the difference looks like: the chain breaks where support ends, not where
-    # fusability does.
+def test_a_chain_of_transcendentals_is_one_group() -> None:
+    # The same property as the chain above, over the operations added for coverage rather than the
+    # original handful. Nothing here is special to fusion; the point is that widening the table
+    # widened what fuses, without anything in the fusion pass changing.
     def model(a: torch.Tensor) -> torch.Tensor:
-        return torch.tanh(torch.relu(torch.sqrt(torch.abs(a) + 1.0)))
+        x = torch.exp(a)
+        x = torch.log1p(x)
+        x = torch.sin(x)
+        x = torch.cos(x)
+        x = torch.atan(x)
+        x = torch.erf(x)
+        return torch.rsqrt(x + 2.0)
 
     ir = fused(model, torch.randn(64))
-    assert "aten.sqrt.default" in ir
-    assert re.search(r"aten\.sqrt\.default[^\n]*tessiq\.supported = false", ir), ir
-    counts = groups(ir)
-    assert len(counts) == 2, ir
+    assert groups(ir) == {0: 8}, ir
 
 
 def test_a_matmul_splits_the_chain() -> None:

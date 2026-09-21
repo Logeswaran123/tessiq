@@ -207,6 +207,41 @@ TEST(ProgramTest, LoadingTwiceReusesTheModule) {
   EXPECT_LE(loaded_program_count(), before + 1);
 }
 
+TEST(ProgramTest, TwoDifferentKernelsWithTheSameNameAreNotConfused) {
+  TESSIQ_SKIP_WITHOUT_GPU();
+
+  // Every fused kernel is called tessiq_fused_<group>, so unrelated graphs routinely produce a
+  // kernel with the same name for the same device. The loaded-module map used to be keyed on the
+  // cubin's length, and these two are the same length, so the second load returned the first one's
+  // function and the wrong kernel ran with no error reported anywhere.
+  const auto [major, minor] = capability();
+  const auto cubin_for = [major = major, minor = minor](const char* text) {
+    return compile_cached(source_for(text), "tessiq_fused_0", major, minor);
+  };
+
+  auto negated = cubin_for(R"(graph @g(%a: f32[4096]) -> f32[4096] {
+  %n = aten.neg.default(%a) : f32[4096]
+  %r = aten.relu.default(%n) : f32[4096]
+  return %r
+}
+)");
+  auto absolute = cubin_for(R"(graph @g(%a: f32[4096]) -> f32[4096] {
+  %n = aten.abs.default(%a) : f32[4096]
+  %r = aten.relu.default(%n) : f32[4096]
+  return %r
+}
+)");
+  ASSERT_TRUE(negated.has_value());
+  ASSERT_TRUE(absolute.has_value());
+  ASSERT_NE(negated->data, absolute->data) << "the two kernels compiled to the same cubin";
+
+  auto first = load_program(*negated, "tessiq_fused_0", 0);
+  auto second = load_program(*absolute, "tessiq_fused_0", 0);
+  ASSERT_TRUE(first.has_value()) << first.error().to_string();
+  ASSERT_TRUE(second.has_value()) << second.error().to_string();
+  EXPECT_NE(*first, *second) << "two different cubins shared one loaded module";
+}
+
 TEST(ProgramTest, AMissingFunctionIsReportedByName) {
   TESSIQ_SKIP_WITHOUT_GPU();
 
