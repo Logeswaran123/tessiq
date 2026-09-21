@@ -52,18 +52,24 @@ is what fuses: a chain of elementwise operations becomes one kernel, its interme
 a register, and the generated code is cached as a cubin between runs.
 [PHASES.md](PHASES.md) has the full breakdown.
 
-`(a*b + c).relu().sigmoid()` on an RTX 5080, one generated kernel against the same graph with the
-kernels removed, from [`bench/fusion.py`](bench/fusion.py):
+`(a*b + c).relu().sigmoid()` on 4M floats on an RTX 5080. The generated kernel is good and the
+path around it is not, so both are measured. From
+[`bench/against_torch.py`](bench/against_torch.py), with the data already on the device:
 
-| elements | fused | unfused | |
-|---|---|---|---|
-| 65,536 | 0.25 ms | 1.27 ms | 5.1x |
-| 1,048,576 | 0.97 ms | 5.57 ms | 5.8x |
-| 4,194,304 | 3.62 ms | 20.63 ms | 5.7x |
+| | | |
+|---|---|---|
+| tessiq generated kernel | 0.035 ms | 1766 GB/s |
+| `torch.compile` inductor | 0.064 ms | 975 GB/s |
 
-Four operations, one launch, three intermediate arrays that are never written. Compilation costs
-440 us and a cached recipe costs 110 us, from
-[`bench/compile_overhead.py`](bench/compile_overhead.py).
+Three loads, four operations in registers, one store, and near the bandwidth the card can sustain.
+Measure the whole call from host tensors instead and PyTorch wins by 60x, because tessiq moves 48
+MB to the device and 16 MB back every call and the kernel is one percent of what that costs. Only
+part of a graph is claimed today, so every unclaimed operation pulls its operands back to the
+host. That is what phase 7 is for.
+
+Within tessiq, a kernel beats running the same graph without one by 5.7x
+([`bench/fusion.py`](bench/fusion.py)). Compilation costs 440 us and a cached recipe costs 110 us
+([`bench/compile_overhead.py`](bench/compile_overhead.py)).
 
 ## How it fits together
 
