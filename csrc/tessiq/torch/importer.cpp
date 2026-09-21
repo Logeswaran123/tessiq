@@ -10,6 +10,7 @@
 #include <pybind11/pybind11.h>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <torch/csrc/autograd/python_variable.h>
@@ -82,6 +83,11 @@ bool is_fx_node(const py::object& value) {
 
 /// A Python scalar as an IR attribute. Anything else is refused rather than guessed at.
 Result<ir::Attribute> to_attribute(const py::handle& value) {
+  // None is an argument, not a missing one. A convolution with no bias passes None where the bias
+  // goes, and dropping it would shift the position of every argument after it.
+  if (value.is_none()) {
+    return ir::Attribute{std::monostate{}};
+  }
   if (py::isinstance<py::bool_>(value)) {
     return ir::Attribute{value.cast<bool>()};
   }

@@ -24,7 +24,12 @@ class Node;
 /// A constant carried on a node: `%c = const() {value = 1.0} : f32[]`.
 ///
 /// Small on purpose. Anything that needs a richer attribute is usually asking for an operand.
-using Attribute = std::variant<std::int64_t, double, bool, std::string, std::vector<std::int64_t>>;
+///
+/// `std::monostate` is Python's None, which real graphs carry: a convolution with no bias passes
+/// None where the bias goes, and dropping it would renumber every argument after it. It is first
+/// so that a default-constructed attribute is the absent one.
+using Attribute = std::
+    variant<std::monostate, std::int64_t, double, bool, std::string, std::vector<std::int64_t>>;
 
 /// Renders an attribute as the textual IR spells it.
 std::string attribute_to_string(const Attribute& value);

@@ -40,7 +40,9 @@ std::string attribute_to_string(const Attribute& value) {
   return std::visit(
       [](const auto& held) -> std::string {
         using T = std::decay_t<decltype(held)>;
-        if constexpr (std::is_same_v<T, std::int64_t>) {
+        if constexpr (std::is_same_v<T, std::monostate>) {
+          return "none";
+        } else if constexpr (std::is_same_v<T, std::int64_t>) {
           return std::to_string(held);
         } else if constexpr (std::is_same_v<T, double>) {
           return format_double(held);
