@@ -105,6 +105,27 @@ TEST(RegistryTest, KnowsTheBuiltInPasses) {
   EXPECT_NE(std::find(names.begin(), names.end(), "dce"), names.end());
   EXPECT_NE(std::find(names.begin(), names.end(), "cse"), names.end());
   EXPECT_NE(std::find(names.begin(), names.end(), "const-fold"), names.end());
+  EXPECT_NE(std::find(names.begin(), names.end(), "layout-assign"), names.end());
+}
+
+TEST(LayoutAssignTest, RunningItTwiceChangesNothingTheSecondTime) {
+  // The pass reports whether it changed anything, and a pipeline can be run to a fixpoint. One
+  // that kept inserting a copy in front of the copy it just inserted would never stop.
+  auto graph = ir::parse("graph @g(%a: f32[4,8:1,4]) -> f32[4,8] {\n"
+                         "  %r = aten.relu.default(%a) : f32[4,8]\n"
+                         "  return %r\n}\n");
+  ASSERT_TRUE(graph.has_value()) << graph.error().to_string();
+
+  PassManager manager;
+  ASSERT_TRUE(manager.add_from_pipeline("mark-supported,layout-assign").has_value());
+  ASSERT_TRUE(manager.run(**graph).has_value());
+  const std::string once = ir::print(**graph);
+
+  PassManager again;
+  ASSERT_TRUE(again.add_from_pipeline("layout-assign").has_value());
+  auto reports = again.run(**graph);
+  ASSERT_TRUE(reports.has_value()) << reports.error().to_string();
+  EXPECT_EQ(ir::print(**graph), once);
 }
 
 TEST(RegistryTest, NamesAreSorted) {

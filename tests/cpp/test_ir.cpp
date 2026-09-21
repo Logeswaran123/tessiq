@@ -391,5 +391,58 @@ TEST(TextTest, NoneRoundTrips) {
   EXPECT_EQ(print(**graph), text);
 }
 
+// --- layout ---------------------------------------------------------------------------------
+
+TEST(LayoutTest, ContiguousStridesStepByTheAxesAfterThem) {
+  EXPECT_EQ(contiguous_strides(Shape({2, 4, 8})), (Strides{32, 8, 1}));
+  EXPECT_EQ(contiguous_strides(Shape({5})), (Strides{1}));
+  EXPECT_TRUE(contiguous_strides(Shape(std::vector<std::int64_t>{})).empty());
+}
+
+TEST(LayoutTest, AContiguousLayoutIsRecordedAsNoLayoutAtAll) {
+  // Two spellings of the same thing have to be one type, or fusion would refuse to fuse a value
+  // with itself depending on how it was built.
+  const TensorType implicit(DType::kF32, Shape({2, 4}));
+  const TensorType spelled_out(DType::kF32, Shape({2, 4}), Strides{4, 1});
+  EXPECT_EQ(implicit, spelled_out);
+  EXPECT_TRUE(spelled_out.is_contiguous());
+  EXPECT_TRUE(spelled_out.strides().empty());
+}
+
+TEST(LayoutTest, ALayoutIsPartOfTheType) {
+  const TensorType packed(DType::kF32, Shape({2, 4}));
+  const TensorType transposed(DType::kF32, Shape({2, 4}), Strides{1, 2});
+  EXPECT_NE(packed, transposed);
+  EXPECT_FALSE(transposed.is_contiguous());
+  EXPECT_EQ(transposed.contiguous(), packed);
+}
+
+TEST(LayoutTest, AStridedTypePrintsItsSteps) {
+  EXPECT_EQ(TensorType(DType::kF32, Shape({2, 4}), Strides{1, 2}).to_string(), "f32[2,4:1,2]");
+  EXPECT_EQ(TensorType(DType::kF32, Shape({2, 4})).to_string(), "f32[2,4]");
+}
+
+TEST(LayoutTest, AStridedTypeRoundTrips) {
+  auto parsed = parse_tensor_type("f32[2,4,6,8:192,8,32,1]");
+  ASSERT_TRUE(parsed.has_value()) << parsed.error().to_string();
+  EXPECT_EQ(parsed->strides(), (Strides{192, 8, 32, 1}));
+  EXPECT_EQ(parsed->to_string(), "f32[2,4,6,8:192,8,32,1]");
+}
+
+TEST(LayoutTest, AStrideForEveryAxisOrNone) {
+  auto parsed = parse_tensor_type("f32[2,4:1]");
+  ASSERT_FALSE(parsed.has_value());
+  EXPECT_NE(parsed.error().message().find("stride"), std::string::npos) << parsed.error().message();
+}
+
+TEST(TextTest, AStridedValueRoundTripsThroughAGraph) {
+  const std::string text = "graph @g(%a: f32[2,4:1,2]) -> f32[2,4:1,2] {\n"
+                           "  %r = aten.relu.default(%a) : f32[2,4:1,2]\n"
+                           "  return %r\n}\n";
+  auto graph = parse(text);
+  ASSERT_TRUE(graph.has_value()) << graph.error().to_string();
+  EXPECT_EQ(print(**graph), text);
+}
+
 } // namespace
 } // namespace tessiq::ir

@@ -202,3 +202,28 @@ def test_an_opaque_torch_label_is_carried_rather_than_refused() -> None:
         lambda a: a.clone(memory_format=torch.contiguous_format).relu(), torch.randn(2, 4)
     )
     assert "torch.contiguous_format" in text, text
+
+
+def test_a_permuted_value_carries_its_layout() -> None:
+    # A permute produces the same shape a contiguous tensor would have and a different order of
+    # steps through it. Recording only the shape would make the two look like the same type, and
+    # fusion decides what can share a loop by comparing types.
+    text = imported(lambda a: torch.relu(a.transpose(0, 1)), torch.randn(4, 8))
+    assert "f32[8,4:1,8]" in text, text
+
+
+def test_a_contiguous_value_says_nothing_about_its_layout() -> None:
+    # The common case has to print as it always did, or every golden file and every type in the
+    # documentation becomes noise.
+    text = imported(lambda a, b: a + b, torch.randn(4), torch.randn(4))
+    assert "f32[4]" in text, text
+    assert ":" not in text.split("-> ")[1].split("{")[0], text
+
+
+def test_a_view_is_contiguous_and_a_permute_is_not() -> None:
+    # The distinction the layout work exists for. Both rearrange indices and neither computes
+    # anything, but a view can be read by a kernel that walks memory in order and a permute cannot.
+    text = imported(lambda a: a.reshape(2, 8).transpose(0, 1).relu(), torch.randn(4, 4))
+    assert "aten.view.default" in text, text
+    assert "f32[2,8]" in text, text
+    assert "f32[8,2:1,8]" in text, text

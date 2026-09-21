@@ -29,7 +29,9 @@ constexpr std::string_view kLogModule = "partition";
 ///
 /// Named here rather than passed in: what the backend can run is a property of the backend, not
 /// something a caller should be choosing per graph.
-constexpr std::string_view kPipeline = "mark-supported,cluster,fuse-elementwise";
+// layout-assign sits after mark-supported because it only cares about what the backend claims,
+// and before cluster because a materialisation it inserts is a node clustering has to see.
+constexpr std::string_view kPipeline = "mark-supported,layout-assign,cluster,fuse-elementwise";
 
 /// Imports and runs the pipeline. Shared by both entry points so they cannot disagree about what
 /// the backend claims.

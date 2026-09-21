@@ -78,21 +78,50 @@ class Shape {
 ///
 /// Shape and dtype live on the type rather than in a side table, which is what lets a pass ask a
 /// value what it is without consulting anything else, and what makes the textual form readable.
+/// How a tensor's elements are laid out: the step between consecutive indices on each axis, in
+/// elements.
+///
+/// Empty means contiguous, which is the packed row-major order and what almost every value has.
+/// Keeping that as the absent case rather than a computed vector means the common type prints and
+/// compares exactly as it did before layouts existed, and a strided value stands out in the IR.
+using Strides = std::vector<std::int64_t>;
+
+/// The strides a contiguous tensor of `shape` has. Empty for a rank-0 shape.
+///
+/// A dynamic extent counts as 1, since the strides outside it cannot be known either and a
+/// placeholder keeps the rank right.
+[[nodiscard]] Strides contiguous_strides(const Shape& shape);
+
 class TensorType {
  public:
   TensorType() = default;
 
   TensorType(DType dtype, Shape shape) : dtype_(dtype), shape_(std::move(shape)) {}
 
+  /// Normalises `strides`: a layout equal to the contiguous one is recorded as contiguous, so the
+  /// two ways of spelling it are one type.
+  TensorType(DType dtype, Shape shape, Strides strides);
+
   [[nodiscard]] DType dtype() const { return dtype_; }
 
   [[nodiscard]] const Shape& shape() const { return shape_; }
 
-  /// Renders as it appears in the IR: `f32[4,8]`, `i64[]`, `f32[?,16]`.
+  /// The layout, or empty when it is the contiguous one.
+  [[nodiscard]] const Strides& strides() const { return strides_; }
+
+  /// Whether the elements are packed in row-major order, which is what every kernel here reads.
+  [[nodiscard]] bool is_contiguous() const { return strides_.empty(); }
+
+  /// The same type laid out contiguously, which is what materialising this value produces.
+  [[nodiscard]] TensorType contiguous() const { return {dtype_, shape_}; }
+
+  /// Renders as it appears in the IR: `f32[4,8]`, `i64[]`, `f32[?,16]`, `f32[4,8:1,4]`.
   [[nodiscard]] std::string to_string() const;
 
   friend bool operator==(const TensorType& a, const TensorType& b) {
-    return a.dtype_ == b.dtype_ && a.shape_ == b.shape_;
+    // Layout is part of the type. Two values of the same shape and dtype in different layouts
+    // cannot share a loop, and fusion decides that by comparing types.
+    return a.dtype_ == b.dtype_ && a.shape_ == b.shape_ && a.strides_ == b.strides_;
   }
 
   friend bool operator!=(const TensorType& a, const TensorType& b) { return !(a == b); }
@@ -100,9 +129,10 @@ class TensorType {
  private:
   DType dtype_ = DType::kF32;
   Shape shape_;
+  Strides strides_;
 };
 
-/// Parses `f32[4,8]`, `i64[]` or `f32[?,16]`.
+/// Parses `f32[4,8]`, `i64[]`, `f32[?,16]` or a strided `f32[4,8:1,4]`.
 Result<TensorType> parse_tensor_type(std::string_view text);
 
 /// Parses a whole `std::string_view` as an integer, rejecting trailing characters.
