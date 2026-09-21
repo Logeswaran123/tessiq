@@ -10,8 +10,11 @@
 #include <ATen/EmptyTensor.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/native/CPUFallback.h>
+#include <ATen/ops/_reshape_alias_native.h>
+#include <ATen/ops/as_strided_native.h>
 #include <ATen/ops/empty.h>
 #include <ATen/ops/empty_strided.h>
+#include <ATen/ops/view_native.h>
 #include <algorithm>
 #include <c10/core/ScalarType.h>
 #include <cstddef>
@@ -294,6 +297,22 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("_copy_from", &copy_from);
   m.impl("_copy_from_and_resize", &copy_from_and_resize);
   m.impl("resize_", &resize);
+
+  // A view operation returns a tensor sharing its input's storage. The fallback cannot do that:
+  // it copies to the host, runs there, and copies back, so what comes back is a different buffer.
+  // torch warns about it, and the result is wrong rather than slow, because writing through the
+  // view does not reach the tensor it was taken from.
+  //
+  // These three are the whole set that has to be here. Everything else that rearranges indices,
+  // permute and transpose and squeeze and the rest, is written in terms of as_strided, and gets
+  // it right once as_strided does. They need explicit entries only because the catch-all
+  // fallback above shadows the implementations they would otherwise reach.
+  //
+  // The implementations are ATen's own. All three change sizes, strides and an offset and touch
+  // no data, so there is nothing device-specific for tessiq to supply.
+  m.impl("as_strided", at::native::as_strided_tensorimpl);
+  m.impl("view", at::native::view);
+  m.impl("_reshape_alias", at::native::_reshape_alias);
 }
 
 } // namespace
