@@ -112,3 +112,23 @@ def test_every_category_is_one_the_generator_knows(category: str) -> None:
         f"no operation is {category}; the generator would still accept it, "
         "but nothing exercises that path"
     )
+
+
+def test_reductions_are_in_the_table_without_kernels() -> None:
+    # A reduction is in the table so that shape inference and partitioning know what it is, and
+    # without a kernel because it needs a loop shape the emitter cannot write yet.
+    reductions = [op for op in operations() if op["category"] == "reduction"]
+    assert reductions, "the reduction category is empty"
+    for op in reductions:
+        assert not op["kernel"], f"{op['name']} claims a kernel the emitter cannot produce"
+        assert not op.get("expression"), f"{op['name']} has an expression"
+
+
+def test_shape_inference_reads_the_dimensions_off_the_node() -> None:
+    graph = (
+        "graph @g(%a: f32[4,8,3]) -> f32[?,?] {\n"
+        "  %s = aten.sum.dim_IntList(%a) {arg1 = [1]} : f32[?,?]\n"
+        "  return %s\n"
+        "}\n"
+    )
+    assert "f32[4,3]" in tessiq.run_passes(graph, "shape-infer")

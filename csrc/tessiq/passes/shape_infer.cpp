@@ -78,7 +78,8 @@ class ShapeInference final : public Pass {
         operands.push_back(node->operand(i)->type());
       }
 
-      TESSIQ_ASSIGN_OR_RETURN(const auto inferred, infer_result_types(node->op(), operands));
+      TESSIQ_ASSIGN_OR_RETURN(const auto inferred,
+                              infer_result_types(node->op(), operands, node->attributes()));
 
       if (inferred.size() != node->result_count()) {
         return invalid_argument("'" + node->op() + "' produces " + std::to_string(inferred.size()) +

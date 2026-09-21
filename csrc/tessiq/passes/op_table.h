@@ -15,6 +15,8 @@ enum class OpCategory {
   /// Computes output position i from the inputs at position i, so it can share a loop with its
   /// neighbours.
   kElementwise,
+  /// Reads many positions to write one, along dimensions the node names rather than the table.
+  kReduction,
   /// Reads positions it is not writing. Runs on its own however many kernels it has.
   kMatmul,
 };

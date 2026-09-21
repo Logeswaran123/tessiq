@@ -1,0 +1,19 @@
+// RUN: shape-infer
+// torch spells sum(x) as the dim_IntList form with an empty list, and the .default spellings carry
+// no list at all. Both mean every dimension, and both leave a rank-0 tensor.
+//
+// The types are already written down because a rank-0 result has no dimensions to leave unknown,
+// and f32[?] is rank 1 rather than a placeholder for any rank. So this is the other half of what
+// the pass does: checking a recorded type against the one the rule derives, which fails the pass
+// if they disagree.
+graph @g(%a: f32[4,8]) -> f32[] {
+  %s = aten.sum.dim_IntList(%a) {arg1 = []} : f32[]
+  %m = aten.mean.default(%a) : f32[]
+  return %s
+}
+// ---
+graph @g(%a: f32[4,8]) -> f32[] {
+  %s = aten.sum.dim_IntList(%a) {arg1 = []} : f32[]
+  %m = aten.mean.default(%a) : f32[]
+  return %s
+}

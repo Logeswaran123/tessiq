@@ -233,3 +233,53 @@ def test_an_elementwise_kernel_agrees_with_eager(name: str) -> None:
     # functions compared against PyTorch's CPU implementations, so anything looser would be hiding
     # a wrong expression rather than accommodating float32.
     torch.testing.assert_close(compiled(*inputs), model(*inputs), rtol=1e-6, atol=1e-5)
+
+
+# --- reductions ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "call"),
+    [
+        ("sum", lambda t: torch.sum(t, dim=1)),
+        ("sum_keepdim", lambda t: torch.sum(t, dim=1, keepdim=True)),
+        ("sum_all", torch.sum),
+        ("mean", lambda t: torch.mean(t, dim=-1)),
+        ("mean_all", torch.mean),
+        ("amax", lambda t: torch.amax(t, dim=1)),
+        ("amin", lambda t: torch.amin(t, dim=0)),
+    ],
+)
+def test_a_reduction_after_a_kernel_agrees_with_eager(
+    name: str, call: Callable[[torch.Tensor], torch.Tensor]
+) -> None:
+    # The reduction itself has no kernel yet and reaches PyTorch through the fallback. What is
+    # being checked is the seam: the fused kernel writes an intermediate, the reduction reads it,
+    # and the answer is the one eager gives. A kernel that wrote the wrong shape or left the
+    # result on the wrong device would show up here rather than in phase 7.4.
+    def model(x: torch.Tensor) -> torch.Tensor:
+        return call(torch.relu(x * 2.0))
+
+    x = torch.randn(4, 8)
+    recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
+    assert len(recipe.kernels) == 1, f"{name} lost the kernel in front of it: {recipe.kernels}"
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(x), model(x), rtol=1e-6, atol=1e-5)
+
+
+def test_a_reduction_between_two_kernels_agrees_with_eager() -> None:
+    def model(x: torch.Tensor) -> torch.Tensor:
+        s = torch.sum(torch.relu(x * 2.0), dim=1, keepdim=True)
+        return torch.tanh(torch.abs(s) + 1.0)
+
+    x = torch.randn(4, 8)
+    recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
+    assert len(recipe.kernels) == 2, recipe.kernels
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(x), model(x), rtol=1e-6, atol=1e-5)

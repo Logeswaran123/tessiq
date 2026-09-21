@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "tessiq/ir/graph.h"
 #include "tessiq/ir/types.h"
 #include "tessiq/support/result.h"
 
@@ -39,7 +40,13 @@ Result<ir::Shape> broadcast_shapes(const ir::Shape& a, const ir::Shape& b);
 ///
 /// Operand types are the tensor operands only. A scalar argument is an attribute rather than an
 /// operand, so a binary op called with one tensor and one constant arrives here with one operand.
+///
+/// Attributes are the node's, because some rules need them. A reduction's result shape depends on
+/// which dimensions it reduces and whether it keeps them, and both are attributes rather than
+/// operands. They are a required argument rather than a defaulted one so that a caller cannot
+/// quietly leave them out and get the answer for a reduction over every dimension.
 Result<std::vector<ir::TensorType>> infer_result_types(std::string_view op,
-                                                       const std::vector<ir::TensorType>& operands);
+                                                       const std::vector<ir::TensorType>& operands,
+                                                       const ir::AttributeMap& attributes);
 
 } // namespace tessiq::passes

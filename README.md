@@ -49,10 +49,10 @@ graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
 **Anything outside a fused chain still runs on the host.** An op the backend has no kernel for
 reaches PyTorch's CPU implementation through the fallback, which costs two transfers. What is fast
 is what fuses: a chain of elementwise operations becomes one kernel, its intermediates never leave
-a register, and the generated code is cached as a cubin between runs. Thirty-three elementwise
-operations have kernels and matmul does not;
-[`docs/op_coverage.md`](docs/op_coverage.md) is generated from
-[`ops.toml`](ops.toml) and lists them. [PHASES.md](PHASES.md) has the full breakdown.
+a register, and the generated code is cached as a cubin between runs. Thirty-three of the 38
+operations the compiler knows have kernels. The reductions and matmul do not, so they run on the
+host and end the group they sit in. [`docs/op_coverage.md`](docs/op_coverage.md) is generated from
+[`ops.toml`](ops.toml) and lists all of them. [PHASES.md](PHASES.md) has the full breakdown.
 
 `(a*b + c).relu().sigmoid()` on 4M floats on an RTX 5080. The generated kernel is good and the
 path around it is not, so both are measured. From
