@@ -66,6 +66,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - Runtime compilation through NVRTC, with the compiler's own log on failure, and an on-disk
   cubin cache keyed by the source, the architecture and the compiler version. Set
   `TESSIQ_CACHE_DIR` to move it; a directory it cannot write only makes compiling slower.
+- Loading and launching generated kernels through the CUDA driver, with modules kept for the
+  life of the process. `device_capability()` reports what a cubin has to be built for.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq
