@@ -61,7 +61,18 @@ Result<ir::TensorType> tensor_type(const at::Tensor& tensor) {
   for (const auto dim : tensor.sizes()) {
     dims.push_back(dim);
   }
-  return ir::TensorType(dtype, ir::Shape(std::move(dims)));
+
+  // Taken from the fake tensor rather than derived. A permute produces a value with the same
+  // shape as something contiguous and a different order of steps through it, and torch has
+  // already worked out which. Deriving it here would be a second implementation of that, and the
+  // two would disagree on the first operation this compiler did not model exactly.
+  ir::Strides strides;
+  strides.reserve(static_cast<std::size_t>(tensor.dim()));
+  for (const auto stride : tensor.strides()) {
+    strides.push_back(stride);
+  }
+
+  return ir::TensorType(dtype, ir::Shape(std::move(dims)), std::move(strides));
 }
 
 /// The types an FX node produces, one per result.
