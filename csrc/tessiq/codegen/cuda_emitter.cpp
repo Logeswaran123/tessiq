@@ -50,7 +50,11 @@ std::string substitute(std::string_view expression, const std::vector<Argument>&
       out += expression[i];
       continue;
     }
-    out += args[index].is_value ? "v_" + args[index].text : args[index].text;
+    // A constant is constructed at the element type rather than written bare. `v * 0.1` is a
+    // double multiply narrowed afterwards, and for a constant that is not exactly representable
+    // in float that is not the same number as a float multiply. The compiler folds the harmless
+    // cases either way, so this costs nothing and removes the ones it cannot.
+    out += args[index].is_value ? "v_" + args[index].text : "scalar_t(" + args[index].text + ")";
     ++i;
   }
   return out;

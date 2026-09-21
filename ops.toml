@@ -1,0 +1,114 @@
+# Operations tessiq knows about.
+#
+# One row per operation, which is the point: whether it is elementwise, how many arguments it
+# takes, what it computes and whether a kernel exists all come from the same place. Two tables
+# holding overlapping facts is how an operation gets half-added, and that has happened here once
+# already.
+#
+# `tools/gen_ops.py` turns this into the C++ table and into docs/op_coverage.md. Both are checked
+# in and a test asserts regenerating changes nothing, so editing the generated files by hand
+# fails rather than drifts.
+#
+# Fields:
+#   name        the short spelling, used in hand-written IR
+#   aten        the spellings torch emits, which is what an imported graph carries
+#   category    elementwise | matmul. Decides what a pass may do with it, not whether it runs
+#   arity       arguments including constants that arrived as attributes
+#   expression  the scalar computation, $0 and $1 for the arguments. Elementwise only
+#   kernel      whether the backend can run it. An operation without one falls back to the host
+#
+# TOML rather than YAML. On 3.11 and later the parser is in the standard library, and on 3.10,
+# which this project still supports, it is tomli: the same parser under its original name, listed
+# in requirements-dev.txt and needed only to regenerate. PyYAML would be a dependency on every
+# version.
+
+[[op]]
+name = "abs"
+aten = ["aten.abs.default"]
+category = "elementwise"
+arity = 1
+expression = "fabs($0)"
+kernel = true
+
+[[op]]
+name = "add"
+aten = ["aten.add.Tensor", "aten.add.Scalar"]
+category = "elementwise"
+arity = 2
+expression = "($0 + $1)"
+kernel = true
+
+[[op]]
+name = "div"
+aten = ["aten.div.Tensor", "aten.div.Scalar"]
+category = "elementwise"
+arity = 2
+expression = "($0 / $1)"
+kernel = true
+
+[[op]]
+name = "mul"
+aten = ["aten.mul.Tensor", "aten.mul.Scalar"]
+category = "elementwise"
+arity = 2
+expression = "($0 * $1)"
+kernel = true
+
+[[op]]
+name = "neg"
+aten = ["aten.neg.default"]
+category = "elementwise"
+arity = 1
+expression = "(-$0)"
+kernel = true
+
+[[op]]
+name = "relu"
+aten = ["aten.relu.default"]
+category = "elementwise"
+arity = 1
+expression = "($0 > scalar_t(0) ? $0 : scalar_t(0))"
+kernel = true
+
+[[op]]
+name = "sigmoid"
+aten = ["aten.sigmoid.default"]
+category = "elementwise"
+arity = 1
+expression = "(scalar_t(1) / (scalar_t(1) + exp(-$0)))"
+kernel = true
+
+# Elementwise, and no kernel. The two are separate questions and this row is what the difference
+# looks like: a chain containing sqrt fuses either side of it and not through it.
+[[op]]
+name = "sqrt"
+aten = ["aten.sqrt.default"]
+category = "elementwise"
+arity = 1
+expression = "sqrt($0)"
+kernel = false
+
+[[op]]
+name = "sub"
+aten = ["aten.sub.Tensor", "aten.sub.Scalar"]
+category = "elementwise"
+arity = 2
+expression = "($0 - $1)"
+kernel = true
+
+[[op]]
+name = "tanh"
+aten = ["aten.tanh.default"]
+category = "elementwise"
+arity = 1
+expression = "tanh($0)"
+kernel = true
+
+# Reads positions it is not writing, so it can never join an elementwise loop however many kernels
+# it eventually has.
+[[op]]
+name = "mm"
+aten = ["aten.mm.default"]
+category = "matmul"
+arity = 2
+kernel = false

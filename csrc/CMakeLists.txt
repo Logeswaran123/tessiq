@@ -77,6 +77,7 @@ add_library(tessiq_ir STATIC
   tessiq/passes/fuse.cpp
   tessiq/passes/mark_supported.cpp
   tessiq/passes/op_support.cpp
+  tessiq/passes/op_table.cpp
   tessiq/passes/op_traits.cpp
   tessiq/passes/pass.cpp
   tessiq/passes/shape_infer.cpp
