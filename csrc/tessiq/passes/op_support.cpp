@@ -10,30 +10,9 @@
 #include <utility>
 #include <vector>
 
+#include "tessiq/passes/op_table.h"
+
 namespace tessiq::passes {
-
-namespace {
-
-/// Elementwise operations, which is what fusion will target first.
-///
-/// The ATen spellings are what the importer produces, so this list is comparable against a real
-/// imported graph without translation.
-const std::vector<std::string>& builtin_ops() {
-  static const std::vector<std::string> ops{
-      "aten.abs.default",
-      "aten.add.Tensor",
-      "aten.div.Tensor",
-      "aten.mul.Tensor",
-      "aten.neg.default",
-      "aten.relu.default",
-      "aten.sigmoid.default",
-      "aten.sub.Tensor",
-      "aten.tanh.default",
-  };
-  return ops;
-}
-
-} // namespace
 
 OpSupport::OpSupport(std::vector<std::string> ops) {
   for (auto& op : ops) {
@@ -54,7 +33,9 @@ void OpSupport::remove(std::string_view op) {
 std::vector<std::string> OpSupport::names() const { return {ops_.begin(), ops_.end()}; }
 
 OpSupport& default_op_support() {
-  static OpSupport support(builtin_ops());
+  // Seeded from the generated table rather than a list here, so an operation gains a kernel in
+  // one place and the coverage document cannot disagree with what the backend claims.
+  static OpSupport support(ops_with_kernels());
   return support;
 }
 

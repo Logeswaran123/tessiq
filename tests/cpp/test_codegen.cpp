@@ -112,7 +112,7 @@ TEST(ExtractTest, AConstantBeforeATensorKeepsItsPosition) {
 
   const auto source = cuda_emitter().emit(*kernel);
   ASSERT_TRUE(source.has_value());
-  EXPECT_NE(source->find("scalar_t v_s = (1.0 - v_a);"), std::string::npos) << *source;
+  EXPECT_NE(source->find("scalar_t v_s = (scalar_t(1.0) - v_a);"), std::string::npos) << *source;
 }
 
 TEST(ExtractTest, AGroupThatIsNotThereIsReported) {

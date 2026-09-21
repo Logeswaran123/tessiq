@@ -72,6 +72,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   compiles each fusion group into one kernel and launches it in place of the operations it covers.
   On a 4M-element `(a*b + c).relu().sigmoid()` that is one launch instead of four and 5.7x faster
   than the same graph without kernels. See `bench/fusion.py`.
+- Operations are defined once, in `ops.toml`. `tools/gen_ops.py` generates the C++ table and
+  `docs/op_coverage.md` from it, and a test fails if either is out of date. The two
+  hand-written tables it replaces disagreed: `aten.add.Scalar` and its siblings were
+  elementwise without being claimed, and are now claimed.
 - `tessiq.partition(gm)`, which imports an FX graph, partitions it, and returns the IR along
   with the cluster each node landed in.
 - `tessiq.execute(gm, clusters)`, which runs a partitioned graph: clustered nodes on a tessiq
