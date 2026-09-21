@@ -1,0 +1,12 @@
+// RUN: shape-infer
+// The dimensions a reduction removes come from an attribute, so the rule needs the node and not
+// just the operand types. Here it drops dimension 1 and keeps the other two.
+graph @g(%a: f32[4,8,3]) -> f32[?,?] {
+  %s = aten.sum.dim_IntList(%a) {arg1 = [1]} : f32[?,?]
+  return %s
+}
+// ---
+graph @g(%a: f32[4,8,3]) -> f32[4,3] {
+  %s = aten.sum.dim_IntList(%a) {arg1 = [1]} : f32[4,3]
+  return %s
+}

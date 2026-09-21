@@ -145,3 +145,51 @@ def test_dtype_does_not_prevent_fusion(dtype: torch.dtype) -> None:
         torch.randn(32, dtype=dtype),
     )
     assert groups(ir) == {0: 3}, ir
+
+
+def fusion_group_of(ir: str, op: str) -> int | None:
+    """The fusion group `op` landed in, or None if it was left out of every group."""
+    for line in ir.splitlines():
+        if op not in line:
+            continue
+        match = re.search(r"tessiq\.fusion = (\d+)", line)
+        return int(match.group(1)) if match else None
+    raise AssertionError(f"{op} is not in the graph:\n{ir}")
+
+
+def test_a_reduction_ends_the_group_and_the_chain_before_it_still_fuses() -> None:
+    # A reduction reads a whole axis to write one element, so it cannot share a loop that gives
+    # each thread one index. What matters is that it ends the group without breaking the part in
+    # front of it, which is where the work is.
+    def model(a: torch.Tensor) -> torch.Tensor:
+        return torch.sum(torch.relu(a * 2.0), dim=1)
+
+    ir = fused(model, torch.randn(4, 8))
+    assert groups(ir) == {0: 2}, ir
+    assert fusion_group_of(ir, "aten.sum.dim_IntList") is None, ir
+    assert fusion_group_of(ir, "aten.relu.default") == 0, ir
+
+
+def test_a_reduction_between_two_chains_splits_them() -> None:
+    def model(a: torch.Tensor) -> torch.Tensor:
+        x = torch.relu(a * 2.0)
+        s = torch.sum(x, dim=1, keepdim=True)
+        return torch.tanh(torch.abs(s) + 1.0)
+
+    ir = fused(model, torch.randn(4, 8))
+    # Two groups either side of the reduction, of two and three operations.
+    assert sorted(groups(ir).values()) == [2, 3], ir
+    assert fusion_group_of(ir, "aten.sum.dim_IntList") is None, ir
+    assert fusion_group_of(ir, "aten.mul.Tensor") != fusion_group_of(ir, "aten.tanh.default"), ir
+
+
+def test_keepdim_is_carried_through_to_the_ir() -> None:
+    # torch passes keepdim positionally, so it arrives as arg2 rather than under its own name.
+    # The shape rule reads it from there, so it is worth pinning that it survives the import.
+    def model(a: torch.Tensor) -> torch.Tensor:
+        return torch.sum(a, dim=1, keepdim=True)
+
+    ir = fused(model, torch.randn(4, 8))
+    assert "arg1 = [1]" in ir, ir
+    assert "arg2 = true" in ir, ir
+    assert "f32[4,1]" in ir, ir

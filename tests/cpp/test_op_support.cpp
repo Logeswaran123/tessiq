@@ -76,26 +76,62 @@ TEST(DefaultOpSupportTest, ListsTheElementwiseOpsTheImporterProduces) {
   EXPECT_TRUE(support.supports("aten.relu.default"));
 }
 
-/// Takes an operation out of the global support set for the duration of a test and puts it back.
+/// Claims or unclaims an operation for the duration of a test and restores what it found.
 ///
 /// The set is a global because partitioning reads it without being handed one, so a test that
 /// wants a different answer has to change it and change it back, including when the test fails.
-class WithoutSupportFor {
+class SupportOverride {
  public:
-  explicit WithoutSupportFor(std::string op) : op_(std::move(op)) {
-    default_op_support().remove(op_);
+  SupportOverride(std::string op, bool claimed)
+      : op_(std::move(op)), restore_(default_op_support().supports(op_)) {
+    apply(claimed);
   }
 
-  WithoutSupportFor(const WithoutSupportFor&) = delete;
-  WithoutSupportFor& operator=(const WithoutSupportFor&) = delete;
-  WithoutSupportFor(WithoutSupportFor&&) = delete;
-  WithoutSupportFor& operator=(WithoutSupportFor&&) = delete;
+  SupportOverride(const SupportOverride&) = delete;
+  SupportOverride& operator=(const SupportOverride&) = delete;
+  SupportOverride(SupportOverride&&) = delete;
+  SupportOverride& operator=(SupportOverride&&) = delete;
 
-  ~WithoutSupportFor() { default_op_support().add(op_); }
+  ~SupportOverride() { apply(restore_); }
 
  private:
+  void apply(bool claimed) {
+    if (claimed) {
+      default_op_support().add(op_);
+    } else {
+      default_op_support().remove(op_);
+    }
+  }
+
   std::string op_;
+  bool restore_;
 };
+
+/// How many fusion groups the pipeline puts `text` into, and which operations went into one.
+struct Grouping {
+  std::size_t groups = 0;
+  std::set<std::string> fused;
+};
+
+Grouping group(std::string_view text) {
+  auto graph = ir::parse(text);
+  EXPECT_TRUE(graph.has_value());
+  PassManager manager;
+  EXPECT_TRUE(manager.add_from_pipeline("mark-supported,cluster,fuse-elementwise").has_value());
+  EXPECT_TRUE(manager.run(**graph).has_value());
+
+  Grouping found;
+  std::set<std::int64_t> seen;
+  for (const ir::Node* node : (*graph)->nodes()) {
+    const ir::Attribute* attribute = node->attribute("tessiq.fusion");
+    if (attribute != nullptr) {
+      seen.insert(std::get<std::int64_t>(*attribute));
+      found.fused.insert(node->op());
+    }
+  }
+  found.groups = seen.size();
+  return found;
+}
 
 TEST(DefaultOpSupportTest, SupportDecidesWhereAChainBreaks) {
   // Fusability and support are separate questions. Every elementwise operation in the table has a
@@ -111,29 +147,31 @@ TEST(DefaultOpSupportTest, SupportDecidesWhereAChainBreaks) {
                                 "  return %o\n"
                                 "}\n";
 
-  const auto fusion_groups = [&text]() {
-    auto graph = ir::parse(text);
-    EXPECT_TRUE(graph.has_value());
-    PassManager manager;
-    EXPECT_TRUE(manager.add_from_pipeline("mark-supported,cluster,fuse-elementwise").has_value());
-    EXPECT_TRUE(manager.run(**graph).has_value());
-
-    std::set<std::int64_t> groups;
-    for (const ir::Node* node : (*graph)->nodes()) {
-      const ir::Attribute* attribute = node->attribute("tessiq.fusion");
-      if (attribute != nullptr) {
-        groups.insert(std::get<std::int64_t>(*attribute));
-      }
-    }
-    return groups.size();
-  };
-
-  EXPECT_EQ(fusion_groups(), 1U) << "the whole chain should fuse while relu has a kernel";
+  EXPECT_EQ(group(text).groups, 1U) << "the whole chain should fuse while relu has a kernel";
   {
-    const WithoutSupportFor no_relu("aten.relu.default");
-    EXPECT_EQ(fusion_groups(), 2U) << "abs/neg and tanh/sigmoid should fuse either side of relu";
+    const SupportOverride no_relu("aten.relu.default", false);
+    EXPECT_EQ(group(text).groups, 2U) << "abs/neg and tanh/sigmoid should fuse either side of relu";
   }
-  EXPECT_EQ(fusion_groups(), 1U) << "the support set was not restored";
+  EXPECT_EQ(group(text).groups, 1U) << "the support set was not restored";
+}
+
+TEST(DefaultOpSupportTest, AReductionStaysOutOfAnElementwiseGroupEvenWhenClaimed) {
+  // sum has no kernel yet, so today it is unclaimed and could not fuse for that reason alone.
+  // Claiming it here removes that reason and leaves only the category, which is what has to refuse
+  // the fusion once the reduction kernel lands. A reduction reads a whole axis to write one
+  // element, so it cannot share a loop that gives each thread one index.
+  const std::string_view text = "graph @g(%a: f32[4,8]) -> f32[4] {\n"
+                                "  %x = aten.abs.default(%a) : f32[4,8]\n"
+                                "  %y = aten.neg.default(%x) : f32[4,8]\n"
+                                "  %s = aten.sum.dim_IntList(%y) {arg1 = [1]} : f32[4]\n"
+                                "  return %s\n"
+                                "}\n";
+
+  const SupportOverride claim_sum("aten.sum.dim_IntList", true);
+  const Grouping found = group(text);
+  EXPECT_EQ(found.groups, 1U) << "abs and neg should still fuse with each other";
+  EXPECT_EQ(found.fused.count("aten.sum.dim_IntList"), 0U) << "the reduction joined the loop";
+  EXPECT_EQ(found.fused.count("aten.abs.default"), 1U);
 }
 
 TEST(DefaultOpSupportTest, DoesNotClaimOpsWithNoKernel) {

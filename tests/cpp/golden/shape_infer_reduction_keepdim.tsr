@@ -1,0 +1,12 @@
+// RUN: shape-infer
+// keepdim arrives as arg2 because torch passes it positionally. The reduced axis stays as 1,
+// which is what makes a reduction broadcast back against its own input.
+graph @g(%a: f32[4,8,3]) -> f32[?,?,?] {
+  %s = aten.mean.dim(%a) {arg1 = [-1], arg2 = true} : f32[?,?,?]
+  return %s
+}
+// ---
+graph @g(%a: f32[4,8,3]) -> f32[4,8,1] {
+  %s = aten.mean.dim(%a) {arg1 = [-1], arg2 = true} : f32[4,8,1]
+  return %s
+}
