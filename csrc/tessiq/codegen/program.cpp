@@ -31,7 +31,6 @@ constexpr std::string_view kLogModule = "program";
 /// 256 is the usual starting point: enough to fill a scheduler, small enough that a block's
 /// registers do not limit how many are resident. Choosing it per kernel needs something to
 /// measure against, so it is one number until there is.
-constexpr unsigned int kBlockSize = 256;
 
 Error driver_error(CUresult status, std::string_view what) {
   const char* name = nullptr;
@@ -76,24 +75,38 @@ class CudaProgram final : public Program {
   TESSIQ_DISALLOW_COPY_AND_MOVE(CudaProgram);
 
   [[nodiscard]] Result<void> launch(const std::vector<void*>& buffers,
-                                    std::int64_t elements) const override {
+                                    const std::vector<std::int64_t>& scalars,
+                                    std::int64_t blocks) const override {
+    if (blocks <= 0) {
+      return invalid_argument("cuLaunchKernel with " + std::to_string(blocks) + " blocks");
+    }
     TESSIQ_RETURN_IF_ERROR(activate(ordinal_));
 
-    // The kernel takes each buffer and then the count. cuLaunchKernel wants pointers to the
-    // arguments rather than the arguments, so this is an array of addresses of the entries above.
+    // The kernel takes each buffer and then each scalar. cuLaunchKernel wants pointers to the
+    // arguments rather than the arguments, so this is an array of addresses of the entries above,
+    // which is why both vectors are copied and have to outlive the call.
     std::vector<void*> values = buffers;
-    std::int64_t count = elements;
+    std::vector<std::int64_t> counts = scalars;
     std::vector<void*> arguments;
-    arguments.reserve(values.size() + 1);
+    arguments.reserve(values.size() + counts.size());
     for (void*& value : values) {
       arguments.push_back(static_cast<void*>(&value));
     }
-    arguments.push_back(static_cast<void*>(&count));
+    for (std::int64_t& count : counts) {
+      arguments.push_back(static_cast<void*>(&count));
+    }
 
-    const auto grid =
-        static_cast<unsigned int>((elements + kBlockSize - 1) / static_cast<int>(kBlockSize));
-    if (const CUresult status = cuLaunchKernel(
-            function_, grid, 1, 1, kBlockSize, 1, 1, 0, nullptr, arguments.data(), nullptr);
+    if (const CUresult status = cuLaunchKernel(function_,
+                                               static_cast<unsigned int>(blocks),
+                                               1,
+                                               1,
+                                               kBlockSize,
+                                               1,
+                                               1,
+                                               0,
+                                               nullptr,
+                                               arguments.data(),
+                                               nullptr);
         status != CUDA_SUCCESS) {
       return driver_error(status, "cuLaunchKernel");
     }

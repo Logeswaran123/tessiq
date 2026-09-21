@@ -253,16 +253,16 @@ def test_an_elementwise_kernel_agrees_with_eager(name: str) -> None:
 def test_a_reduction_after_a_kernel_agrees_with_eager(
     name: str, call: Callable[[torch.Tensor], torch.Tensor]
 ) -> None:
-    # The reduction itself has no kernel yet and reaches PyTorch through the fallback. What is
-    # being checked is the seam: the fused kernel writes an intermediate, the reduction reads it,
-    # and the answer is the one eager gives. A kernel that wrote the wrong shape or left the
-    # result on the wrong device would show up here rather than in phase 7.4.
+    # The seam: a fused kernel writes an intermediate, a reduction kernel reads it, and the
+    # answer is the one eager gives. The reduction sums in a different order than a sequential
+    # host loop does, so the last digits differ and the tolerance is relative.
     def model(x: torch.Tensor) -> torch.Tensor:
         return call(torch.relu(x * 2.0))
 
     x = torch.randn(4, 8)
     recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
-    assert len(recipe.kernels) == 1, f"{name} lost the kernel in front of it: {recipe.kernels}"
+    # One fused kernel for the multiply and relu, one reduction kernel for the reduction itself.
+    assert len(recipe.kernels) == 2, f"{name} did not get both kernels: {recipe.kernels}"
 
     compiled = torch.compile(
         model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
@@ -277,9 +277,109 @@ def test_a_reduction_between_two_kernels_agrees_with_eager() -> None:
 
     x = torch.randn(4, 8)
     recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
-    assert len(recipe.kernels) == 2, recipe.kernels
+    # Two fused groups and the reduction between them.
+    assert len(recipe.kernels) == 3, recipe.kernels
 
     compiled = torch.compile(
         model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
     )
     torch.testing.assert_close(compiled(x), model(x), rtol=1e-6, atol=1e-5)
+
+
+# The shapes that decide which index arithmetic the kernel does. Reducing the last axis walks
+# contiguous memory, reducing the first walks with a stride, and a middle axis does both.
+REDUCTION_SHAPES = [
+    ((4, 8), 1, "last axis, inner 1"),
+    ((4, 8), 0, "first axis, strided"),
+    ((4, 8, 3), 1, "middle axis, outer and inner both set"),
+    ((4, 8, 3), -1, "last axis of a rank-3 tensor"),
+    ((3, 1024), 1, "longer than one block, so the strided loop runs more than once"),
+    ((1, 4096), 1, "one output element from a long axis"),
+    ((512, 3), 1, "many outputs from a short axis"),
+]
+
+
+@pytest.mark.parametrize(("shape", "dim", "why"), REDUCTION_SHAPES)
+@pytest.mark.parametrize("keepdim", [False, True])
+def test_a_reduction_kernel_agrees_with_eager(
+    shape: tuple[int, ...], dim: int, why: str, keepdim: bool
+) -> None:
+    def model(x: torch.Tensor) -> torch.Tensor:
+        return torch.sum(torch.relu(x * 2.0), dim=dim, keepdim=keepdim)
+
+    x = torch.randn(shape)
+    recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
+    assert len(recipe.kernels) == 2, f"{why}: {recipe.kernels}"
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(x), model(x), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda t: torch.sum(t, dim=1),
+        lambda t: torch.mean(t, dim=1),
+        lambda t: torch.amax(t, dim=1),
+        lambda t: torch.amin(t, dim=1),
+        torch.sum,
+        torch.mean,
+    ],
+    ids=["sum", "mean", "amax", "amin", "sum_all", "mean_all"],
+)
+def test_every_reduction_kernel_agrees_with_eager(
+    call: Callable[[torch.Tensor], torch.Tensor],
+) -> None:
+    def model(x: torch.Tensor) -> torch.Tensor:
+        return call(torch.relu(x * 2.0))
+
+    x = torch.randn(4, 300)
+    recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
+    assert len(recipe.kernels) == 2, recipe.kernels
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(x), model(x), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("reduce_op", [torch.amax, torch.amin])
+def test_max_and_min_propagate_a_nan_the_way_torch_does(
+    reduce_op: Callable[..., torch.Tensor],
+) -> None:
+    # fmax and a plain `a > b ? a : b` both return the other operand when one is a NaN, and torch
+    # returns the NaN. The kernel tests for it explicitly, and this is why.
+    x = torch.randn(4, 300)
+    x[2, 17] = float("nan")
+
+    def model(t: torch.Tensor) -> torch.Tensor:
+        return reduce_op(torch.abs(t) * 2.0, dim=1)
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    got = compiled(x)
+    assert torch.isnan(got[2]), got
+    torch.testing.assert_close(got, model(x), rtol=1e-5, atol=1e-5, equal_nan=True)
+
+
+def test_an_axis_set_the_kernel_cannot_express_falls_back() -> None:
+    # Reducing the first and last axes of a rank-3 tensor leaves the kept axis in the middle, which
+    # [outer, reduce, inner] cannot describe. There is no kernel for it and the answer still has to
+    # be right, which is what the fallback is for.
+    def model(x: torch.Tensor) -> torch.Tensor:
+        return torch.sum(torch.relu(x * 2.0), dim=(0, 2))
+
+    x = torch.randn(4, 8, 3)
+    recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
+    # The fused kernel in front of it, and nothing for the reduction.
+    assert list(recipe.kernels) == ["relu"], (
+        f"the reduction should have no kernel: {recipe.kernels}"
+    )
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(x), model(x), rtol=1e-5, atol=1e-5)

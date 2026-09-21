@@ -83,6 +83,7 @@ def table(ops: list[dict[str, Any]]) -> str:
         expression = escape(row.get("expression", ""))
         lines.append(
             f'    {{"{row["spelling"]}", '
+            f'"{row["name"]}", '
             f"OpCategory::{CATEGORIES[row['category']]}, "
             f"{row['arity']}, "
             f'"{expression}", '

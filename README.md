@@ -49,10 +49,11 @@ graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
 **Anything outside a fused chain still runs on the host.** An op the backend has no kernel for
 reaches PyTorch's CPU implementation through the fallback, which costs two transfers. What is fast
 is what fuses: a chain of elementwise operations becomes one kernel, its intermediates never leave
-a register, and the generated code is cached as a cubin between runs. Thirty-three of the 38
-operations the compiler knows have kernels. The reductions and matmul do not, so they run on the
-host and end the group they sit in. [`docs/op_coverage.md`](docs/op_coverage.md) is generated from
-[`ops.toml`](ops.toml) and lists all of them. [PHASES.md](PHASES.md) has the full breakdown.
+a register, and the generated code is cached as a cubin between runs. Reductions get a kernel of
+their own, since they read a whole axis to write one element and cannot share that loop.
+Thirty-seven of the 38 operations the compiler knows have kernels; only matmul does not.
+[`docs/op_coverage.md`](docs/op_coverage.md) is generated from [`ops.toml`](ops.toml) and lists all
+of them. [PHASES.md](PHASES.md) has the full breakdown.
 
 `(a*b + c).relu().sigmoid()` on 4M floats on an RTX 5080. The generated kernel is good and the
 path around it is not, so both are measured. From
@@ -67,11 +68,23 @@ Three loads, four operations in registers, one store, and near the bandwidth the
 Measure the whole call from host tensors instead and PyTorch wins by 60x, because tessiq moves 48
 MB to the device and 16 MB back every call and the kernel is one percent of what that costs. Only
 part of a graph is claimed today, so every unclaimed operation pulls its operands back to the
-host. Reductions and matmul are still on that list.
+host. Matmul is still on that list.
 
 Within tessiq, a kernel beats running the same graph without one by 5.7x
 ([`bench/fusion.py`](bench/fusion.py)). Compilation costs 440 us and a cached recipe costs 110 us
 ([`bench/compile_overhead.py`](bench/compile_overhead.py)).
+
+Reductions, from [`bench/reduction.py`](bench/reduction.py), summing a 4096 by 4096 tensor with
+the data already on the device:
+
+| | tessiq | torch |
+|---|---|---|
+| last axis | 1387 GB/s | 1388 GB/s |
+| first axis | 601 GB/s | 1261 GB/s |
+
+Reducing the last axis reads contiguous memory and lands where PyTorch does. Reducing the first
+reads with a stride and is 2.1x behind, and a short axis with many outputs is further behind than
+that, because a block of 256 threads combining 64 elements leaves most of them idle.
 
 ## How it fits together
 

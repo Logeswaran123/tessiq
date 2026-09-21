@@ -107,55 +107,6 @@ const ir::Attribute* attribute_or_null(const ir::AttributeMap& attributes, std::
   return it == attributes.end() ? nullptr : &it->second;
 }
 
-/// Which dimensions a reduction reduces, normalised against `rank` and sorted.
-///
-/// An absent list and an empty list both mean every dimension. torch spells `sum(x)` as the
-/// dim_IntList form with an empty list, and the `.default` spellings carry no list at all, so the
-/// two have to agree. A single integer is accepted because IR written by hand tends to say
-/// `{arg1 = 1}` where an imported graph says `{arg1 = [1]}`.
-Result<std::vector<std::size_t>>
-reduced_dims(std::string_view op, const ir::AttributeMap& attributes, std::size_t rank) {
-  const ir::Attribute* dims = attribute_or_null(attributes, "arg1");
-
-  std::vector<std::int64_t> requested;
-  if (dims != nullptr) {
-    if (const auto* list = std::get_if<std::vector<std::int64_t>>(dims)) {
-      requested = *list;
-    } else if (const auto* single = std::get_if<std::int64_t>(dims)) {
-      requested = {*single};
-    } else {
-      return invalid_argument(std::string(op) +
-                              " takes its dimensions as an integer or a list of integers");
-    }
-  }
-
-  std::vector<std::size_t> normalised;
-  if (requested.empty()) {
-    normalised.resize(rank);
-    for (std::size_t i = 0; i < rank; ++i) {
-      normalised[i] = i;
-    }
-    return normalised;
-  }
-
-  const auto signed_rank = static_cast<std::int64_t>(rank);
-  for (const std::int64_t dim : requested) {
-    // Negative indexes count from the end, which is how torch writes the last axis.
-    const std::int64_t resolved = dim < 0 ? dim + signed_rank : dim;
-    if (resolved < 0 || resolved >= signed_rank) {
-      return invalid_argument(std::string(op) + " reduces dimension " + std::to_string(dim) +
-                              " of a rank-" + std::to_string(rank) + " tensor");
-    }
-    normalised.push_back(static_cast<std::size_t>(resolved));
-  }
-
-  std::sort(normalised.begin(), normalised.end());
-  if (std::adjacent_find(normalised.begin(), normalised.end()) != normalised.end()) {
-    return invalid_argument(std::string(op) + " reduces the same dimension twice");
-  }
-  return normalised;
-}
-
 /// Whether the reduced dimensions stay as 1 rather than being dropped.
 ///
 /// torch passes keepdim positionally, so it arrives as `arg2`. The keyword spelling is accepted
@@ -181,7 +132,7 @@ Result<std::vector<ir::TensorType>> infer_reduction(std::string_view op,
 
   const ir::TensorType& input = operands.front();
   const std::size_t rank = input.shape().rank();
-  TESSIQ_ASSIGN_OR_RETURN(const std::vector<std::size_t> dims, reduced_dims(op, attributes, rank));
+  TESSIQ_ASSIGN_OR_RETURN(const std::vector<std::size_t> dims, reduced_axes(op, attributes, rank));
 
   const bool keepdim = keeps_dims(attributes);
   std::vector<std::int64_t> result;
@@ -254,6 +205,51 @@ Result<ir::Shape> broadcast_shapes(const ir::Shape& a, const ir::Shape& b) {
 }
 
 bool has_shape_rule(std::string_view op) { return find_rule(op).has_value(); }
+
+Result<std::vector<std::size_t>>
+reduced_axes(std::string_view op, const ir::AttributeMap& attributes, std::size_t rank) {
+  const ir::Attribute* dims = attribute_or_null(attributes, "arg1");
+
+  std::vector<std::int64_t> requested;
+  if (dims != nullptr) {
+    if (const auto* list = std::get_if<std::vector<std::int64_t>>(dims)) {
+      requested = *list;
+    } else if (const auto* single = std::get_if<std::int64_t>(dims)) {
+      requested = {*single};
+    } else {
+      return invalid_argument(std::string(op) +
+                              " takes its axes as an integer or a list of integers");
+    }
+  }
+
+  // Built with push_back rather than resized and indexed. A rank-0 tensor gives an empty vector
+  // whose data pointer may be null, and GCC cannot see that the loop guard prevents the write.
+  std::vector<std::size_t> axes;
+  axes.reserve(rank);
+  if (requested.empty()) {
+    for (std::size_t i = 0; i < rank; ++i) {
+      axes.push_back(i);
+    }
+    return axes;
+  }
+
+  const auto signed_rank = static_cast<std::int64_t>(rank);
+  for (const std::int64_t dim : requested) {
+    // Negative indexes count from the end, which is how torch writes the last axis.
+    const std::int64_t resolved = dim < 0 ? dim + signed_rank : dim;
+    if (resolved < 0 || resolved >= signed_rank) {
+      return invalid_argument(std::string(op) + " reduces dimension " + std::to_string(dim) +
+                              " of a rank-" + std::to_string(rank) + " tensor");
+    }
+    axes.push_back(static_cast<std::size_t>(resolved));
+  }
+
+  std::sort(axes.begin(), axes.end());
+  if (std::adjacent_find(axes.begin(), axes.end()) != axes.end()) {
+    return invalid_argument(std::string(op) + " reduces the same dimension twice");
+  }
+  return axes;
+}
 
 Result<std::vector<ir::TensorType>> infer_result_types(std::string_view op,
                                                        const std::vector<ir::TensorType>& operands,

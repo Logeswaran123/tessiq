@@ -114,13 +114,14 @@ def test_every_category_is_one_the_generator_knows(category: str) -> None:
     )
 
 
-def test_reductions_are_in_the_table_without_kernels() -> None:
-    # A reduction is in the table so that shape inference and partitioning know what it is, and
-    # without a kernel because it needs a loop shape the emitter cannot write yet.
+def test_reductions_have_kernels_but_no_expression() -> None:
+    # A reduction has a kernel, and it is not an expression. An elementwise row says what one
+    # element computes and the emitter drops it into a shared loop; a reduction is a whole kernel
+    # of its own, so the table says which operation it is and the emitter writes the rest.
     reductions = [op for op in operations() if op["category"] == "reduction"]
     assert reductions, "the reduction category is empty"
     for op in reductions:
-        assert not op["kernel"], f"{op['name']} claims a kernel the emitter cannot produce"
+        assert op["kernel"], f"{op['name']} has no kernel"
         assert not op.get("expression"), f"{op['name']} has an expression"
 
 

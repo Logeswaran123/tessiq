@@ -81,11 +81,13 @@ Result<CompiledGraph> build_recipe_fx(const pybind11::object& graph_module,
   TESSIQ_ASSIGN_OR_RETURN(compiled.recipe, ir::build_recipe(*graph, alignment));
   if (ordinal >= 0) {
     TESSIQ_ASSIGN_OR_RETURN(compiled.kernels, compile_fused(*graph, ordinal));
+    TESSIQ_ASSIGN_OR_RETURN(compiled.reductions, compile_reductions(*graph, ordinal));
   }
 
   TESSIQ_LOG(kDebug, kLogModule) << "recipe with " << compiled.recipe.steps.size()
                                  << " step(s), arena " << compiled.recipe.arena_bytes << " bytes, "
-                                 << compiled.kernels.size() << " kernel(s)";
+                                 << compiled.kernels.size() << " kernel(s), "
+                                 << compiled.reductions.size() << " reduction(s)";
   return compiled;
 }
 

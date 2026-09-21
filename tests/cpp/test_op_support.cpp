@@ -176,9 +176,16 @@ TEST(DefaultOpSupportTest, AReductionStaysOutOfAnElementwiseGroupEvenWhenClaimed
 
 TEST(DefaultOpSupportTest, DoesNotClaimOpsWithNoKernel) {
   const OpSupport& support = default_op_support();
-  EXPECT_FALSE(support.supports("aten.mm.default")) << "matmul is not elementwise";
-  EXPECT_FALSE(support.supports("aten.sum.dim_IntList")) << "reductions are not in yet";
+  EXPECT_FALSE(support.supports("aten.mm.default")) << "matmul has no kernel shape";
   EXPECT_FALSE(support.supports("aten.convolution.default"));
+}
+
+TEST(DefaultOpSupportTest, ClaimsReductions) {
+  const OpSupport& support = default_op_support();
+  EXPECT_TRUE(support.supports("aten.sum.dim_IntList"));
+  EXPECT_TRUE(support.supports("aten.mean.dim"));
+  EXPECT_TRUE(support.supports("aten.amax.default"));
+  EXPECT_TRUE(support.supports("aten.amin.default"));
 }
 
 } // namespace

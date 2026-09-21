@@ -222,9 +222,41 @@ PYBIND11_MODULE(_C, m) {
           py::arg("out"),
           "Runs the kernel. Asynchronous, so the caller orders the result against what reads it.");
 
+  // Exposes `inputs` as a one-element list and takes `launch` the same way FusedKernel does, so
+  // the executor runs both kinds through one path and does not branch on which it has.
+  py::class_<tessiq::torch_backend::ReductionKernel>(m, "ReductionKernel")
+      .def_readonly("output", &tessiq::torch_backend::ReductionKernel::output)
+      .def_property_readonly("inputs",
+                             [](const tessiq::torch_backend::ReductionKernel& kernel) {
+                               return std::vector<std::string>{kernel.input};
+                             })
+      .def_readonly("outer", &tessiq::torch_backend::ReductionKernel::outer)
+      .def_readonly("reduce", &tessiq::torch_backend::ReductionKernel::reduce)
+      .def_readonly("inner", &tessiq::torch_backend::ReductionKernel::inner)
+      .def_readonly("blocks", &tessiq::torch_backend::ReductionKernel::blocks)
+      .def_property_readonly("elements", &tessiq::torch_backend::ReductionKernel::inputs)
+      .def(
+          "launch",
+          [](const tessiq::torch_backend::ReductionKernel& kernel,
+             const std::vector<at::Tensor>& inputs,
+             const at::Tensor& out) {
+            if (inputs.size() != 1) {
+              raise_from_error(tessiq::invalid_argument("a reduction takes one input, got " +
+                                                        std::to_string(inputs.size())));
+            }
+            auto result = kernel.launch(inputs.front(), out);
+            if (!result) {
+              raise_from_error(result.error());
+            }
+          },
+          py::arg("inputs"),
+          py::arg("out"),
+          "Runs the reduction. Asynchronous, like a fused kernel's launch.");
+
   py::class_<tessiq::torch_backend::CompiledGraph>(m, "CompiledGraph")
       .def_readonly("recipe", &tessiq::torch_backend::CompiledGraph::recipe)
-      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels);
+      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels)
+      .def_readonly("reductions", &tessiq::torch_backend::CompiledGraph::reductions);
 
   m.def(
       "build_recipe_fx",
