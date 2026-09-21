@@ -15,8 +15,8 @@ work it describes.
 | 3 | IR and pass infrastructure | done |
 | 4 | Graph capture | done |
 | 5 | Shape inference, memory planning, recipe cache | done |
-| 6 | Fusion and CUDA codegen | next |
-| 7 | Op coverage and real models | |
+| 6 | Fusion and CUDA codegen | done |
+| 7 | Op coverage and real models | next |
 | 8 | Training, dynamic shapes, tooling | |
 | 9 | Triton emitter | optional |
 | 10 | MLIR export target | optional |

@@ -7,11 +7,11 @@ a chip behind `model.to(...)` and `torch.compile`.
 Named after *tessera*, the Latin word for a mosaic tile, which is what the compiler makes of a
 graph: pieces cut to fit, then set into one surface. Said `/ˈtɛs.ɪk/`.
 
-Phases 1 to 5 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
-its own caching allocator, and a CPU fallback covers every op that has no kernel yet.
-`torch.compile(model, backend="tessiq")` captures a graph, imports it into the IR, partitions it
-into the parts the backend claims, lowers that into a recipe, and runs it. Forward and backward
-both go through it, and a graph compiled once is not compiled again.
+Phases 1 to 6 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
+its own caching allocator. `torch.compile(model, backend="tessiq")` captures a graph, imports it
+into the IR, partitions it into the parts the backend claims, groups the elementwise chains, and
+generates a CUDA kernel for each group which it compiles with NVRTC and caches on disk. Forward
+and backward both go through it, and a graph compiled once is not compiled again.
 
 ```python
 import torch
@@ -46,20 +46,24 @@ graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
 }
 ```
 
-**Arithmetic still runs on the host.** Every op reaches PyTorch's CPU kernels through the fallback,
-so a GPU tensor pays two transfers per operation and is slower than plain CPU. What exists is the
-plumbing underneath: a real device, real device memory, per-backend accounting, two backends that
-can be checked against each other, and a compiler that decides what to take and plans where it
-goes. Kernels arrive next. [PHASES.md](PHASES.md) has the full breakdown.
+**Anything outside a fused chain still runs on the host.** An op the backend has no kernel for
+reaches PyTorch's CPU implementation through the fallback, which costs two transfers. What is fast
+is what fuses: a chain of elementwise operations becomes one kernel, its intermediates never leave
+a register, and the generated code is cached as a cubin between runs.
+[PHASES.md](PHASES.md) has the full breakdown.
 
-The compiler's own numbers, on a 61-step elementwise graph, from
-[`bench/compile_overhead.py`](bench/compile_overhead.py):
+`(a*b + c).relu().sigmoid()` on an RTX 5080, one generated kernel against the same graph with the
+kernels removed, from [`bench/fusion.py`](bench/fusion.py):
 
-| | |
-|---|---|
-| Compiling a graph | 440 us |
-| Answering from the recipe cache | 110 us |
-| Intermediates, planned into one arena | 8 KB against 240 KB unplanned |
+| elements | fused | unfused | |
+|---|---|---|---|
+| 65,536 | 0.25 ms | 1.27 ms | 5.1x |
+| 1,048,576 | 0.97 ms | 5.57 ms | 5.8x |
+| 4,194,304 | 3.62 ms | 20.63 ms | 5.7x |
+
+Four operations, one launch, three intermediate arrays that are never written. Compilation costs
+440 us and a cached recipe costs 110 us, from
+[`bench/compile_overhead.py`](bench/compile_overhead.py).
 
 ## How it fits together
 
