@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "tessiq/codegen/kernel.h"
+#include "tessiq/codegen/reduction.h"
 #include "tessiq/support/result.h"
 
 namespace tessiq::codegen {
@@ -35,8 +36,15 @@ class Emitter {
   /// caller falls back to running the operations one at a time.
   [[nodiscard]] virtual bool supports(const FusedKernel& kernel) const = 0;
 
+  /// Whether it can write this reduction.
+  [[nodiscard]] virtual bool supports(const ReductionKernel& kernel) const = 0;
+
   /// Source text for `kernel`. Only called when `supports` is true.
   [[nodiscard]] virtual Result<std::string> emit(const FusedKernel& kernel) const = 0;
+
+  /// The source for one reduction. A reduction is its own kernel rather than a step in a fused
+  /// loop, so it is a separate call rather than another kind of step.
+  [[nodiscard]] virtual Result<std::string> emit(const ReductionKernel& kernel) const = 0;
 
  protected:
   Emitter() = default;

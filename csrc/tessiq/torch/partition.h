@@ -39,6 +39,11 @@ struct CompiledGraph {
   /// One per fusion group the emitter could write code for. Empty on a build with no CUDA
   /// toolkit, and short of the number of groups when the emitter declined one.
   std::vector<FusedKernel> kernels;
+
+  /// One per reduction the emitter could write code for. Kept apart from `kernels` because a
+  /// reduction is one operation on its own rather than a group of fused ones, so it carries
+  /// different extents and launches on a different grid.
+  std::vector<ReductionKernel> reductions;
 };
 
 /// Imports an FX graph, partitions it, fuses it, and lowers the result.

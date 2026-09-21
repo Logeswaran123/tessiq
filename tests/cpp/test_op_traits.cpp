@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "tessiq/passes/op_support.h"
+#include "tessiq/passes/op_table.h"
 #include "tessiq/passes/op_traits.h"
 
 namespace tessiq::passes {
@@ -52,12 +53,18 @@ TEST(OpTraitsTest, BothSpellingsOfAnOperationAgree) {
   }
 }
 
-TEST(OpTraitsTest, EverythingTheBackendSupportsIsElementwise) {
-  // True while the kernel library is elementwise only. When a matrix multiply or a reduction gets
-  // a kernel this stops holding, and it should be changed deliberately at that point rather than
-  // discovered when fusion produces a loop that cannot express the operation.
+TEST(OpTraitsTest, EverythingTheBackendSupportsHasAKernelShape) {
+  // This used to say everything supported was elementwise, which stopped being true the moment
+  // reductions got a kernel. What has to keep holding is weaker and is the real condition: every
+  // operation the backend claims belongs to a category the emitter knows how to write a loop for.
+  // A claimed matmul would be one the executor could neither fuse nor reduce, and it would reach
+  // the fallback by accident rather than by decision.
   for (const std::string& op : default_op_support().names()) {
-    EXPECT_TRUE(is_elementwise(op)) << op << " is supported but not marked elementwise";
+    const OpInfo* info = find_op(op);
+    ASSERT_NE(info, nullptr) << op << " is supported and not in the table";
+    EXPECT_TRUE(info->category == OpCategory::kElementwise ||
+                info->category == OpCategory::kReduction)
+        << op << " is supported and has no kernel shape";
   }
 }
 

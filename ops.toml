@@ -317,14 +317,14 @@ name = "sum"
 aten = ["aten.sum.dim_IntList", "aten.sum.default"]
 category = "reduction"
 arity = 1
-kernel = false
+kernel = true
 
 [[op]]
 name = "mean"
 aten = ["aten.mean.dim", "aten.mean.default"]
 category = "reduction"
 arity = 1
-kernel = false
+kernel = true
 
 # amax and amin, not max and min. The max.dim form returns the values and their positions as two
 # results, which is a different shape of answer and not what a reduction rule describes.
@@ -333,14 +333,14 @@ name = "amax"
 aten = ["aten.amax.default"]
 category = "reduction"
 arity = 1
-kernel = false
+kernel = true
 
 [[op]]
 name = "amin"
 aten = ["aten.amin.default"]
 category = "reduction"
 arity = 1
-kernel = false
+kernel = true
 
 # --- matmul -------------------------------------------------------------------------------------
 

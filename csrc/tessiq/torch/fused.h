@@ -52,4 +52,41 @@ struct FusedKernel {
 /// is a failure: the caller runs those operations one at a time, which always works.
 Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordinal);
 
+/// One compiled reduction, ready to run.
+///
+/// Separate from FusedKernel because a reduction is its own kernel rather than a step in a loop.
+/// It reads one tensor and writes one, and the three extents say how: `outer * inner` outputs,
+/// each combining `reduce` elements that sit `inner` apart.
+struct ReductionKernel {
+  /// The IR name of the value it writes, which is how the executor finds the node it belongs to.
+  std::string output;
+
+  /// The IR name of the value it reads.
+  std::string input;
+
+  std::int64_t outer = 0;
+  std::int64_t reduce = 0;
+  std::int64_t inner = 0;
+
+  /// Blocks to launch, which depends on which kernel shape the emitter wrote. Carried rather
+  /// than recomputed, so the launch cannot disagree with the source about how the threads are
+  /// laid over the problem.
+  std::int64_t blocks = 0;
+
+  const codegen::Program* program = nullptr;
+
+  /// How many elements it reads and writes.
+  [[nodiscard]] std::int64_t inputs() const { return outer * reduce * inner; }
+
+  [[nodiscard]] std::int64_t outputs() const { return outer * inner; }
+
+  [[nodiscard]] Result<void> launch(const at::Tensor& in, const at::Tensor& out) const;
+};
+
+/// Compiles every reduction in `graph` that the emitter can write.
+///
+/// A reduction it declines is not a failure. It runs on the host, which is what happened to every
+/// reduction before this existed.
+Result<std::vector<ReductionKernel>> compile_reductions(const ir::Graph& graph, int ordinal);
+
 } // namespace tessiq::torch_backend

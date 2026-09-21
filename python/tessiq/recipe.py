@@ -40,8 +40,10 @@ class Recipe:
             than something the caller can work out.
         arena_bytes: What one allocation holding every intermediate would need.
         naive_bytes: What the same intermediates would cost with no reuse.
-        kernels: Compiled fusion groups, keyed by the node whose value the kernel writes. Empty
-            unless the target is a GPU and the toolkit is present.
+        kernels: Compiled kernels, keyed by the node whose value the kernel writes. Fusion groups
+            and reductions share the mapping, because the executor runs both the same way: hand it
+            the inputs and an output tensor and it launches. Empty unless the target is a GPU and
+            the toolkit is present.
         fused_away: Nodes a kernel computes on the way to its output. Running them separately
             would compute the same values twice, so the executor skips them.
     """
@@ -52,7 +54,7 @@ class Recipe:
     output_spec: tuple[str | None, ...]
     arena_bytes: int
     naive_bytes: int
-    kernels: dict[str, _C.FusedKernel]
+    kernels: dict[str, _C.FusedKernel | _C.ReductionKernel]
     fused_away: frozenset[str]
 
 
@@ -145,7 +147,12 @@ def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str
         if any(source != here for source in sources) or (not sources and here != host):
             needs_move.add(node.name)
 
-    kernels = {kernel.output: kernel for kernel in native.kernels}
+    kernels: dict[str, _C.FusedKernel | _C.ReductionKernel] = {
+        kernel.output: kernel for kernel in native.kernels
+    }
+    # A reduction writes one node's value like a fusion group does, so it goes in the same map.
+    # The two cannot collide: a reduction is never inside a group, because it cannot be fused.
+    kernels.update({reduction.output: reduction for reduction in native.reductions})
     fused_away = {
         name for kernel in native.kernels for name in kernel.members if name != kernel.output
     }

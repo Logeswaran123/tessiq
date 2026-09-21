@@ -101,7 +101,8 @@ add_library(tessiq_codegen STATIC
   tessiq/codegen/cuda_emitter.cpp
   tessiq/codegen/kernel.cpp
   tessiq/codegen/nvrtc.cpp
-  tessiq/codegen/program.cpp)
+  tessiq/codegen/program.cpp
+  tessiq/codegen/reduction.cpp)
 
 target_link_libraries(tessiq_codegen PUBLIC tessiq::ir)
 

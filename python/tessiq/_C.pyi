@@ -68,9 +68,20 @@ class FusedKernel:
     elements: int
     def launch(self, inputs: list[Any], out: Any) -> None: ...
 
+class ReductionKernel:
+    output: str
+    inputs: list[str]
+    outer: int
+    reduce: int
+    inner: int
+    blocks: int
+    elements: int
+    def launch(self, inputs: list[Any], out: Any) -> None: ...
+
 class CompiledGraph:
     recipe: Recipe
     kernels: list[FusedKernel]
+    reductions: list[ReductionKernel]
 
 def build_recipe_fx(
     graph_module: object, name: str = ..., alignment: int = ..., ordinal: int = ...

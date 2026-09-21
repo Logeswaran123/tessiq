@@ -27,7 +27,14 @@ enum class OpCategory {
 /// carries and an imported graph carries the ATen spelling while a hand-written one carries the
 /// short name.
 struct OpInfo {
+  /// The spelling a graph carries, which is what a lookup matches.
   std::string_view name;
+
+  /// The operation this spelling is one of, as ops.toml names it. `aten.sum.dim_IntList` and
+  /// `aten.sum.default` are both `sum`, so code that has to act on which operation it is can
+  /// switch on this instead of matching every spelling of it.
+  std::string_view canonical;
+
   OpCategory category;
 
   /// Arguments it takes, counting constants that arrived as attributes.

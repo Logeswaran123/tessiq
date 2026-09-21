@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string_view>
 #include <vector>
 
@@ -29,6 +30,18 @@ Result<ir::Shape> broadcast_shapes(const ir::Shape& a, const ir::Shape& b);
 /// node from the tracing metadata, so a node this table has never heard of still carries a usable
 /// type and its caller should leave it alone.
 [[nodiscard]] bool has_shape_rule(std::string_view op);
+
+/// The axes a reduction reduces, normalised against `rank` and sorted ascending.
+///
+/// Public because the shape rule and the kernel both need it and must not disagree. A kernel that
+/// reduced different axes than the rule predicted would write the right number of elements in the
+/// wrong places, which is the kind of wrong answer that looks plausible.
+///
+/// An absent list and an empty one both mean every axis: torch spells `sum(x)` as the dim_IntList
+/// form with an empty list, while the `.default` spellings carry no list at all. A negative index
+/// counts from the end, and a bare integer is accepted for IR written by hand.
+Result<std::vector<std::size_t>>
+reduced_axes(std::string_view op, const ir::AttributeMap& attributes, std::size_t rank);
 
 /// The result types `op` produces from these operand types.
 ///
