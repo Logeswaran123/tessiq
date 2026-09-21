@@ -86,6 +86,30 @@ Reducing the last axis reads contiguous memory and lands where PyTorch does. Red
 reads with a stride and is 2.1x behind, and a short axis with many outputs is further behind than
 that, because a block of 256 threads combining 64 elements leaves most of them idle.
 
+**How much of a real model this covers is a separate question, and a smaller number.** From
+[`tools/model_coverage.py`](tools/model_coverage.py):
+
+```
+residual block: 3 of 7 operations on the device (43%)
+  aten.convolution.default                             2
+  aten._native_batch_norm_legit_no_training.default    2
+
+encoder block: 4 of 56 operations on the device (7%)
+  aten.view.default                                   22
+  aten.permute.default                                11
+  aten.addmm.default                                   6
+  aten.expand.default                                  4
+  aten.clone.default                                   4
+  aten.bmm.default                                     2
+  aten.native_layer_norm.default                       2
+  aten._softmax.default                                1
+```
+
+Both blocks give the numbers eager gives, on the reference backend and on a GPU. What they do not
+yet do is stay on the device: a transformer encoder block is mostly movement operations, which
+rearrange a tensor without computing anything, and those plus the matrix multiplies are what the
+rest of phase 7 is for.
+
 ## How it fits together
 
 ```

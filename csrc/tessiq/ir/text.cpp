@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "tessiq/support/macros.h"
@@ -63,6 +64,9 @@ Result<Attribute> parse_attribute_value(std::string_view text) {
   }
   if (text == "false") {
     return Attribute{false};
+  }
+  if (text == "none") {
+    return Attribute{std::monostate{}};
   }
   if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
     return Attribute{std::string(text.substr(1, text.size() - 2))};

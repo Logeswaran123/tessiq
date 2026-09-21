@@ -10,6 +10,7 @@
 #include <pybind11/pybind11.h>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <torch/csrc/autograd/python_variable.h>
@@ -52,19 +53,7 @@ Result<ir::DType> to_ir_dtype(at::ScalarType dtype) {
 ///
 /// That is the only place shape and dtype are recorded. A node without it has not been through
 /// shape propagation, and guessing would put a wrong type on a value the passes then trust.
-Result<ir::TensorType> type_of(const py::object& node) {
-  const py::object meta = node.attr("meta");
-  if (!meta.contains("val")) {
-    return invalid_argument("fx node '" + node.attr("name").cast<std::string>() +
-                            "' has no meta['val']; the graph has not been through shape "
-                            "propagation, so its types are unknown");
-  }
-  const py::object value = meta[py::str("val")];
-  if (!THPVariable_Check(value.ptr())) {
-    return unsupported("fx node '" + node.attr("name").cast<std::string>() +
-                       "' produces something other than a tensor, which the IR cannot hold yet");
-  }
-  const auto tensor = value.cast<at::Tensor>();
+Result<ir::TensorType> tensor_type(const at::Tensor& tensor) {
   TESSIQ_ASSIGN_OR_RETURN(const ir::DType dtype, to_ir_dtype(tensor.scalar_type()));
 
   std::vector<std::int64_t> dims;
@@ -75,13 +64,79 @@ Result<ir::TensorType> type_of(const py::object& node) {
   return ir::TensorType(dtype, ir::Shape(std::move(dims)));
 }
 
+/// The types an FX node produces, one per result.
+///
+/// Usually one. A few operations return several: a layer norm gives the normalised tensor plus the
+/// mean and the reciprocal standard deviation it computed, and a batch norm does the same. FX
+/// spells reading one of them as a `getitem` on the tuple, which `import_getitem` turns back into
+/// a reference to the right result.
+Result<std::vector<ir::TensorType>> types_of(const py::object& node) {
+  const py::object meta = node.attr("meta");
+  const auto name = node.attr("name").cast<std::string>();
+  if (!meta.contains("val")) {
+    return invalid_argument("fx node '" + name +
+                            "' has no meta['val']; the graph has not been through shape "
+                            "propagation, so its types are unknown");
+  }
+
+  const py::object value = meta[py::str("val")];
+  if (THPVariable_Check(value.ptr())) {
+    TESSIQ_ASSIGN_OR_RETURN(ir::TensorType type, tensor_type(value.cast<at::Tensor>()));
+    return std::vector<ir::TensorType>{std::move(type)};
+  }
+
+  if (!py::isinstance<py::tuple>(value) && !py::isinstance<py::list>(value)) {
+    return unsupported("fx node '" + name +
+                       "' produces something other than a tensor or a tuple of them, which the "
+                       "IR cannot hold");
+  }
+
+  std::vector<ir::TensorType> types;
+  for (const py::handle item : value) {
+    if (!THPVariable_Check(item.ptr())) {
+      // A tuple holding something that is not a tensor, such as the symbolic integer some
+      // operations return beside their output. Nothing here can give that a type.
+      return unsupported("fx node '" + name +
+                         "' returns a tuple holding something that is not a "
+                         "tensor, which the IR cannot hold");
+    }
+    TESSIQ_ASSIGN_OR_RETURN(ir::TensorType type, tensor_type(item.cast<at::Tensor>()));
+    types.push_back(std::move(type));
+  }
+  if (types.empty()) {
+    return unsupported("fx node '" + name + "' returns an empty tuple");
+  }
+  return types;
+}
+
 bool is_fx_node(const py::object& value) {
   static const py::object node_type = py::module_::import("torch.fx").attr("Node");
   return py::isinstance(value, node_type);
 }
 
+/// Whether `value` is one of torch's enumerations, which the compiler carries without reading.
+///
+/// A memory format or a dtype decides what an operation does, but nothing in this compiler acts
+/// on one: the operations that take them have no kernel here and run through the fallback, which
+/// reads the original FX graph rather than this IR. So carrying the spelling is enough, and it is
+/// better than refusing the graph the argument appears in.
+bool is_opaque_torch_label(const py::handle& value) {
+  static const py::module_ torch = py::module_::import("torch");
+  for (const char* name : {"memory_format", "dtype", "layout", "device"}) {
+    if (py::isinstance(value, torch.attr(name))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// A Python scalar as an IR attribute. Anything else is refused rather than guessed at.
 Result<ir::Attribute> to_attribute(const py::handle& value) {
+  // None is an argument, not a missing one. A convolution with no bias passes None where the bias
+  // goes, and dropping it would shift the position of every argument after it.
+  if (value.is_none()) {
+    return ir::Attribute{std::monostate{}};
+  }
   if (py::isinstance<py::bool_>(value)) {
     return ir::Attribute{value.cast<bool>()};
   }
@@ -104,10 +159,32 @@ Result<ir::Attribute> to_attribute(const py::handle& value) {
     }
     return ir::Attribute{std::move(values)};
   }
+  // Labels the compiler never interprets: torch.contiguous_format, torch.float32, torch.strided,
+  // and a device. They have to survive the import because a real graph carries them, and their
+  // canonical spelling is all anything here needs. Only these four, so a type that does mean
+  // something to a pass still refuses rather than arriving as an uninterpretable string.
+  if (is_opaque_torch_label(value)) {
+    return ir::Attribute{py::str(value).cast<std::string>()};
+  }
+
   return unsupported("cannot represent " +
                      py::str(py::type::handle_of(value).attr("__name__")).cast<std::string>() +
                      " as an IR attribute");
 }
+
+/// What the importer carries from one FX node to the next.
+struct ImportState {
+  /// IR value for each FX name, which is what an operand lookup resolves through.
+  std::unordered_map<std::string, ir::Value*> scope;
+
+  /// IR node for each FX name, so a getitem can reach a result other than the first.
+  std::unordered_map<std::string, ir::Node*> producers;
+
+  /// The FX name of the getitem that reads result `index` of a multi-result node, keyed by the
+  /// producer's FX name. Collected before anything is imported, because a getitem appears after
+  /// the node it reads and the results are named when that node is imported.
+  std::unordered_map<std::string, std::unordered_map<std::int64_t, std::string>> selections;
+};
 
 /// Attaches one FX argument to a node.
 ///
@@ -138,9 +215,7 @@ Result<void> attach_argument(const py::handle& argument,
   return ok();
 }
 
-Result<void> import_call(const py::object& fx_node,
-                         std::unordered_map<std::string, ir::Value*>& scope,
-                         ir::Graph& graph) {
+Result<void> import_call(const py::object& fx_node, ImportState& state, ir::Graph& graph) {
   const auto op = py::str(fx_node.attr("target")).cast<std::string>();
   ir::Node* node = graph.add_node(op);
 
@@ -149,7 +224,7 @@ Result<void> import_call(const py::object& fx_node,
   const py::object args = fx_node.attr("args");
   std::size_t position = 0;
   for (const py::handle argument : args) {
-    TESSIQ_RETURN_IF_ERROR(attach_argument(argument, position++, scope, *node));
+    TESSIQ_RETURN_IF_ERROR(attach_argument(argument, position++, state.scope, *node));
   }
 
   const auto kwargs = fx_node.attr("kwargs").cast<py::dict>();
@@ -162,9 +237,30 @@ Result<void> import_call(const py::object& fx_node,
     node->set_attribute(py::str(item.first).cast<std::string>(), std::move(attribute).value());
   }
 
-  TESSIQ_ASSIGN_OR_RETURN(const ir::TensorType type, type_of(fx_node));
+  TESSIQ_ASSIGN_OR_RETURN(const std::vector<ir::TensorType> types, types_of(fx_node));
   const auto name = fx_node.attr("name").cast<std::string>();
-  scope[name] = node->append_result(name, type);
+  const auto selected = state.selections.find(name);
+  for (std::size_t i = 0; i < types.size(); ++i) {
+    // A result that a getitem reads takes that getitem's FX name. The executor runs the FX graph
+    // and looks its tensors up by FX name, so a result named anything else would resolve to the
+    // whole tuple the producer returned rather than to the tensor a kernel wants.
+    std::string result_name;
+    if (selected != state.selections.end()) {
+      const auto reader = selected->second.find(static_cast<std::int64_t>(i));
+      if (reader != selected->second.end()) {
+        result_name = reader->second;
+      }
+    }
+    if (result_name.empty()) {
+      // Nothing reads it. Named after its position with a dot, because FX names its own nodes
+      // with an underscore and a number: `native_layer_norm_1` is the second layer norm in the
+      // graph, not the second result of the first one, and an underscore collided with it.
+      result_name = i == 0 ? name : graph.unique_name(name + "." + std::to_string(i));
+    }
+    node->append_result(result_name, types[i]);
+  }
+  state.scope[name] = node->result(0);
+  state.producers[name] = node;
   return ok();
 }
 
@@ -207,23 +303,89 @@ Result<void> import_output(const py::object& fx_node,
   return ok();
 }
 
+/// Whether `fx_node` is the `operator.getitem` that reads one result out of a tuple.
+bool is_getitem(const py::object& fx_node) {
+  static const py::object getitem = py::module_::import("operator").attr("getitem");
+  return py::object(fx_node.attr("target")).is(getitem);
+}
+
+/// Binds a getitem's name to the result it selects, without adding a node.
+///
+/// FX spells "the second thing native_layer_norm returned" as a getitem on the tuple. The IR has
+/// no tuples: a node has several results and a value refers to one of them directly. So a getitem
+/// is not an operation here, it is a name for something that already exists.
+Result<void> import_getitem(const py::object& fx_node, ImportState& state) {
+  const auto args = fx_node.attr("args").cast<py::tuple>();
+  const auto name = fx_node.attr("name").cast<std::string>();
+  if (args.size() != 2 || !py::isinstance<py::int_>(args[1])) {
+    return unsupported("fx getitem '" + name + "' does not index a node by an integer");
+  }
+  const auto tuple = args[0].cast<py::object>();
+  if (!is_fx_node(tuple)) {
+    return unsupported("fx getitem '" + name + "' does not index a node");
+  }
+
+  const auto source = tuple.attr("name").cast<std::string>();
+  const auto found = state.producers.find(source);
+  if (found == state.producers.end()) {
+    return invalid_argument("fx getitem '" + name + "' reads '" + source + "', which has no node");
+  }
+
+  const auto index = args[1].cast<std::int64_t>();
+  ir::Node* producer = found->second;
+  if (index < 0 || static_cast<std::size_t>(index) >= producer->result_count()) {
+    return invalid_argument("fx getitem '" + name + "' takes result " + std::to_string(index) +
+                            " of '" + source + "', which has " +
+                            std::to_string(producer->result_count()));
+  }
+
+  state.scope[name] = producer->result(static_cast<std::size_t>(index));
+  return ok();
+}
+
+/// Records which getitem reads which result, before any of them are imported.
+///
+/// A getitem appears after the node it reads, and the results are named when that node is
+/// imported, so the graph has to be walked once first.
+Result<void> collect_selections(const py::list& nodes, ImportState& state) {
+  for (const py::handle handle : nodes) {
+    const auto fx_node = py::reinterpret_borrow<py::object>(handle);
+    if (fx_node.attr("op").cast<std::string>() != "call_function" || !is_getitem(fx_node)) {
+      continue;
+    }
+    const auto args = fx_node.attr("args").cast<py::tuple>();
+    if (args.size() != 2 || !py::isinstance<py::int_>(args[1])) {
+      continue;
+    }
+    const auto tuple = args[0].cast<py::object>();
+    if (!is_fx_node(tuple)) {
+      continue;
+    }
+    state.selections[tuple.attr("name").cast<std::string>()].emplace(
+        args[1].cast<std::int64_t>(), fx_node.attr("name").cast<std::string>());
+  }
+  return ok();
+}
+
 /// Imports one FX node according to its kind.
-Result<void> import_node(const py::object& fx_node,
-                         std::unordered_map<std::string, ir::Value*>& scope,
-                         ir::Graph& graph) {
+Result<void> import_node(const py::object& fx_node, ImportState& state, ir::Graph& graph) {
   const auto kind = fx_node.attr("op").cast<std::string>();
 
   if (kind == "placeholder") {
-    TESSIQ_ASSIGN_OR_RETURN(const ir::TensorType type, type_of(fx_node));
+    TESSIQ_ASSIGN_OR_RETURN(const std::vector<ir::TensorType> types, types_of(fx_node));
     const auto name = fx_node.attr("name").cast<std::string>();
-    scope[name] = graph.add_param(name, type);
+    if (types.size() != 1) {
+      return unsupported("fx placeholder '" + name + "' is not a single tensor");
+    }
+    state.scope[name] = graph.add_param(name, types.front());
     return ok();
   }
   if (kind == "call_function") {
-    return import_call(fx_node, scope, graph);
+    return is_getitem(fx_node) ? import_getitem(fx_node, state)
+                               : import_call(fx_node, state, graph);
   }
   if (kind == "output") {
-    return import_output(fx_node, scope, graph);
+    return import_output(fx_node, state.scope, graph);
   }
 
   // call_method, call_module and get_attr should all be gone after AOTAutograd. Meeting one means
@@ -238,15 +400,17 @@ Result<void> import_node(const py::object& fx_node,
 
 Result<std::unique_ptr<ir::Graph>> import_fx(const py::object& graph_module, std::string name) {
   auto graph = std::make_unique<ir::Graph>(std::move(name));
-  std::unordered_map<std::string, ir::Value*> scope;
-
   // Snapshotted into a real list. fx exposes `graph.nodes` as a view over an intrusive linked
   // list, and iterating that view from C++ does not terminate: the walk wraps past the sentinel
   // and starts again. A copy also means the walk is unaffected if the graph is ever mutated
-  // while it is in progress.
+  // while it is in progress, and it is walked twice.
   const py::list nodes(graph_module.attr("graph").attr("nodes"));
+
+  ImportState state;
+  TESSIQ_RETURN_IF_ERROR(collect_selections(nodes, state));
+
   for (const py::handle handle : nodes) {
-    TESSIQ_RETURN_IF_ERROR(import_node(py::reinterpret_borrow<py::object>(handle), scope, *graph));
+    TESSIQ_RETURN_IF_ERROR(import_node(py::reinterpret_borrow<py::object>(handle), state, *graph));
   }
 
   TESSIQ_RETURN_IF_ERROR(ir::verify(*graph));

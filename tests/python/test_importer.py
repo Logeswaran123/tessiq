@@ -151,3 +151,54 @@ def test_the_result_is_valid_ir() -> None:
     text = imported(lambda a, b: torch.relu(a * b + a), torch.randn(8), torch.randn(8))
     assert text.startswith("graph @forward(")
     assert text.rstrip().endswith("}")
+
+
+# --- what real models carry ---------------------------------------------------------------------
+
+
+def test_a_none_argument_keeps_its_position() -> None:
+    # A convolution with no bias passes None where the bias goes. Dropping it would move every
+    # argument after it by one, so the stride would arrive where the padding belongs.
+    text = imported(
+        lambda a, w: torch.nn.functional.conv2d(a, w, bias=None, padding=1),
+        torch.randn(1, 2, 8, 8),
+        torch.randn(2, 2, 3, 3),
+    )
+    assert "arg2 = none" in text, text
+
+
+def test_an_operation_with_several_results() -> None:
+    # A layer norm returns the normalised tensor, the mean and the reciprocal standard deviation.
+    # FX reads each with a getitem on the tuple; the IR has no tuples, so a node has three results
+    # and the getitems become names for them.
+    text = imported(
+        lambda a, w, b: torch.nn.functional.layer_norm(a, (4,), w, b),
+        torch.randn(2, 4),
+        torch.randn(4),
+        torch.randn(4),
+    )
+    # The read result takes the reading getitem's FX name, because the executor runs the FX graph
+    # and looks its tensors up by that name. The unread ones are named after their position.
+    assert "%getitem, %native_layer_norm.1, %native_layer_norm.2 =" in text, text
+    assert "function getitem" not in text, text
+
+
+def test_two_multi_result_nodes_do_not_collide() -> None:
+    # FX names its second layer norm `native_layer_norm_1`, which is what naming the second result
+    # of the first one with an underscore would have produced. The dot is why they do not meet.
+    def model(a: torch.Tensor, w: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        first = torch.nn.functional.layer_norm(a, (4,), w, b)
+        return torch.nn.functional.layer_norm(first, (4,), w, b)
+
+    text = imported(model, torch.randn(2, 4), torch.randn(4), torch.randn(4))
+    assert "%native_layer_norm.1" in text, text
+    assert "%native_layer_norm_1.1" in text, text
+
+
+def test_an_opaque_torch_label_is_carried_rather_than_refused() -> None:
+    # A memory format means nothing to this compiler, and the operations carrying one have no
+    # kernel here. Refusing the graph over it would lose the ones around it that do.
+    text = imported(
+        lambda a: a.clone(memory_format=torch.contiguous_format).relu(), torch.randn(2, 4)
+    )
+    assert "torch.contiguous_format" in text, text

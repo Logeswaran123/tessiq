@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "tessiq/ir/graph.h"
@@ -370,6 +371,24 @@ TEST(VerifierTest, CatchesDuplicateNames) {
   auto result = verify(graph);
   ASSERT_FALSE(result.has_value());
   EXPECT_NE(result.error().message().find("duplicate"), std::string::npos);
+}
+
+TEST(AttributeTest, NoneIsAValueRatherThanAnAbsence) {
+  // A convolution with no bias carries None where the bias goes. Printing it as nothing would
+  // shift every argument after it by one position.
+  EXPECT_EQ(attribute_to_string(Attribute{std::monostate{}}), "none");
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(Attribute{}))
+      << "a default-constructed attribute should be the absent one";
+}
+
+TEST(TextTest, NoneRoundTrips) {
+  const std::string text =
+      "graph @g(%a: f32[4]) -> f32[4] {\n"
+      "  %c = aten.convolution.default(%a) {arg2 = none, arg3 = [1,1]} : f32[4]\n"
+      "  return %c\n}\n";
+  auto graph = parse(text);
+  ASSERT_TRUE(graph.has_value()) << graph.error().to_string();
+  EXPECT_EQ(print(**graph), text);
 }
 
 } // namespace
