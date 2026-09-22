@@ -55,18 +55,23 @@ TEST(OpTraitsTest, BothSpellingsOfAnOperationAgree) {
 
 TEST(OpTraitsTest, EverythingTheBackendSupportsHasAWayToRun) {
   // Written once as "everything supported is elementwise", which reductions ended, then as
-  // "everything supported has a kernel shape", which movement operations ended. The condition
-  // that survives is the one that was always meant: every operation the backend claims has some
-  // way to run on the device.
+  // "everything supported has a kernel shape", which movement operations ended, then as "nothing
+  // supported is a matmul", which cuBLAS ended. Each category now runs some way, so what this
+  // checks is that every claimed operation belongs to one of them and that the list is written
+  // down rather than assumed.
   //
-  // For elementwise and reductions that is a generated kernel. For movement operations it is the
-  // device's own view registrations, which make them metadata rather than code. A matmul has
-  // neither, so claiming one would send it to the fallback by accident rather than by decision.
+  // A fifth category added without an execution path fails here rather than reaching the fallback
+  // by accident, which is what this test has caught three times.
   for (const std::string& op : default_op_support().names()) {
     const OpInfo* info = find_op(op);
     ASSERT_NE(info, nullptr) << op << " is supported and not in the table";
-    EXPECT_NE(info->category, OpCategory::kMatmul)
-        << op << " is supported and the backend has no way to run it";
+    switch (info->category) {
+    case OpCategory::kElementwise: // a generated kernel, fused with its neighbours
+    case OpCategory::kReduction:   // a generated kernel of its own
+    case OpCategory::kMovement:    // the device's view registrations, so no code at all
+    case OpCategory::kMatmul:      // cuBLAS
+      break;
+    }
   }
 }
 

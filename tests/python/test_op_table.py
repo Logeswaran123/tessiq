@@ -86,16 +86,18 @@ def test_the_backend_claims_what_the_table_says() -> None:
         assert "tessiq.supported = true" in marked, f"{name} is in the table and not claimed"
 
 
-def test_an_operation_without_a_kernel_is_not_claimed() -> None:
-    # The other direction of the test above. Named from the table rather than hardcoded, so that
-    # giving one of these a kernel moves it to the claimed side instead of failing here.
-    unclaimed = [op for op in operations() if not op["kernel"]]
-    assert unclaimed, "every operation has a kernel, so this test no longer checks anything"
-    for op in unclaimed:
-        for name in (str(a) for a in op["aten"]):
-            graph = f"graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {{\n  %x = {name}(%a, %b) : f32[4]\n  return %x\n}}\n"
-            marked = tessiq.run_passes(graph, "mark-supported")
-            assert "tessiq.supported = false" in marked, f"{name} has no kernel and was claimed"
+def test_an_operation_the_table_has_never_heard_of_is_not_claimed() -> None:
+    # Every row in the table is claimed now, so there is nothing in it to point at. The rule that
+    # still has teeth is the other direction: an operation with no row is declined by not being
+    # there rather than by a list somewhere saying so.
+    for name in (
+        "aten.convolution.default",
+        "aten.native_layer_norm.default",
+        "aten.erfinv.default",
+    ):
+        graph = f"graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {{\n  %x = {name}(%a, %b) : f32[4]\n  return %x\n}}\n"
+        marked = tessiq.run_passes(graph, "mark-supported")
+        assert "tessiq.supported = false" in marked, f"{name} is not in the table and was claimed"
 
 
 def test_the_coverage_document_matches_the_source() -> None:
@@ -106,7 +108,7 @@ def test_the_coverage_document_matches_the_source() -> None:
         assert f"`{op['name']}`" in document, f"{op['name']} is missing from the document"
 
 
-@pytest.mark.parametrize("category", ["elementwise", "matmul"])
+@pytest.mark.parametrize("category", ["elementwise", "reduction", "movement", "matmul"])
 def test_every_category_is_one_the_generator_knows(category: str) -> None:
     assert any(op["category"] == category for op in operations()), (
         f"no operation is {category}; the generator would still accept it, "

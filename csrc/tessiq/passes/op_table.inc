@@ -4,10 +4,11 @@
 // because the element count is one per aten spelling and not one per operation, so the
 // generator is the only thing that can keep it right.
 // clang-format off
-constexpr std::array<OpInfo, 104> kOps{{
+constexpr std::array<OpInfo, 108> kOps{{
     {"abs", "abs", OpCategory::kElementwise, 1, "fabs($0)", true},
     {"acos", "acos", OpCategory::kElementwise, 1, "acos($0)", true},
     {"add", "add", OpCategory::kElementwise, 2, "($0 + $1)", true},
+    {"addmm", "addmm", OpCategory::kMatmul, 3, "", true},
     {"amax", "amax", OpCategory::kReduction, 1, "", true},
     {"amin", "amin", OpCategory::kReduction, 1, "", true},
     {"asin", "asin", OpCategory::kElementwise, 1, "asin($0)", true},
@@ -18,10 +19,12 @@ constexpr std::array<OpInfo, 104> kOps{{
     {"aten.acos.default", "acos", OpCategory::kElementwise, 1, "acos($0)", true},
     {"aten.add.Scalar", "add", OpCategory::kElementwise, 2, "($0 + $1)", true},
     {"aten.add.Tensor", "add", OpCategory::kElementwise, 2, "($0 + $1)", true},
+    {"aten.addmm.default", "addmm", OpCategory::kMatmul, 3, "", true},
     {"aten.amax.default", "amax", OpCategory::kReduction, 1, "", true},
     {"aten.amin.default", "amin", OpCategory::kReduction, 1, "", true},
     {"aten.asin.default", "asin", OpCategory::kElementwise, 1, "asin($0)", true},
     {"aten.atan.default", "atan", OpCategory::kElementwise, 1, "atan($0)", true},
+    {"aten.bmm.default", "bmm", OpCategory::kMatmul, 2, "", true},
     {"aten.ceil.default", "ceil", OpCategory::kElementwise, 1, "ceil($0)", true},
     {"aten.cos.default", "cos", OpCategory::kElementwise, 1, "cos($0)", true},
     {"aten.cosh.default", "cosh", OpCategory::kElementwise, 1, "cosh($0)", true},
@@ -39,7 +42,7 @@ constexpr std::array<OpInfo, 104> kOps{{
     {"aten.log2.default", "log2", OpCategory::kElementwise, 1, "log2($0)", true},
     {"aten.mean.default", "mean", OpCategory::kReduction, 1, "", true},
     {"aten.mean.dim", "mean", OpCategory::kReduction, 1, "", true},
-    {"aten.mm.default", "mm", OpCategory::kMatmul, 2, "", false},
+    {"aten.mm.default", "mm", OpCategory::kMatmul, 2, "", true},
     {"aten.mul.Scalar", "mul", OpCategory::kElementwise, 2, "($0 * $1)", true},
     {"aten.mul.Tensor", "mul", OpCategory::kElementwise, 2, "($0 * $1)", true},
     {"aten.neg.default", "neg", OpCategory::kElementwise, 1, "(-$0)", true},
@@ -69,6 +72,7 @@ constexpr std::array<OpInfo, 104> kOps{{
     {"aten.trunc.default", "trunc", OpCategory::kElementwise, 1, "trunc($0)", true},
     {"aten.unsqueeze.default", "unsqueeze", OpCategory::kMovement, 1, "", true},
     {"aten.view.default", "view", OpCategory::kMovement, 1, "", true},
+    {"bmm", "bmm", OpCategory::kMatmul, 2, "", true},
     {"ceil", "ceil", OpCategory::kElementwise, 1, "ceil($0)", true},
     {"cos", "cos", OpCategory::kElementwise, 1, "cos($0)", true},
     {"cosh", "cosh", OpCategory::kElementwise, 1, "cosh($0)", true},
@@ -84,7 +88,7 @@ constexpr std::array<OpInfo, 104> kOps{{
     {"log1p", "log1p", OpCategory::kElementwise, 1, "log1p($0)", true},
     {"log2", "log2", OpCategory::kElementwise, 1, "log2($0)", true},
     {"mean", "mean", OpCategory::kReduction, 1, "", true},
-    {"mm", "mm", OpCategory::kMatmul, 2, "", false},
+    {"mm", "mm", OpCategory::kMatmul, 2, "", true},
     {"mul", "mul", OpCategory::kElementwise, 2, "($0 * $1)", true},
     {"neg", "neg", OpCategory::kElementwise, 1, "(-$0)", true},
     {"permute", "permute", OpCategory::kMovement, 1, "", true},

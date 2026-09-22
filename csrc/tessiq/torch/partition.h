@@ -44,6 +44,10 @@ struct CompiledGraph {
   /// reduction is one operation on its own rather than a group of fused ones, so it carries
   /// different extents and launches on a different grid.
   std::vector<ReductionKernel> reductions;
+
+  /// One per matrix multiply cuBLAS can run. No compiled code behind these: what they carry is
+  /// the shape of the library call.
+  std::vector<GemmKernel> gemms;
 };
 
 /// Imports an FX graph, partitions it, fuses it, and lowers the result.

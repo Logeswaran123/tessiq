@@ -427,4 +427,20 @@ name = "mm"
 aten = ["aten.mm.default"]
 category = "matmul"
 arity = 2
-kernel = false
+kernel = true
+
+# The form nn.Linear produces: a bias row added to every row of the product. Its weight arrives
+# transposed, which BLAS takes as a flag rather than a copy.
+[[op]]
+name = "addmm"
+aten = ["aten.addmm.default"]
+category = "matmul"
+arity = 3
+kernel = true
+
+[[op]]
+name = "bmm"
+aten = ["aten.bmm.default"]
+category = "matmul"
+arity = 2
+kernel = true
