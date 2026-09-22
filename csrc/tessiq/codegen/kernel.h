@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,38 @@ struct Step {
 ///
 /// Every value in `body` other than the inputs and the output stays in a register. That is the
 /// whole point of the group: the intermediates are never written anywhere.
+/// How a loop over the result reads one operand.
+///
+/// Three of the four forms need one number, and that number can arrive at the launch, which is
+/// what lets a kernel be written for a shape nobody knows yet. The fourth needs every extent and
+/// so is only ever available for a shape that is known.
+struct OperandRead {
+  enum class Kind {
+    /// Position `i`: the operand has the result's shape, so one index is the same element in
+    /// both. Almost every operand.
+    kSameShape,
+    /// Position `i / d`: runs of `d` output elements share one operand element. The per-row mean
+    /// a layer norm subtracts and the per-row maximum a softmax does.
+    kRepeated,
+    /// Position `i % d`: the operand is `d` elements read over and over. A bias row.
+    kCycled,
+    /// The position taken apart into coordinates and stepped through the operand's own layout.
+    /// What a permuted operand needs, and the one form that cannot be written without numbers.
+    kStrided,
+  };
+
+  Kind kind = Kind::kSameShape;
+
+  /// For `kRepeated`, how many output elements share one operand element. For `kCycled`, the
+  /// operand's own element count. `ir::kDynamic` when it is a product of extents that are not
+  /// known, in which case the launch works it out from the sizes of the buffers it is handed.
+  /// One for the other two kinds, which need no number.
+  std::int64_t divisor = 1;
+
+  /// Whether the number is one the kernel source can hold.
+  [[nodiscard]] bool is_known() const { return divisor != ir::kDynamic; }
+};
+
 /// One value a fused kernel reads, and how it indexes it.
 ///
 /// `index` is an expression in `i`, the thread's output position. It is `i` for an operand the
@@ -50,6 +83,10 @@ struct Step {
 struct KernelInput {
   std::string name;
   std::string index = "i";
+
+  /// How the operand is reached, which is what a kernel without known extents uses. `index` is
+  /// the same answer with the numbers folded in, and is empty when there were none to fold.
+  OperandRead read;
 
   /// The layout the index expression was written for. The launch checks it, because an index
   /// worked out for one layout and applied to another reads the right buffer in the wrong order.
@@ -96,16 +133,23 @@ struct FusedKernel {
 /// refuses, so a failure here means the two disagree rather than that the graph is unusual.
 Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group);
 
-/// How a loop over `output` reads `operand`, as an expression in `i`.
+/// How a loop over `output` reads `operand`, or nothing when no kernel here can reach it.
 ///
 /// Covers both reasons an operand is not read at `i`. It may have fewer elements, which is a
-/// broadcast, and it may hold the ones it has in a different order, which is a stride. Both are
-/// the same arithmetic: a step per axis, zero where the operand broadcasts and its own where it
-/// does not.
+/// broadcast, and it may hold the ones it has in a different order, which is a stride.
 ///
-/// Empty when there is none, which is how fusion asks whether an operand can be reached at all.
-/// The two have to agree: a group fusion allows and the emitter then declines is a group that
-/// silently does not become a kernel.
+/// Asked by three places: fusion, to decide whether a group can form; `mark-supported`, to decide
+/// whether the node belongs on the device at all; and the emitter, to write the index. The three
+/// disagreeing is how an operation ends up on the device with no kernel to run it, which costs a
+/// transfer each way and buys nothing, so they ask one function rather than three.
+[[nodiscard]] std::optional<OperandRead> operand_read(const ir::TensorType& output,
+                                                      const ir::TensorType& operand);
+
+/// How a loop over `output` reads `operand`, as an expression in `i`.
+///
+/// Empty when there is no such expression, which is either because the operand cannot be reached
+/// at all or because reaching it needs a number that is not known until the call. `operand_read`
+/// tells the two apart.
 [[nodiscard]] std::string index_for(const ir::TensorType& output, const ir::TensorType& operand);
 
 /// Fusion group numbers in a graph, ascending.

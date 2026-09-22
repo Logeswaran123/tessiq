@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -291,13 +292,37 @@ TEST(IndexForTest, AnUnknownExtentIsStillTheLoopIndexWhenTheShapesMatch) {
   EXPECT_EQ(index_for(dims({ir::kDynamic, ir::kDynamic}), dims({ir::kDynamic, ir::kDynamic})), "i");
 }
 
-TEST(IndexForTest, AnUnknownExtentHasNoBroadcastExpression) {
-  // Every other form divides and takes remainders by the extents, and there is no number to
-  // write. `[?,32]` reading `[?,1]` would be `i / 32` only if the leading extents matched, which
-  // is exactly what two unknowns cannot be asked.
-  EXPECT_TRUE(index_for(dims({ir::kDynamic, 32}), dims({ir::kDynamic, 1})).empty());
-  EXPECT_TRUE(index_for(dims({ir::kDynamic, 32}), dims({32})).empty()) << "a bias row";
-  EXPECT_TRUE(index_for(dims({4, 8}), dims({ir::kDynamic, 1})).empty()) << "unknown operand";
+TEST(IndexForTest, AnUnknownExtentStillFoldsADivisorThatIsKnown) {
+  // A layer norm: the row length is written into the model, so it survives a shape that is not.
+  // Only the axes outside it are unknown, and the index does not need those.
+  EXPECT_EQ(index_for(dims({ir::kDynamic, 32}), dims({ir::kDynamic, 1})), "i / 32");
+  EXPECT_EQ(index_for(dims({ir::kDynamic, 32}), dims({32})), "i % 32") << "a bias row";
+}
+
+TEST(IndexForTest, ADivisorThatIsNotKnownHasNoExpression) {
+  // A softmax over a sequence: the row length is the thing that changes, so there is no number to
+  // write and `index_for` has no answer. The read itself is still describable, which is what
+  // `operand_read` says and what lets the divisor be passed to the kernel instead.
+  const ir::TensorType out = dims({ir::kDynamic, 4, ir::kDynamic, ir::kDynamic});
+  const ir::TensorType row = dims({ir::kDynamic, 4, ir::kDynamic, 1});
+  EXPECT_TRUE(index_for(out, row).empty());
+
+  const OperandRead found = operand_read(out, row).value_or(OperandRead{});
+  EXPECT_EQ(found.kind, OperandRead::Kind::kRepeated);
+  EXPECT_FALSE(found.is_known()) << "a softmax row is as long as the sequence";
+}
+
+TEST(IndexForTest, AnOperandThatCannotBroadcastIsStillRefused) {
+  EXPECT_FALSE(operand_read(dims({4, 8}), dims({ir::kDynamic, 1})).has_value());
+  EXPECT_FALSE(operand_read(dims({4, 8}), dims({4, 4})).has_value());
+}
+
+TEST(IndexForTest, APermutedOperandNeedsEveryExtent) {
+  // The general form steps axis by axis, so there is no single number a launch could supply. An
+  // operand that reaches it without known extents has no kernel at all.
+  EXPECT_TRUE(operand_read(dims({4, 8}), strided({4, 8}, {1, 4})).has_value());
+  EXPECT_FALSE(
+      operand_read(dims({ir::kDynamic, 8}), strided({ir::kDynamic, 8}, {1, 4})).has_value());
 }
 
 TEST(ExtractTest, AGroupWithUnknownExtentsCarriesNoElementCount) {
@@ -336,6 +361,45 @@ TEST(CudaEmitterTest, AKernelForUnknownExtentsHoldsNoExtent) {
   EXPECT_NE(source->find("long long n) {"), std::string::npos) << *source;
   EXPECT_NE(source->find("[i]"), std::string::npos) << *source;
   EXPECT_EQ(source->find("32"), std::string::npos) << "an extent was written into the body";
+}
+
+TEST(CudaEmitterTest, ADivisorThatIsNotKnownBecomesAParameter) {
+  // A softmax row, whose length is the thing that changes. The kernel takes it beside the element
+  // count, so one compile still serves every shape.
+  auto graph = fused(R"(graph @g(%s: f32[?,4,?,?], %m: f32[?,4,?,1]) -> f32[?,4,?,?] {
+  %d = aten.sub.Tensor(%s, %m) : f32[?,4,?,?]
+  %e = aten.exp.default(%d) : f32[?,4,?,?]
+  return %e
+}
+)");
+  ASSERT_NE(graph, nullptr);
+  const auto kernel = extract_kernel(*graph, 0);
+  ASSERT_TRUE(kernel.has_value()) << (kernel.has_value() ? "" : kernel.error().to_string());
+  ASSERT_TRUE(cuda_emitter().supports(*kernel));
+
+  const auto source = cuda_emitter().emit(*kernel);
+  ASSERT_TRUE(source.has_value()) << (source.has_value() ? "" : source.error().to_string());
+  EXPECT_NE(source->find("long long n,\n    long long d_m) {"), std::string::npos) << *source;
+  EXPECT_NE(source->find("p_m[i / d_m]"), std::string::npos) << *source;
+  EXPECT_NE(source->find("p_s[i]"), std::string::npos) << *source;
+}
+
+TEST(CudaEmitterTest, ADivisorThatIsKnownIsStillFoldedIn) {
+  // A dividing instruction by a constant is cheaper than one by a register, so the number is
+  // written in whenever there is one, and the parameter is only for when there is not.
+  auto graph = fused(R"(graph @g(%x: f32[?,32], %m: f32[?,1]) -> f32[?,32] {
+  %d = aten.sub.Tensor(%x, %m) : f32[?,32]
+  %e = aten.exp.default(%d) : f32[?,32]
+  return %e
+}
+)");
+  ASSERT_NE(graph, nullptr);
+  const auto kernel = extract_kernel(*graph, 0);
+  ASSERT_TRUE(kernel.has_value());
+  const auto source = cuda_emitter().emit(*kernel);
+  ASSERT_TRUE(source.has_value());
+  EXPECT_NE(source->find("p_m[i / 32]"), std::string::npos) << *source;
+  EXPECT_EQ(source->find("d_m"), std::string::npos) << *source;
 }
 
 } // namespace

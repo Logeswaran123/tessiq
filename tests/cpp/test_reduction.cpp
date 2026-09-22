@@ -124,9 +124,39 @@ TEST(ReductionTest, AxesThatAreNotAdjacentHaveNoKernel) {
   EXPECT_FALSE(has_kernel_shape(sum_over("[4,8,3]", "[8]", "[0, 2]")));
 }
 
-TEST(ReductionTest, AnUnknownExtentHasNoKernel) {
-  // The extents are baked into the launch, so a shape that is not known yet cannot be launched.
-  EXPECT_FALSE(has_kernel_shape(sum_over("[4,?]", "[4]", "[1]")));
+TEST(ReductionTest, AnUnknownExtentLeavesItsProductUnknown) {
+  // The three extents reach the kernel as arguments, so a shape that is not known yet still has
+  // one. What the description carries is the axes folded; the numbers come from the tensor.
+  const ReductionKernel kernel = extract("graph @g(%a: f32[4,?]) -> f32[4] {\n"
+                                         "  %s = aten.sum.dim_IntList(%a) {arg1 = [1]} : f32[4]\n"
+                                         "  return %s\n}\n");
+  EXPECT_TRUE(kernel.has_dynamic_extent());
+  EXPECT_EQ(kernel.outer, 4);
+  EXPECT_EQ(kernel.reduce, ir::kDynamic);
+  EXPECT_EQ(kernel.inner, 1);
+  EXPECT_EQ(kernel.first_axis, 1U);
+  EXPECT_EQ(kernel.last_axis, 1U);
+  EXPECT_EQ(kernel.rank, 2U);
+  // Still block-per-output: the folded axis is last, so one block's threads read addresses that
+  // sit next to each other, which does not depend on how many there are.
+  EXPECT_EQ(kernel.shape, ReductionShape::kBlockPerOutput);
+}
+
+TEST(ReductionTest, TheExtentsAreWorkedOutFromTheSizesTheLaunchIsGiven) {
+  // What the launch does with a tensor once it has one. The same split, over real numbers.
+  const ReductionExtents extents = split_axes({8, 4, 64, 16}, 2, 2);
+  EXPECT_EQ(extents.outer, 32);
+  EXPECT_EQ(extents.reduce, 64);
+  EXPECT_EQ(extents.inner, 16);
+  EXPECT_EQ(extents.elements(), 8 * 4 * 64 * 16);
+  EXPECT_EQ(extents.outputs(), 32 * 16);
+  EXPECT_TRUE(extents.are_usable());
+}
+
+TEST(ReductionTest, AnUnknownSizeLeavesTheSplitUnusable) {
+  const ReductionExtents extents = split_axes({ir::kDynamic, 8}, 1, 1);
+  EXPECT_EQ(extents.outer, ir::kDynamic);
+  EXPECT_FALSE(extents.are_usable()) << "a launch cannot be given a number nobody knows";
 }
 
 TEST(ReductionTest, ARankZeroInputHasNoKernel) {

@@ -54,7 +54,7 @@ const std::int64_t* cluster_of(const ir::Node* node) {
 bool every_operand_is_reachable(const ir::Node* node) {
   const ir::TensorType& result = node->result(0)->type();
   for (const ir::Value* operand : node->operands()) {
-    if (operand == nullptr || codegen::index_for(result, operand->type()).empty()) {
+    if (operand == nullptr || !codegen::operand_read(result, operand->type()).has_value()) {
       return false;
     }
   }

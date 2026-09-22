@@ -4,12 +4,15 @@
 #pragma once
 
 #include <ATen/core/Tensor.h>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 #include "tessiq/codegen/gemm.h"
+#include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
+#include "tessiq/codegen/reduction.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/support/result.h"
 
@@ -34,6 +37,11 @@ struct FusedKernel {
 
   /// Elements every buffer holds. Fusion refuses a shape change, so there is one count.
   std::int64_t elements = 0;
+
+  /// How each input is reached, in the order `inputs` names them. A kernel written for a shape
+  /// nobody knew could not fold a broadcast's divisor into its source, so the launch works each
+  /// one out from the buffer sizes and passes it beside the element count.
+  std::vector<codegen::OperandRead> reads;
 
   /// Loaded and owned by the codegen layer, which keeps it for the life of the process.
   const codegen::Program* program = nullptr;
@@ -69,17 +77,45 @@ struct ReductionKernel {
   std::int64_t reduce = 0;
   std::int64_t inner = 0;
 
-  /// Blocks to launch, which depends on which kernel shape the emitter wrote. Carried rather
-  /// than recomputed, so the launch cannot disagree with the source about how the threads are
-  /// laid over the problem.
-  std::int64_t blocks = 0;
+  /// The axes folded and the rank they are folded over, so that a launch given a shape the
+  /// compiler never saw can work the three extents out from the tensor itself.
+  std::size_t first_axis = 0;
+  std::size_t last_axis = 0;
+  std::size_t rank = 0;
+
+  /// Whether the folded axes stay in the result as ones, which the executor needs in order to
+  /// allocate a tensor the rest of the graph can read.
+  bool keeps_dims = false;
+
+  /// Which kernel shape the emitter wrote. Carried rather than inferred, so the launch cannot
+  /// disagree with the source about how the threads are laid over the problem.
+  codegen::ReductionShape shape = codegen::ReductionShape::kBlockPerOutput;
 
   const codegen::Program* program = nullptr;
 
-  /// How many elements it reads and writes.
+  /// Whether the extents arrive with the tensor rather than being known here.
+  [[nodiscard]] bool has_dynamic_extent() const { return !extents().are_usable(); }
+
+  /// What the description knew, with `ir::kDynamic` where it knew nothing.
+  [[nodiscard]] codegen::ReductionExtents extents() const {
+    codegen::ReductionExtents known;
+    known.outer = outer;
+    known.reduce = reduce;
+    known.inner = inner;
+    return known;
+  }
+
+  /// How many elements it reads and writes. Meaningless unless the extents are known.
   [[nodiscard]] std::int64_t inputs() const { return outer * reduce * inner; }
 
   [[nodiscard]] std::int64_t outputs() const { return outer * inner; }
+
+  /// The three extents one launch walks, taken from the tensor it is handed.
+  [[nodiscard]] Result<codegen::ReductionExtents> extents_for(const at::Tensor& in) const;
+
+  /// The shape of the tensor it writes, given the one it will read.
+  [[nodiscard]] Result<std::vector<std::int64_t>>
+  output_shape(const std::vector<at::Tensor>& tensors) const;
 
   [[nodiscard]] Result<void> launch(const at::Tensor& in, const at::Tensor& out) const;
 };
@@ -111,6 +147,18 @@ struct GemmKernel {
 
   /// The IR name of the value written.
   [[nodiscard]] const std::string& output() const { return description.output; }
+
+  /// Whether any number the call needs arrives with the tensors rather than being known here.
+  [[nodiscard]] bool has_dynamic_extent() const { return description.has_dynamic_extent(); }
+
+  /// The shape of the tensor this writes, given the ones it will read.
+  ///
+  /// The batch dimensions and the row count come from the left operand and the column count from
+  /// the right, which is where they are even when the description has numbers of its own. The
+  /// caller needs this because the fake tensor it would otherwise size the result from holds
+  /// symbolic extents and has no shape.
+  [[nodiscard]] Result<std::vector<std::int64_t>>
+  output_shape(const std::vector<at::Tensor>& tensors) const;
 
   /// Runs it. `tensors` matches `inputs()`.
   [[nodiscard]] Result<void> launch(const std::vector<at::Tensor>& tensors,

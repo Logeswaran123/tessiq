@@ -110,12 +110,13 @@ def _output_for(
 
     The shape usually comes from the fake tensor AOTAutograd left on the node, which is the same
     answer torch would give. In a graph traced for more than one shape that fake tensor holds
-    symbolic extents and has no size, so the answer comes from the kernel's own input instead. A
-    kernel compiled for such a graph reads every input at the output position, which is the only
-    shape it is given, so the first input has the result's shape by construction.
+    symbolic extents and has no size, so the kernel is asked instead. It is asked rather than
+    told because what relates the result's shape to the operands' differs by kernel: a fusion
+    group writes the shape every one of its buffers has, and a matmul writes the left operand's
+    rows against the right operand's columns.
     """
     if getattr(kernel, "has_dynamic_extent", False):
-        return torch.empty_like(inputs[0], device=device)
+        return torch.empty(kernel.output_shape(inputs), dtype=inputs[0].dtype, device=device)
     meta = node.meta["val"]
     return torch.empty(meta.shape, dtype=meta.dtype, device=device)
 

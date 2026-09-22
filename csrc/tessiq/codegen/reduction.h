@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -49,6 +50,34 @@ enum class ReductionShape {
 ///
 /// Axes that are not a contiguous range, such as the first and last of a rank-3 tensor, cannot be
 /// written this way. Those have no kernel and run on the host.
+/// The three extents one reduction launch walks.
+///
+/// Separate from the description because a description is built once and a launch happens many
+/// times. When the shape was known these are the description's own; when it was not, they are
+/// worked out from the tensor the launch is handed.
+struct ReductionExtents {
+  std::int64_t outer = 0;
+  std::int64_t reduce = 0;
+  std::int64_t inner = 0;
+
+  [[nodiscard]] std::int64_t outputs() const { return outer * inner; }
+
+  [[nodiscard]] std::int64_t elements() const { return outer * reduce * inner; }
+
+  /// Whether the three describe a reduction that can actually be walked.
+  [[nodiscard]] bool are_usable() const { return outer > 0 && reduce > 0 && inner > 0; }
+};
+
+/// Splits `sizes` into the three extents, folding the axes in `[first, last]`.
+///
+/// An extent that is not known leaves its product `ir::kDynamic`, so a caller can tell the
+/// difference between "one, because there are no axes there" and "not known yet".
+[[nodiscard]] ReductionExtents
+split_axes(const std::vector<std::int64_t>& sizes, std::size_t first, std::size_t last);
+
+/// Blocks to launch, which follows from the kernel shape and the extents it is given.
+[[nodiscard]] std::int64_t blocks_for(ReductionShape shape, const ReductionExtents& extents);
+
 struct ReductionKernel {
   /// The generated function's name, which is also the cubin cache's key.
   std::string name;
@@ -67,15 +96,38 @@ struct ReductionKernel {
   /// Which kernel shape reads this layout without fighting the memory system.
   ReductionShape shape = ReductionShape::kBlockPerOutput;
 
+  /// The axes folded, as an inclusive range over the input's rank, and that rank. The three
+  /// extents above are the products these pick out, and a launch that was given none of them
+  /// works them out from the tensor's own sizes.
+  std::size_t first_axis = 0;
+  std::size_t last_axis = 0;
+  std::size_t rank = 0;
+
+  /// Whether the folded axes stay in the result as ones. `keepdim=True` on the torch side, and
+  /// the difference between a result of `[?,4,?,1]` and one of `[?,4,?]` over the same numbers.
+  bool keeps_dims = false;
+
   /// The IR names of the value read and the value written.
   std::string input;
   std::string output;
 
-  /// How many elements the kernel writes.
+  /// What the description itself knows, with `ir::kDynamic` where it knows nothing.
+  [[nodiscard]] ReductionExtents extents() const {
+    ReductionExtents known;
+    known.outer = outer;
+    known.reduce = reduce;
+    known.inner = inner;
+    return known;
+  }
+
+  /// Whether any extent the launch needs arrives with the tensor rather than being known here.
+  [[nodiscard]] bool has_dynamic_extent() const { return !extents().are_usable(); }
+
+  /// How many elements the kernel writes. Meaningless unless the extents are known.
   [[nodiscard]] std::int64_t outputs() const { return outer * inner; }
 
-  /// Blocks to launch, which follows from the shape.
-  [[nodiscard]] std::int64_t blocks() const;
+  /// Blocks to launch, which follows from the shape. Meaningless unless the extents are known.
+  [[nodiscard]] std::int64_t blocks() const { return blocks_for(shape, extents()); }
 };
 
 /// Describes `node` as a reduction kernel, or nothing if it cannot be one.

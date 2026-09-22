@@ -4,6 +4,7 @@
 #include "tessiq/torch/fused.h"
 
 #include <ATen/core/Tensor.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -28,8 +29,30 @@ constexpr std::string_view kLogModule = "fused";
 
 } // namespace
 
+/// The number a broadcast's index expression divides or wraps by, worked out from the buffers.
+///
+/// Both kinds are a relation between two element counts, which is why the launch can supply them
+/// without knowing a single extent: an operand read in runs holds one element per run, and one
+/// read over and over holds exactly a cycle.
+std::int64_t
+divisor_for(codegen::OperandRead::Kind kind, std::int64_t operand, std::int64_t count) {
+  return kind == codegen::OperandRead::Kind::kRepeated ? count / operand : operand;
+}
+
 Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
                                  const at::Tensor& out) const {
+  /// Whether operand `i` of this many elements can be read for a result of `count`.
+  ///
+  /// An operand read at `i` has to match exactly. One that broadcasts has to divide the result,
+  /// because the index expression steps through it in whole runs or whole cycles and a remainder
+  /// would send the last of them past the end.
+  const auto reaches = [this](std::size_t i, std::int64_t operand, std::int64_t count) {
+    if (i >= reads.size() || reads[i].kind == codegen::OperandRead::Kind::kSameShape) {
+      return operand == count;
+    }
+    return operand > 0 && count % operand == 0;
+  };
+
   if (program == nullptr) {
     return internal_error("fusion group " + std::to_string(group) + " has no compiled kernel");
   }
@@ -65,7 +88,7 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
     // Not every input has as many elements as the result. One that broadcasts, such as the
     // per-row mean a layer norm subtracts, has fewer, and the kernel was written knowing where to
     // read it. More than the result is always wrong.
-    const bool fits = dynamic ? tensor.numel() == count : tensor.numel() <= count;
+    const bool fits = dynamic ? reaches(i, tensor.numel(), count) : tensor.numel() <= count;
     if (!fits || tensor.numel() <= 0) {
       return invalid_argument("fusion group " + std::to_string(group) + " was given an input of " +
                               std::to_string(tensor.numel()) + " elements for a result of " +
@@ -80,7 +103,21 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
   }
   buffers.push_back(out.data_ptr());
 
-  return program->launch(buffers, count);
+  if (!dynamic) {
+    return program->launch(buffers, count);
+  }
+
+  // The element count, then one divisor per operand that needs one, in operand order. That is
+  // the order the emitter wrote the parameters in.
+  std::vector<std::int64_t> scalars{count};
+  for (std::size_t i = 0; i < tensors.size(); ++i) {
+    if (i < reads.size() && !reads[i].is_known()) {
+      scalars.push_back(divisor_for(reads[i].kind, tensors[i].numel(), count));
+    }
+  }
+  const auto blocks = (count + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
+                      static_cast<std::int64_t>(codegen::kBlockSize);
+  return program->launch(buffers, scalars, blocks);
 }
 
 Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordinal) {
@@ -121,11 +158,18 @@ Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordin
       members.push_back(step.result);
     }
 
+    std::vector<codegen::OperandRead> reads;
+    reads.reserve(description.inputs.size());
+    for (const codegen::KernelInput& input : description.inputs) {
+      reads.push_back(input.read);
+    }
+
     compiled.push_back({.group = group,
                         .inputs = description.input_names(),
                         .output = description.output,
                         .members = std::move(members),
                         .elements = description.elements,
+                        .reads = std::move(reads),
                         .program = program});
   }
 
@@ -134,23 +178,76 @@ Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordin
   return compiled;
 }
 
+/// The three extents this launch walks, taken from the tensor it was handed.
+///
+/// The axes folded are the same on every call; only how many elements they hold changes. So the
+/// split is redone here rather than carried, and checked against what the description knew.
+Result<codegen::ReductionExtents> ReductionKernel::extents_for(const at::Tensor& in) const {
+  if (std::cmp_not_equal(in.dim(), rank)) {
+    return invalid_argument("reduction " + output + " was compiled for rank " +
+                            std::to_string(rank) + " and handed rank " + std::to_string(in.dim()));
+  }
+  const std::vector<std::int64_t> sizes(in.sizes().begin(), in.sizes().end());
+  const codegen::ReductionExtents found = codegen::split_axes(sizes, first_axis, last_axis);
+  if (!found.are_usable()) {
+    return invalid_argument("reduction " + output + " was handed a shape it cannot walk");
+  }
+
+  // Known extents are still checked. A description that disagrees with the tensor means the
+  // compiler decided something about a shape that the tensor does not have, and the kernel would
+  // read past the buffer rather than say so.
+  const std::array<std::pair<std::int64_t, std::int64_t>, 3> pairs{
+      {{outer, found.outer}, {reduce, found.reduce}, {inner, found.inner}}};
+  for (const auto& [described, actual] : pairs) {
+    if (described != ir::kDynamic && described != actual) {
+      return invalid_argument("reduction " + output + " was compiled for " +
+                              std::to_string(described) + " and handed " + std::to_string(actual));
+    }
+  }
+  return found;
+}
+
+Result<std::vector<std::int64_t>>
+ReductionKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
+  if (tensors.size() != 1) {
+    return invalid_argument("reduction " + output + " reads one tensor");
+  }
+  // The kept axes in order, which is what the reduction writes. Whether the folded axes stay as
+  // ones is the graph's business: the node's own type says so, and a keepdim reshape follows.
+  std::vector<std::int64_t> kept;
+  const at::Tensor& in = tensors.front();
+  for (std::size_t axis = 0; axis < rank; ++axis) {
+    const bool folded = axis >= first_axis && axis <= last_axis;
+    if (!folded) {
+      kept.push_back(in.size(static_cast<std::int64_t>(axis)));
+    } else if (keeps_dims) {
+      kept.push_back(1);
+    }
+  }
+  return kept;
+}
+
 Result<void> ReductionKernel::launch(const at::Tensor& in, const at::Tensor& out) const {
   if (program == nullptr) {
     return internal_error("reduction " + output + " has no compiled kernel");
   }
+  TESSIQ_ASSIGN_OR_RETURN(const codegen::ReductionExtents extents, extents_for(in));
+  const std::int64_t reads = extents.elements();
+  const std::int64_t writes = extents.outputs();
   // The kernel indexes both buffers arithmetically from their first element, so a layout other
   // than contiguous would have it read and write the wrong positions without failing.
-  if (!in.is_contiguous() || in.numel() != inputs()) {
-    return invalid_argument("reduction " + output + " expects " + std::to_string(inputs()) +
+  if (!in.is_contiguous() || in.numel() != reads) {
+    return invalid_argument("reduction " + output + " expects " + std::to_string(reads) +
                             " contiguous input elements, got " + std::to_string(in.numel()));
   }
-  if (!out.is_contiguous() || out.numel() != outputs()) {
-    return invalid_argument("reduction " + output + " expects " + std::to_string(outputs()) +
+  if (!out.is_contiguous() || out.numel() != writes) {
+    return invalid_argument("reduction " + output + " expects " + std::to_string(writes) +
                             " contiguous output elements, got " + std::to_string(out.numel()));
   }
 
   const std::vector<void*> buffers{in.data_ptr(), out.data_ptr()};
-  return program->launch(buffers, {outer, reduce, inner}, blocks);
+  return program->launch(
+      buffers, {extents.outer, extents.reduce, extents.inner}, codegen::blocks_for(shape, extents));
 }
 
 /// Compiles one reduction, or nothing when it has no kernel shape or no code the emitter writes.
@@ -183,7 +280,11 @@ compile_one(const ir::Node& node, std::pair<int, int> capability, int ordinal) {
                                                         .outer = description->outer,
                                                         .reduce = description->reduce,
                                                         .inner = description->inner,
-                                                        .blocks = description->blocks(),
+                                                        .first_axis = description->first_axis,
+                                                        .last_axis = description->last_axis,
+                                                        .rank = description->rank,
+                                                        .keeps_dims = description->keeps_dims,
+                                                        .shape = description->shape,
                                                         .program = program}};
 }
 
@@ -212,12 +313,98 @@ Result<std::vector<ReductionKernel>> compile_reductions(const ir::Graph& graph, 
   return compiled;
 }
 
+/// The step between rows of `tensor` as stored, which BLAS calls the leading dimension.
+///
+/// Which of the two strides that is depends on how the library was told to read the matrix, and
+/// that was settled when the description was built: a transposed operand is the same bytes read
+/// the other way round, so its rows are the stored columns.
+std::int64_t leading_of(const at::Tensor& tensor, bool transposed) {
+  const auto rank = tensor.dim();
+  const std::int64_t rows = tensor.size(rank - 2);
+  const std::int64_t columns = tensor.size(rank - 1);
+  // An axis of extent one has a meaningless step: there is no second element along it, so torch
+  // is free to report anything and often reports one. The packed value is what BLAS needs, and
+  // it is the extent of the other axis.
+  if (transposed) {
+    return columns == 1 ? rows : tensor.stride(rank - 1);
+  }
+  return rows == 1 ? columns : tensor.stride(rank - 2);
+}
+
+/// Whether the description's idea of an extent survives contact with the tensor.
+Result<void> agrees(const std::string& gemm,
+                    std::string_view what,
+                    std::int64_t described,
+                    std::int64_t actual) {
+  if (described != ir::kDynamic && described != actual) {
+    return invalid_argument("gemm " + gemm + " was compiled for " + std::string(what) + " " +
+                            std::to_string(described) + " and handed " + std::to_string(actual));
+  }
+  return ok();
+}
+
+/// The six numbers the BLAS call needs, read off the tensors this call was handed.
+///
+/// A graph traced for more than one shape has nothing to read them from on the description, so
+/// the tensors are the only place they exist. They are read even when the description does hold
+/// them, and checked against it. A disagreement means the compiler decided something about a
+/// shape or a layout that the tensor does not have, which is how a matmul reads the wrong bytes
+/// and returns numbers nobody can explain.
+Result<codegen::GemmExtents> extents_for(const codegen::GemmKernel& description,
+                                         const at::Tensor& lhs,
+                                         const at::Tensor& rhs,
+                                         const at::Tensor& out) {
+  if (lhs.dim() < 2 || rhs.dim() < 2 || out.dim() < 2) {
+    return invalid_argument("gemm " + description.output +
+                            " was handed something that is not a "
+                            "matrix");
+  }
+
+  codegen::GemmExtents extents;
+  extents.m = out.size(out.dim() - 2);
+  extents.n = out.size(out.dim() - 1);
+  extents.k = lhs.size(lhs.dim() - 1);
+  const std::int64_t plane = extents.m * extents.n;
+  extents.batch = plane == 0 ? 0 : out.numel() / plane;
+  extents.lhs_leading = leading_of(lhs, description.lhs.transposed);
+  extents.rhs_leading = leading_of(rhs, description.rhs.transposed);
+
+  TESSIQ_RETURN_IF_ERROR(agrees(description.output, "m", description.m, extents.m));
+  TESSIQ_RETURN_IF_ERROR(agrees(description.output, "n", description.n, extents.n));
+  TESSIQ_RETURN_IF_ERROR(agrees(description.output, "k", description.k, extents.k));
+  TESSIQ_RETURN_IF_ERROR(
+      agrees(description.output, "a batch of", description.batch, extents.batch));
+  TESSIQ_RETURN_IF_ERROR(agrees(description.output,
+                                "a left operand stepping by",
+                                description.lhs.leading,
+                                extents.lhs_leading));
+  TESSIQ_RETURN_IF_ERROR(agrees(description.output,
+                                "a right operand stepping by",
+                                description.rhs.leading,
+                                extents.rhs_leading));
+  return extents;
+}
+
 std::vector<std::string> GemmKernel::inputs() const {
   std::vector<std::string> names{description.lhs.name, description.rhs.name};
   if (description.bias.has_value()) {
     names.push_back(*description.bias);
   }
   return names;
+}
+
+Result<std::vector<std::int64_t>>
+GemmKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
+  if (tensors.size() < 2 || tensors[0].dim() < 2 || tensors[1].dim() < 2) {
+    return invalid_argument("gemm " + description.output +
+                            " cannot size a result from what it was given");
+  }
+  const at::Tensor& lhs = tensors[0];
+  const at::Tensor& rhs = tensors[1];
+
+  std::vector<std::int64_t> shape(lhs.sizes().begin(), lhs.sizes().end());
+  shape.back() = rhs.size(rhs.dim() - 1);
+  return shape;
 }
 
 Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
@@ -228,22 +415,24 @@ Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
                             std::to_string(expected.size()) + " inputs, got " +
                             std::to_string(tensors.size()));
   }
-  if (!out.is_contiguous() || out.numel() != description.output_elements()) {
-    return invalid_argument("gemm " + description.output + " expects " +
-                            std::to_string(description.output_elements()) +
-                            " contiguous output elements, got " + std::to_string(out.numel()));
+  if (!out.is_contiguous()) {
+    // The result is written row by row, so a caller expecting anything else would read it in the
+    // wrong order.
+    return invalid_argument("gemm " + description.output +
+                            " was given an output that is not contiguous");
   }
+  TESSIQ_ASSIGN_OR_RETURN(const codegen::GemmExtents extents,
+                          extents_for(description, tensors[0], tensors[1], out));
 
   // cuBLAS scales the destination and adds, so what the multiply accumulates into has to be there
   // first: zeros for a plain matmul, the bias repeated down every row for an addmm. Both are one
   // write of the output, which is small beside the multiply.
-  const std::int64_t total = description.output_elements();
+  const std::int64_t total = extents.output_elements();
   if (description.bias.has_value()) {
     const at::Tensor& bias = tensors.back();
-    if (bias.numel() != description.n) {
+    if (bias.numel() != extents.n) {
       return invalid_argument("gemm " + description.output + " expects a bias of " +
-                              std::to_string(description.n) + ", got " +
-                              std::to_string(bias.numel()));
+                              std::to_string(extents.n) + ", got " + std::to_string(bias.numel()));
     }
     if (fill == nullptr) {
       return internal_error("gemm " + description.output +
@@ -253,7 +442,7 @@ Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
     const std::vector<void*> buffers{bias.data_ptr(), out.data_ptr()};
     TESSIQ_RETURN_IF_ERROR(
         fill->launch(buffers,
-                     {total, description.n},
+                     {total, extents.n},
                      (total + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
                          static_cast<std::int64_t>(codegen::kBlockSize)));
   } else {
@@ -266,7 +455,7 @@ Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
   const codegen::GemmBuffers buffers{.lhs = tensors[0].const_data_ptr(),
                                      .rhs = tensors[1].const_data_ptr(),
                                      .output = out.data_ptr()};
-  return codegen::launch_gemm(description, buffers, ordinal);
+  return codegen::launch_gemm(description, extents, buffers, ordinal);
 }
 
 Result<std::vector<GemmKernel>> compile_gemms(const ir::Graph& graph, int ordinal) {

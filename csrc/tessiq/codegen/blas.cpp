@@ -78,12 +78,18 @@ Result<void> zero_fill(void* data, std::size_t bytes, int ordinal) {
   return ok();
 }
 
-Result<void> launch_gemm(const GemmKernel& kernel, const GemmBuffers& buffers, int ordinal) {
+Result<void> launch_gemm(const GemmKernel& kernel,
+                         const GemmExtents& extents,
+                         const GemmBuffers& buffers,
+                         int ordinal) {
   if (kernel.dtype != ir::DType::kF32) {
     return unsupported("cublas gemm is float32 only for now");
   }
   if (buffers.lhs == nullptr || buffers.rhs == nullptr || buffers.output == nullptr) {
     return invalid_argument("gemm was given a null buffer");
+  }
+  if (!extents.are_usable()) {
+    return invalid_argument("gemm " + kernel.output + " was given no usable extents");
   }
 
   TESSIQ_ASSIGN_OR_RETURN(const cublasHandle_t handle, handle_for(ordinal));
@@ -101,11 +107,11 @@ Result<void> launch_gemm(const GemmKernel& kernel, const GemmBuffers& buffers, i
   const float alpha = 1.0F;
   const float beta = 1.0F;
 
-  const auto m = static_cast<int>(kernel.m);
-  const auto n = static_cast<int>(kernel.n);
-  const auto k = static_cast<int>(kernel.k);
-  const auto lda = static_cast<int>(kernel.lhs.leading);
-  const auto ldb = static_cast<int>(kernel.rhs.leading);
+  const auto m = static_cast<int>(extents.m);
+  const auto n = static_cast<int>(extents.n);
+  const auto k = static_cast<int>(extents.k);
+  const auto lda = static_cast<int>(extents.lhs_leading);
+  const auto ldb = static_cast<int>(extents.rhs_leading);
 
   auto* c = static_cast<float*>(buffers.output);
 
@@ -118,7 +124,7 @@ Result<void> launch_gemm(const GemmKernel& kernel, const GemmBuffers& buffers, i
   const int first_ld = ldb;
   const int second_ld = lda;
 
-  if (kernel.batch == 1) {
+  if (extents.batch == 1) {
     if (const cublasStatus_t status = cublasSgemm(handle,
                                                   first_op,
                                                   second_op,
@@ -140,9 +146,9 @@ Result<void> launch_gemm(const GemmKernel& kernel, const GemmBuffers& buffers, i
   }
 
   // Batched, with each matrix following the last. The strides are in elements.
-  const auto first_stride = static_cast<long long>(kernel.k) * kernel.n;
-  const auto second_stride = static_cast<long long>(kernel.m) * kernel.k;
-  const auto out_stride = static_cast<long long>(kernel.m) * kernel.n;
+  const auto first_stride = static_cast<long long>(extents.k) * extents.n;
+  const auto second_stride = static_cast<long long>(extents.m) * extents.k;
+  const auto out_stride = static_cast<long long>(extents.m) * extents.n;
   if (const cublasStatus_t status = cublasSgemmStridedBatched(handle,
                                                               first_op,
                                                               second_op,
@@ -160,7 +166,7 @@ Result<void> launch_gemm(const GemmKernel& kernel, const GemmBuffers& buffers, i
                                                               c,
                                                               n,
                                                               out_stride,
-                                                              static_cast<int>(kernel.batch));
+                                                              static_cast<int>(extents.batch));
       status != CUBLAS_STATUS_SUCCESS) {
     return blas_error(status, "cublasSgemmStridedBatched");
   }
@@ -179,8 +185,10 @@ Result<void> zero_fill(void* /*data*/, std::size_t /*bytes*/, int /*ordinal*/) {
   return unsupported("this build has no CUDA toolkit");
 }
 
-Result<void>
-launch_gemm(const GemmKernel& /*kernel*/, const GemmBuffers& /*buffers*/, int /*ordinal*/) {
+Result<void> launch_gemm(const GemmKernel& /*kernel*/,
+                         const GemmExtents& /*extents*/,
+                         const GemmBuffers& /*buffers*/,
+                         int /*ordinal*/) {
   return unsupported("this build has no CUDA toolkit, so there is no BLAS to call");
 }
 

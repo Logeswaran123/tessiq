@@ -68,6 +68,7 @@ class FusedKernel:
     elements: int
     has_dynamic_extent: bool
     packs_inputs: bool
+    def output_shape(self, inputs: list[Any]) -> list[int]: ...
     def launch(self, inputs: list[Any], out: Any) -> None: ...
 
 class ReductionKernel:
@@ -78,7 +79,9 @@ class ReductionKernel:
     inner: int
     blocks: int
     elements: int
+    has_dynamic_extent: bool
     packs_inputs: bool
+    def output_shape(self, inputs: list[Any]) -> list[int]: ...
     def launch(self, inputs: list[Any], out: Any) -> None: ...
 
 class GemmKernel:
@@ -87,6 +90,8 @@ class GemmKernel:
     packs_inputs: bool
     transposed: tuple[bool, bool]
     extents: tuple[int, int, int, int]
+    has_dynamic_extent: bool
+    def output_shape(self, inputs: list[Any]) -> list[int]: ...
     def launch(self, inputs: list[Any], out: Any) -> None: ...
 
 class CompiledGraph:

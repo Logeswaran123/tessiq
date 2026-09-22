@@ -40,15 +40,42 @@ std::optional<ReduceOp> combiner(std::string_view canonical) {
   return std::nullopt;
 }
 
+/// The product of `dims[from, to)`, or `ir::kDynamic` when one of them is not known.
+///
+/// An empty range is 1, which is what an axis position with nothing outside it means, and is why
+/// "not known" has to be its own answer rather than a placeholder of 1.
 std::int64_t product(const std::vector<std::int64_t>& dims, std::size_t from, std::size_t to) {
   std::int64_t total = 1;
   for (std::size_t i = from; i < to; ++i) {
+    if (dims[i] == ir::kDynamic) {
+      return ir::kDynamic;
+    }
     total *= dims[i];
   }
   return total;
 }
 
 } // namespace
+
+ReductionExtents
+split_axes(const std::vector<std::int64_t>& sizes, std::size_t first, std::size_t last) {
+  if (sizes.empty() || first > last || last >= sizes.size()) {
+    return {};
+  }
+  ReductionExtents extents;
+  extents.outer = product(sizes, 0, first);
+  extents.reduce = product(sizes, first, last + 1);
+  extents.inner = product(sizes, last + 1, sizes.size());
+  return extents;
+}
+
+std::int64_t blocks_for(ReductionShape shape, const ReductionExtents& extents) {
+  if (shape == ReductionShape::kBlockPerOutput) {
+    return extents.outputs();
+  }
+  const auto width = static_cast<std::int64_t>(kBlockSize);
+  return (extents.outputs() + width - 1) / width;
+}
 
 Result<std::optional<ReductionKernel>> extract_reduction(const ir::Node& node) {
   const passes::OpInfo* info = passes::find_op(node.op());
@@ -93,8 +120,7 @@ Result<std::optional<ReductionKernel>> extract_reduction(const ir::Node& node) {
   }
 
   for (const std::int64_t dim : dims) {
-    if (dim == ir::kDynamic || dim < 0) {
-      // The extents are baked into the launch, so a shape that is not yet known has no kernel.
+    if (dim < 0 && dim != ir::kDynamic) {
       return std::optional<ReductionKernel>{};
     }
   }
@@ -102,9 +128,14 @@ Result<std::optional<ReductionKernel>> extract_reduction(const ir::Node& node) {
   ReductionKernel kernel;
   kernel.op = *op;
   kernel.dtype = input.dtype();
-  kernel.outer = product(dims, 0, axes.front());
-  kernel.reduce = product(dims, axes.front(), axes.back() + 1);
-  kernel.inner = product(dims, axes.back() + 1, dims.size());
+  const ReductionExtents extents = split_axes(dims, axes.front(), axes.back());
+  kernel.outer = extents.outer;
+  kernel.reduce = extents.reduce;
+  kernel.inner = extents.inner;
+  kernel.first_axis = axes.front();
+  kernel.last_axis = axes.back();
+  kernel.rank = dims.size();
+  kernel.keeps_dims = target->type().shape().rank() == dims.size();
   kernel.input = source->name();
   kernel.output = target->name();
   // Consecutive threads have to read consecutive addresses. With no kept axis after the reduced
@@ -114,20 +145,13 @@ Result<std::optional<ReductionKernel>> extract_reduction(const ir::Node& node) {
       kernel.inner == 1 ? ReductionShape::kBlockPerOutput : ReductionShape::kThreadPerOutput;
   kernel.name = "tessiq_reduce_" + kernel.output;
 
-  if (kernel.reduce <= 0 || kernel.outputs() <= 0) {
+  if (kernel.reduce == 0 || kernel.outer == 0 || kernel.inner == 0) {
     // An empty reduction has a defined answer for sum and mean and no answer for max and min, and
-    // the fallback already knows which. Not worth a kernel either way.
+    // the fallback already knows which. Not worth a kernel either way. An extent that is not
+    // known is not empty: it is a number the launch will be told.
     return std::optional<ReductionKernel>{};
   }
   return std::optional<ReductionKernel>{std::move(kernel)};
-}
-
-std::int64_t ReductionKernel::blocks() const {
-  if (shape == ReductionShape::kBlockPerOutput) {
-    return outputs();
-  }
-  const auto width = static_cast<std::int64_t>(kBlockSize);
-  return (outputs() + width - 1) / width;
 }
 
 std::vector<const ir::Node*> reduction_nodes(const ir::Graph& graph) {
