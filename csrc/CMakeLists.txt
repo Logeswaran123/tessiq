@@ -98,8 +98,10 @@ add_library(tessiq::ir ALIAS tessiq_ir)
 # without one. Emitting the text does not, which is why this half is testable anywhere.
 
 add_library(tessiq_codegen STATIC
+  tessiq/codegen/blas.cpp
   tessiq/codegen/cubin_cache.cpp
   tessiq/codegen/cuda_emitter.cpp
+  tessiq/codegen/gemm.cpp
   tessiq/codegen/kernel.cpp
   tessiq/codegen/nvrtc.cpp
   tessiq/codegen/program.cpp
@@ -113,7 +115,7 @@ if(TESSIQ_ENABLE_CUDA)
   find_package(CUDAToolkit REQUIRED)
   # cudart sets the device and creates the primary context; the driver API loads modules and
   # launches. Both, because the runtime alone cannot load a cubin.
-  target_link_libraries(tessiq_codegen PRIVATE CUDA::nvrtc CUDA::cudart CUDA::cuda_driver)
+  target_link_libraries(tessiq_codegen PRIVATE CUDA::nvrtc CUDA::cudart CUDA::cuda_driver CUDA::cublas)
   target_compile_definitions(tessiq_codegen PRIVATE TESSIQ_WITH_CUDA)
 endif()
 
