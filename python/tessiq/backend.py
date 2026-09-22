@@ -14,10 +14,10 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import torch
-from torch._decomp import core_aten_decompositions
 from torch._dynamo.backends.common import aot_autograd
 from torch._functorch._aot_autograd.utils import make_boxed_func
 
+from tessiq.decompositions import decompositions
 from tessiq.device import DEVICE_NAME, _resolve
 from tessiq.executor import execute
 from tessiq.recipe import build_recipe
@@ -67,7 +67,7 @@ def compile_graph(
     # because they rewrite it into ones tessiq has.
     #
     # Built per call because AotAutograd stores its kwargs and rewrites them on the first use.
-    compiler = aot_autograd(fw_compiler=compile_forward, decompositions=core_aten_decompositions())
+    compiler = aot_autograd(fw_compiler=compile_forward, decompositions=decompositions())
     return compiler(graph_module, example_inputs)
 
 
