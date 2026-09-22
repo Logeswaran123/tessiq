@@ -123,8 +123,22 @@ and they arrive as ordinary arguments. The executor keeps the device copy of an 
 changed, checked against its version counter so a parameter an optimizer writes to crosses again.
 That was 2 ms.
 
-**What is left is twenty-eight transfers across eighty steps.** Splitting those from what the
-kernels cost needs a profiler, which is phase 8.
+**What is left is the transfers**, and there is now a profiler to say so. From
+[`bench/where_the_time_goes.py`](bench/where_the_time_goes.py) on the same block:
+
+```
+              count        time   share       moved
+transfer         29      2.05 ms     42%     38.0 MB
+kernel           28      1.47 ms     30%
+host             41      1.32 ms     27%
+```
+
+Thirty-eight megabytes cross for a two megabyte input, and the eight slowest steps of the call are
+all transfers. The kernels are under a third of it.
+
+The host column is the other surprise: `view` and `permute` are claimed operations that partitioning
+leaves on the host when they sit in a group with nothing to compute, and there they cost 537 and
+190 microseconds rather than nothing.
 
 The generated code is not what is behind: on a single chain it is
 [1641 GB/s against Inductor's 775](bench/against_torch.py). Everything around it is.

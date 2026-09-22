@@ -32,12 +32,14 @@ from tessiq.device import (
 )
 from tessiq.executor import execute
 from tessiq.fx import emit_cuda, import_graph, partition, pass_names, run_passes
+from tessiq.profiler import Profile, profile
 from tessiq.recipe import Recipe, build_recipe
 
 __all__ = [
     "DEVICE_NAME",
     "CacheStats",
     "MemoryStats",
+    "Profile",
     "Recipe",
     "__version__",
     "backend_name",
@@ -59,6 +61,7 @@ __all__ = [
     "memory_stats",
     "partition",
     "pass_names",
+    "profile",
     "run_passes",
     "set_log_level",
 ]
