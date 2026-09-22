@@ -94,10 +94,8 @@ residual block: 3 of 7 operations on the device (43%), 3 claimable
   aten.convolution.default                             2
   aten._native_batch_norm_legit_no_training.default    2
 
-encoder block: 49 of 56 operations on the device (88%), 49 claimable
+encoder block: 76 of 80 operations on the device (95%), 76 claimable
   aten.clone.default                                   4
-  aten.native_layer_norm.default                       2
-  aten._softmax.default                                1
 ```
 
 The two numbers differ on purpose. **Claimable** is what the backend has an implementation for.
@@ -107,11 +105,15 @@ rather than paying two transfers to rearrange indices somewhere else.
 
 Both blocks give the numbers eager gives, on the reference backend and on a GPU.
 
-**Correct is not yet fast on these.** A transformer encoder block at the size above runs in 2.3 ms
-against 0.11 ms for eager on the CPU, because the matrices are 12 by 32 and a GPU cannot earn a
-launch on those. At a realistic 512-wide block over 128 steps the gap is 10.4 ms against 8.6 ms.
-What is left is the seven operations still on the host: each one pulls its operands back and sends
-its result across again.
+**Correct is not yet fast on these, and coverage is no longer what is holding it back.** A
+512-wide encoder block over 128 steps runs in 21.9 ms against 8.6 ms for eager on the CPU, with 95%
+of it on the device. The recipe says why: 80 steps produce 16 launches and 28 transfers, and only
+two of those launches are a fused loop. Breaking a softmax into its five operations puts every one
+of them on the device and gives the device five things to launch.
+
+What would change that is fusing more per launch, which means a kernel that can read an operand
+with fewer elements than the result. A layer norm subtracts one mean per row, and that one
+broadcast is what keeps the rest of the chain from sharing a loop with it.
 
 ## How it fits together
 

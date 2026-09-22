@@ -17,11 +17,11 @@ import collections
 import pytest
 import torch
 from torch import nn
-from torch._decomp import core_aten_decompositions
 from torch._dynamo.backends.common import aot_autograd
 
 import tessiq
 from conftest import load_operations
+from tessiq.decompositions import decompositions
 
 
 class ResidualBlock(nn.Module):
@@ -94,7 +94,9 @@ def capture(model: nn.Module, example: torch.Tensor) -> torch.fx.GraphModule:
     with torch.no_grad():
         torch.compile(
             model,
-            backend=aot_autograd(fw_compiler=backend, decompositions=core_aten_decompositions()),
+            # tessiq's own table rather than core ATen's, so what this captures is what the
+            # backend compiles: a softmax arrives here as the five operations it is made of.
+            backend=aot_autograd(fw_compiler=backend, decompositions=decompositions()),
             dynamic=False,
         )(example)
     return graphs[0]
@@ -175,3 +177,14 @@ def test_a_block_has_something_to_run_and_something_it_cannot(
     assert clusters, "the backend claims nothing in this block"
     assert counts[True], text
     assert counts[False], "this block no longer exercises the fallback"
+
+
+def test_softmax_and_layer_norm_become_operations_the_backend_runs() -> None:
+    # Neither has a kernel here and neither needs one. core ATen leaves them whole; tessiq breaks
+    # them up, and every piece they break into is something it already runs.
+    text = tessiq.import_graph(capture(EncoderBlock().eval(), torch.randn(2, 6, 32)))
+    assert "aten._softmax" not in text, text
+    assert "aten.native_layer_norm" not in text, text
+    assert "prims." not in text, "decomposing further than ATen is a different operation set"
+    assert "aten.amax.default" in text, text
+    assert "aten.rsqrt.default" in text, text
