@@ -18,6 +18,7 @@ from torch._dynamo.backends.common import aot_autograd
 
 import tessiq
 from tessiq import build_recipe, execute
+from tessiq.executor import ResidentInputs
 
 
 def captured_graph(fn: Callable[..., Any], *inputs: torch.Tensor) -> torch.fx.GraphModule:
@@ -124,3 +125,58 @@ def test_clusters_can_run_on_the_gpu() -> None:
     produced = execute(build_recipe(graph, tessiq.gpu))(*inputs)
     assert tessiq.memory_stats(tessiq.gpu).allocation_count > before
     assert torch.allclose(produced[0], torch.relu(inputs[0] + inputs[1]), atol=1e-5)
+
+
+# --- inputs that stay on the device --------------------------------------------------------------
+
+
+def test_an_unchanged_input_is_moved_once() -> None:
+    # AOTAutograd lifts a module's parameters to graph inputs, so they arrive as ordinary
+    # arguments and used to cross on every call. They are the same tensors each time.
+    table = ResidentInputs()
+    host = torch.randn(64)
+
+    first = table.move(host, tessiq.cpu)
+    second = table.move(host, tessiq.cpu)
+
+    assert first is second
+    assert table.stats() == (1, 1), "one reuse and one copy"
+
+
+def test_writing_to_an_input_copies_it_again() -> None:
+    # A parameter an optimizer step writes to has to cross again. The version counter is what
+    # notices, and reading the stale copy would train against the wrong weights.
+    table = ResidentInputs()
+    host = torch.zeros(64)
+
+    before = table.move(host, tessiq.cpu)
+    host.add_(1.0)
+    after = table.move(host, tessiq.cpu)
+
+    assert after is not before
+    assert after.sum().item() == pytest.approx(64.0)
+
+
+def test_a_different_tensor_at_the_same_address_is_not_reused() -> None:
+    # Identity alone is not enough: a freed tensor's address can be handed to the next allocation.
+    # The weak reference is what makes a dead entry miss rather than match the wrong tensor.
+    table = ResidentInputs()
+    for _ in range(64):
+        table.move(torch.randn(16), tessiq.cpu)
+
+    # Every one of those is dead, so nothing accumulated.
+    hits, misses = table.stats()
+    assert hits == 0, "no transient tensor should have been reused"
+    assert misses == 64
+
+
+def test_the_table_does_not_grow_with_the_calls() -> None:
+    table = ResidentInputs()
+    weights = torch.randn(64)
+    for _ in range(50):
+        table.move(weights, tessiq.cpu)
+        table.move(torch.randn(64), tessiq.cpu)
+
+    hits, _ = table.stats()
+    assert hits == 49, "the weight is reused every call after the first"
+    assert len(table._entries) <= 2, f"one live weight and one live input: {len(table._entries)}"

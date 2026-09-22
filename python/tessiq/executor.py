@@ -11,6 +11,9 @@ agreement a lowered recipe will have to keep.
 
 from __future__ import annotations
 
+import dataclasses
+import threading
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -19,17 +22,80 @@ import torch
 from tessiq.recipe import Recipe
 
 
-def _move(value: Any, device: torch.device) -> Any:
+def _move(value: Any, device: torch.device, resident: ResidentInputs | None = None) -> Any:
     """Move a tensor to ``device``, leaving anything else alone.
 
     Arguments are not all tensors. Scalars, shapes, dtypes and ``None`` all arrive here, and
     ``.to()`` on them would fail. Nested lists and tuples turn up in ops like ``cat`` and ``stack``.
+
+    With a `resident` table, a tensor that has already been moved and has not changed since is
+    reused rather than copied again.
     """
     if isinstance(value, torch.Tensor):
-        return value if value.device == device else value.to(device)
+        if value.device == device:
+            return value
+        return value.to(device) if resident is None else resident.move(value, device)
     if isinstance(value, (list, tuple)):
-        return type(value)(_move(item, device) for item in value)
+        return type(value)(_move(item, device, resident) for item in value)
     return value
+
+
+class ResidentInputs:
+    """Device copies of graph inputs that have not changed since the last call.
+
+    AOTAutograd lifts a module's parameters to graph inputs, so a compiled transformer block takes
+    its twelve megabytes of weights as ordinary arguments and the executor moved all of them across
+    on every call. They are the same tensors each time.
+
+    Keyed on the host tensor's identity and checked against its version counter, so a parameter an
+    optimizer step writes to is copied again rather than read stale. The weak reference is what
+    makes the identity safe: a freed tensor's address can be handed to the next allocation, and a
+    dead reference misses rather than matching the wrong tensor.
+
+    Bounded by dropping dead entries on insert. The one argument that genuinely changes between
+    calls is a new tensor each time, so without that the table would grow by one per call.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[tuple[int, str], _Entry] = {}
+        self._hits = 0
+        self._misses = 0
+
+    def move(self, value: torch.Tensor, device: torch.device) -> torch.Tensor:
+        """The device copy of `value`, reusing the last one when nothing about it has changed."""
+        key = (id(value), str(device))
+        with self._lock:
+            found = self._entries.get(key)
+            if (
+                found is not None
+                and found.source() is value
+                and found.data_ptr == value.data_ptr()
+                and found.version == value._version
+            ):
+                self._hits += 1
+                return found.moved
+
+        moved = value.to(device)
+        entry = _Entry(weakref.ref(value), value.data_ptr(), value._version, moved)
+        with self._lock:
+            self._misses += 1
+            self._entries = {k: v for k, v in self._entries.items() if v.source() is not None}
+            self._entries[key] = entry
+        return moved
+
+    def stats(self) -> tuple[int, int]:
+        """Inputs reused and inputs copied, since this callable was built."""
+        with self._lock:
+            return self._hits, self._misses
+
+
+@dataclasses.dataclass(frozen=True)
+class _Entry:
+    source: weakref.ref[torch.Tensor]
+    data_ptr: int
+    version: int
+    moved: torch.Tensor
 
 
 class RecipeExecutor(torch.fx.Interpreter):
@@ -41,7 +107,7 @@ class RecipeExecutor(torch.fx.Interpreter):
         recipe: The compiled graph to run.
     """
 
-    def __init__(self, recipe: Recipe) -> None:
+    def __init__(self, recipe: Recipe, resident: ResidentInputs | None = None) -> None:
         # Values are kept for the whole call rather than dropped once FX thinks they are dead. A
         # fused group reads its inputs at the node that writes the group's output, which is later
         # than the last use FX can see, since the uses in between belong to nodes the kernel
@@ -54,6 +120,9 @@ class RecipeExecutor(torch.fx.Interpreter):
         self._fused_away = recipe.fused_away
         self._nodes = {node.name: node for node in recipe.graph_module.graph.nodes}
         self._host = torch.device("cpu")
+        # Shared with the other calls of the same compiled graph, which is what makes a weight
+        # stay on the device rather than crossing again.
+        self._resident = resident if resident is not None else ResidentInputs()
         self._node: torch.fx.Node | None = None
 
     def run_node(self, n: torch.fx.Node) -> Any:
@@ -79,7 +148,9 @@ class RecipeExecutor(torch.fx.Interpreter):
         # the layouts agree, so their inputs are packed first. A matmul is the exception: it reads
         # the layout it was given, and packing a transposed operand would move the data and leave
         # the transpose flag describing something that is no longer there.
-        moved = [_move(self.env[self._nodes[name]], device) for name in kernel.inputs]
+        moved = [
+            _move(self.env[self._nodes[name]], device, self._resident) for name in kernel.inputs
+        ]
         inputs = [t.contiguous() for t in moved] if kernel.packs_inputs else moved
 
         meta = node.meta["val"]
@@ -102,8 +173,8 @@ class RecipeExecutor(torch.fx.Interpreter):
         device = self._devices.get(name, self._host)
         return super().call_function(
             target,
-            tuple(_move(value, device) for value in args),
-            {key: _move(value, device) for key, value in kwargs.items()},
+            tuple(_move(value, device, self._resident) for value in args),
+            {key: _move(value, device, self._resident) for key, value in kwargs.items()},
         )
 
     def output(self, target: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
@@ -129,11 +200,16 @@ def execute(recipe: Recipe) -> Callable[..., Any]:
 
     Returns:
         A callable taking the arguments the graph takes and returning what it returns, on the
-        host. It holds no state between calls, so it can be called repeatedly and from more than
-        one thread.
+        host.
+
+        It keeps one thing between calls: the device copies of inputs that have not changed, which
+        is how a module's weights stay on the device rather than crossing on every call. That table
+        is locked, so the callable is still safe to use from more than one thread.
     """
+    resident = ResidentInputs()
 
     def run(*args: Any) -> Any:
-        return RecipeExecutor(recipe).run(*args)
+        return RecipeExecutor(recipe, resident).run(*args)
 
+    run.resident = resident  # type: ignore[attr-defined]
     return run
