@@ -342,6 +342,82 @@ category = "reduction"
 arity = 1
 kernel = true
 
+# --- movement -----------------------------------------------------------------------------------
+#
+# These rearrange indices and compute nothing. On a tessiq tensor they are metadata: as_strided,
+# view and _reshape_alias are registered on the device, and everything here is written in terms of
+# one of them, so the result shares its input's storage and costs about a microsecond.
+#
+# They have no expression and no generated code. What makes the backend able to run one is the
+# device registration, not a kernel, which is why the category exists rather than folding them in
+# with the elementwise rows.
+#
+# clone and contiguous are deliberately absent. Those copy, and copying on this device still goes
+# through the host, so claiming them would keep a round trip and hide it.
+
+[[op]]
+name = "view"
+aten = ["aten.view.default", "aten._unsafe_view.default"]
+category = "movement"
+arity = 1
+kernel = true
+
+[[op]]
+name = "reshape"
+aten = ["aten.reshape.default", "aten._reshape_alias.default"]
+category = "movement"
+arity = 1
+kernel = true
+
+[[op]]
+name = "permute"
+aten = ["aten.permute.default"]
+category = "movement"
+arity = 1
+kernel = true
+
+[[op]]
+name = "transpose"
+aten = ["aten.transpose.int"]
+category = "movement"
+arity = 1
+kernel = true
+
+[[op]]
+name = "expand"
+aten = ["aten.expand.default"]
+category = "movement"
+arity = 1
+kernel = true
+
+[[op]]
+name = "squeeze"
+aten = ["aten.squeeze.dim", "aten.squeeze.dims", "aten.squeeze.default"]
+category = "movement"
+arity = 1
+kernel = true
+
+[[op]]
+name = "unsqueeze"
+aten = ["aten.unsqueeze.default"]
+category = "movement"
+arity = 1
+kernel = true
+
+[[op]]
+name = "slice"
+aten = ["aten.slice.Tensor"]
+category = "movement"
+arity = 1
+kernel = true
+
+[[op]]
+name = "select"
+aten = ["aten.select.int"]
+category = "movement"
+arity = 1
+kernel = true
+
 # --- matmul -------------------------------------------------------------------------------------
 
 # Reads positions it is not writing, so it can never join an elementwise loop however many kernels

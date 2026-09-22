@@ -223,12 +223,33 @@ TEST(ReductionShapeTest, TheWrongOperandCountIsAnError) {
   ASSERT_FALSE(result.has_value());
 }
 
-TEST(ShapeRuleTest, EveryOperationInTheTableHasARule) {
+TEST(ShapeRuleTest, EveryComputingOperationHasARule) {
   // The rules are derived from the table rather than listed beside it, so this holds by
   // construction. It is here because it did not used to: the two were separate lists, and an
   // operation could be fusable, have a kernel, and still have no idea what shape it produced.
+  //
+  // Movement operations are the exception and are checked the other way below. Each reads its
+  // attributes differently and changes layout as well as shape, so there is no rule to derive.
   for (const std::string& name : op_names()) {
+    const OpInfo* info = find_op(name);
+    ASSERT_NE(info, nullptr) << name;
+    if (info->category == OpCategory::kMovement) {
+      continue;
+    }
     EXPECT_TRUE(has_shape_rule(name)) << name << " is in the table with no shape rule";
+  }
+}
+
+TEST(ShapeRuleTest, AMovementOperationHasNoRuleAndSaysSo) {
+  // Deliberate, not missing. shape-infer skips an operation with no rule, which is what these
+  // need until something computes both the shape and the layout they produce.
+  for (const std::string& name : op_names()) {
+    const OpInfo* info = find_op(name);
+    ASSERT_NE(info, nullptr) << name;
+    if (info->category != OpCategory::kMovement) {
+      continue;
+    }
+    EXPECT_FALSE(has_shape_rule(name)) << name << " has a rule this test did not expect";
   }
 }
 

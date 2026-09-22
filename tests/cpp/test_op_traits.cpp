@@ -53,18 +53,20 @@ TEST(OpTraitsTest, BothSpellingsOfAnOperationAgree) {
   }
 }
 
-TEST(OpTraitsTest, EverythingTheBackendSupportsHasAKernelShape) {
-  // This used to say everything supported was elementwise, which stopped being true the moment
-  // reductions got a kernel. What has to keep holding is weaker and is the real condition: every
-  // operation the backend claims belongs to a category the emitter knows how to write a loop for.
-  // A claimed matmul would be one the executor could neither fuse nor reduce, and it would reach
-  // the fallback by accident rather than by decision.
+TEST(OpTraitsTest, EverythingTheBackendSupportsHasAWayToRun) {
+  // Written once as "everything supported is elementwise", which reductions ended, then as
+  // "everything supported has a kernel shape", which movement operations ended. The condition
+  // that survives is the one that was always meant: every operation the backend claims has some
+  // way to run on the device.
+  //
+  // For elementwise and reductions that is a generated kernel. For movement operations it is the
+  // device's own view registrations, which make them metadata rather than code. A matmul has
+  // neither, so claiming one would send it to the fallback by accident rather than by decision.
   for (const std::string& op : default_op_support().names()) {
     const OpInfo* info = find_op(op);
     ASSERT_NE(info, nullptr) << op << " is supported and not in the table";
-    EXPECT_TRUE(info->category == OpCategory::kElementwise ||
-                info->category == OpCategory::kReduction)
-        << op << " is supported and has no kernel shape";
+    EXPECT_NE(info->category, OpCategory::kMatmul)
+        << op << " is supported and the backend has no way to run it";
   }
 }
 

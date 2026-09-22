@@ -17,6 +17,9 @@ enum class OpCategory {
   kElementwise,
   /// Reads many positions to write one, along dimensions the node names rather than the table.
   kReduction,
+  /// Rearranges indices and computes nothing. The device runs these as metadata, so there is no
+  /// kernel and nothing to fuse: the result shares its input's storage.
+  kMovement,
   /// Reads positions it is not writing. Runs on its own however many kernels it has.
   kMatmul,
 };

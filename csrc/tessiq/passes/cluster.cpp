@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "tessiq/passes/op_table.h"
 #include "tessiq/passes/pass.h"
 
 namespace tessiq::passes {
@@ -51,7 +52,7 @@ class Cluster final : public Pass {
 
   Result<bool> run(ir::Graph& graph) override {
     const std::vector<ir::Node*> nodes = graph.nodes();
-    TESSIQ_ASSIGN_OR_RETURN(const auto supported, read_support(nodes));
+    TESSIQ_ASSIGN_OR_RETURN(auto supported, read_support(nodes));
 
     // Every node starts alone. Unsupported nodes keep their own unit for the whole pass; they are
     // never merged, but they still take part in the cycle check.
@@ -64,6 +65,7 @@ class Cluster final : public Pass {
     while (merge_one_round(nodes, supported, unit)) {
     }
 
+    drop_units_that_only_move(nodes, supported, unit);
     return assign(nodes, unit, supported);
   }
 
@@ -179,6 +181,39 @@ class Cluster final : public Pass {
 
   /// Writes the cluster attribute, numbering clusters by where they first appear so the output is
   /// the same every run and a golden file can pin it.
+  /// Leaves a unit on the host when every operation in it only rearranges indices.
+  ///
+  /// A movement operation costs nothing on either side: on a tessiq tensor it is a view, and on a
+  /// host tensor torch does the same thing. So running one on the device is worth a transfer only
+  /// when something in the same unit actually computes. A unit holding nothing but views would
+  /// move its input across, produce a different view of it, and move that back, which is two
+  /// transfers for no work.
+  ///
+  /// This is why claiming the movement operations is a placement question rather than a coverage
+  /// one. Claiming them without this made a transformer encoder block slower, because the graph
+  /// alternates between them and operations the backend cannot run, and every alternation became
+  /// a pair of transfers.
+  static void
+  drop_units_that_only_move(const std::vector<ir::Node*>& nodes,
+                            SupportMap& supported,
+                            const std::unordered_map<const ir::Node*, std::size_t>& unit) {
+    std::unordered_map<std::size_t, bool> computes;
+    for (const ir::Node* node : nodes) {
+      if (!supported.at(node)) {
+        continue;
+      }
+      const OpInfo* info = find_op(node->op());
+      const bool moves_only = info != nullptr && info->category == OpCategory::kMovement;
+      computes[unit.at(node)] = computes[unit.at(node)] || !moves_only;
+    }
+
+    for (const ir::Node* node : nodes) {
+      if (supported.at(node) && !computes[unit.at(node)]) {
+        supported[node] = false;
+      }
+    }
+  }
+
   static Result<bool> assign(const std::vector<ir::Node*>& nodes,
                              const std::unordered_map<const ir::Node*, std::size_t>& unit,
                              const SupportMap& supported) {

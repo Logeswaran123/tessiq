@@ -90,12 +90,12 @@ that, because a block of 256 threads combining 64 elements leaves most of them i
 [`tools/model_coverage.py`](tools/model_coverage.py):
 
 ```
-residual block: 3 of 7 operations on the device (43%)
+residual block: 3 of 7 operations on the device (43%), 3 claimable
   aten.convolution.default                             2
   aten._native_batch_norm_legit_no_training.default    2
 
-encoder block: 4 of 56 operations on the device (7%)
-  aten.view.default                                   22
+encoder block: 9 of 56 operations on the device (16%), 41 claimable
+  aten.view.default                                   17
   aten.permute.default                                11
   aten.addmm.default                                   6
   aten.expand.default                                  4
@@ -105,10 +105,14 @@ encoder block: 4 of 56 operations on the device (7%)
   aten._softmax.default                                1
 ```
 
-Both blocks give the numbers eager gives, on the reference backend and on a GPU. What they do not
-yet do is stay on the device: a transformer encoder block is mostly movement operations, which
-rearrange a tensor without computing anything, and those plus the matrix multiplies are what the
-rest of phase 7 is for.
+The two numbers differ on purpose. **Claimable** is what the backend has an implementation for.
+**On the device** is what partitioning puts there, which is fewer: a movement operation costs
+nothing on either side, so a group holding nothing but views is left where its input already was
+rather than paying two transfers to rearrange indices somewhere else.
+
+Both blocks give the numbers eager gives, on the reference backend and on a GPU. The gap between
+41 and 9 closes when the matrix multiplies between those views are claimed, since the views then
+have work to travel with.
 
 ## How it fits together
 

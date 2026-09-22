@@ -1,0 +1,16 @@
+// RUN: mark-supported,cluster
+// The other side of the same rule. Here the group has an operation that computes, so the transfer
+// is earned and the movement joins it rather than splitting the group in two.
+graph @g(%a: f32[4,8]) -> f32[8,4:1,8] {
+  %r = aten.relu.default(%a) : f32[4,8]
+  %p = aten.permute.default(%r) {arg1 = [1,0]} : f32[8,4:1,8]
+  %n = aten.neg.default(%p) : f32[8,4:1,8]
+  return %n
+}
+// ---
+graph @g(%a: f32[4,8]) -> f32[8,4:1,8] {
+  %r = aten.relu.default(%a) {tessiq.cluster = 0, tessiq.supported = true} : f32[4,8]
+  %p = aten.permute.default(%r) {arg1 = [1,0], tessiq.cluster = 0, tessiq.supported = true} : f32[8,4:1,8]
+  %n = aten.neg.default(%p) {tessiq.cluster = 0, tessiq.supported = true} : f32[8,4:1,8]
+  return %n
+}

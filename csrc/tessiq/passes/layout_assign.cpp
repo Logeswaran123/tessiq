@@ -8,6 +8,7 @@
 #include "tessiq/ir/graph.h"
 #include "tessiq/ir/types.h"
 #include "tessiq/passes/op_support.h"
+#include "tessiq/passes/op_table.h"
 #include "tessiq/passes/pass.h"
 
 namespace tessiq::passes {
@@ -29,10 +30,25 @@ bool claimed(const ir::Node* node) {
   return value != nullptr && *value;
 }
 
-/// Makes every value a claimed node reads contiguous, by copying the ones that are not.
+/// Whether `node` reads its operands through a generated kernel, which walks memory in order.
+///
+/// Not the same question as whether the backend claims it. A movement operation is claimed and
+/// reads nothing in order: it produces a different view of its input's storage, and a permute
+/// given a packed copy would produce a permuted view of the copy, which is the same answer after
+/// a transfer nobody needed. Packing before one would undo exactly what makes it free.
+bool reads_through_a_kernel(const ir::Node* node) {
+  if (!claimed(node)) {
+    return false;
+  }
+  const OpInfo* info = find_op(node->op());
+  return info != nullptr &&
+         (info->category == OpCategory::kElementwise || info->category == OpCategory::kReduction);
+}
+
+/// Makes every value a generated kernel reads contiguous, by copying the ones that are not.
 ///
 /// Precondition: `mark-supported` has run, so every node says whether the backend claims it.
-/// Postcondition: no claimed node reads a strided value.
+/// Postcondition: no node that reads through a kernel reads a strided value.
 ///
 /// Every kernel this backend generates reads `p_in[i]` and writes `p_out[i]`, one index across
 /// every buffer. That is only the same elements when the buffers are laid out the same way, so a
@@ -61,7 +77,7 @@ class LayoutAssign final : public Pass {
     const std::vector<ir::Node*> original = graph.nodes();
 
     for (ir::Node* node : original) {
-      if (!claimed(node)) {
+      if (!reads_through_a_kernel(node)) {
         continue;
       }
       for (std::size_t i = 0; i < node->operand_count(); ++i) {
