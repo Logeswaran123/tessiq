@@ -352,8 +352,9 @@ kernel = true
 # device registration, not a kernel, which is why the category exists rather than folding them in
 # with the elementwise rows.
 #
-# clone and contiguous are deliberately absent. Those copy, and copying on this device still goes
-# through the host, so claiming them would keep a round trip and hide it.
+# clone is deliberately absent. It packs a permuted view, and a kernel is handed whatever
+# `.to(device)` produced, which is already packed whenever the value came from the host. Claiming
+# it would need the executor to deliver a value in the layout the kernel was written for.
 
 [[op]]
 name = "view"

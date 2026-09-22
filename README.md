@@ -105,15 +105,14 @@ rather than paying two transfers to rearrange indices somewhere else.
 
 Both blocks give the numbers eager gives, on the reference backend and on a GPU.
 
-**Correct is not yet fast on these, and coverage is no longer what is holding it back.** A
-512-wide encoder block over 128 steps runs in 14.6 ms against 8.6 ms for eager on the CPU, with 95%
-of it on the device. The recipe says where the time goes: 80 steps produce 19 launches and 28
-transfers.
+**A 512-wide encoder block over 128 steps runs in 5.1 ms against 9.5 ms for eager on the CPU.**
+That is the first size at which any of this is worth using. The same block at 32 wide over 6 steps
+is 2.2 ms against 0.09, because its matrices are 12 by 32 and a GPU cannot earn a launch on those.
 
-Fusing more per launch is what moves that number. A kernel can read an operand with fewer elements
-than its result now, which is what a softmax and a layer norm subtract, and letting those chains
-stay together took the block from 21.9 ms to 14.6 and the fused loops from two to five. The
-transfers are next: 28 of them for four operations still on the host.
+Most of the distance came from one thing. A node that fused with nothing used to carry no fusion
+group, and a node with no group has no kernel, so every lone elementwise operation reached the
+fallback and paid a transfer each way. Giving it a kernel of its own took the block from 14.6 ms to
+5.1 and the fused loops from 5 to 14.
 
 ## How it fits together
 
