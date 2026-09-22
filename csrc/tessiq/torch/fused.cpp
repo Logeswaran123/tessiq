@@ -47,10 +47,13 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
       return invalid_argument("fusion group " + std::to_string(group) +
                               " was given a non-contiguous input");
     }
-    if (tensor.numel() != elements) {
-      return invalid_argument("fusion group " + std::to_string(group) + " expects " +
-                              std::to_string(elements) + " elements, got " +
-                              std::to_string(tensor.numel()));
+    // Not every input has as many elements as the result. One that broadcasts, such as the
+    // per-row mean a layer norm subtracts, has fewer, and the kernel was written knowing where to
+    // read it. More than the result is always wrong.
+    if (tensor.numel() > elements || tensor.numel() <= 0) {
+      return invalid_argument("fusion group " + std::to_string(group) + " was given an input of " +
+                              std::to_string(tensor.numel()) + " elements for a result of " +
+                              std::to_string(elements));
     }
     buffers.push_back(tensor.data_ptr());
   }
@@ -103,7 +106,7 @@ Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordin
     }
 
     compiled.push_back({.group = group,
-                        .inputs = description.inputs,
+                        .inputs = description.input_names(),
                         .output = description.output,
                         .members = std::move(members),
                         .elements = description.elements,

@@ -220,16 +220,12 @@ def test_a_movement_operation_on_its_own_stays_on_the_host() -> None:
     assert not re.search(r"aten\.view\.default[^\n]*tessiq\.cluster", ir), ir
 
 
-def test_a_broadcasting_operand_stays_out_of_the_loop() -> None:
-    # A kernel reads one index across every buffer, so an operand with fewer elements than the
-    # result has nothing at most of those indices. Subtracting a per-row mean is the common case
-    # and arrives from every softmax and layer norm.
+def test_a_broadcasting_operand_joins_the_loop() -> None:
+    # Subtracting a row of values from every row is what a softmax and a layer norm do, and it
+    # used to end the group. The kernel works out where to read such an operand from the shapes,
+    # so the whole chain is one loop.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.relu(a - b) * 2.0
 
     ir = fused(model, torch.randn(4, 8), torch.randn(8))
-    assert fusion_group_of(ir, "aten.sub.Tensor") is None, ir
-    # Only that one operation is kept out. What follows it reads one element per output and still
-    # shares a loop, so the guard costs a kernel rather than the whole group.
-    assert fusion_group_of(ir, "aten.relu.default") == 0, ir
-    assert fusion_group_of(ir, "aten.mul.Tensor") == 0, ir
+    assert groups(ir) == {0: 3}, ir

@@ -106,14 +106,14 @@ rather than paying two transfers to rearrange indices somewhere else.
 Both blocks give the numbers eager gives, on the reference backend and on a GPU.
 
 **Correct is not yet fast on these, and coverage is no longer what is holding it back.** A
-512-wide encoder block over 128 steps runs in 21.9 ms against 8.6 ms for eager on the CPU, with 95%
-of it on the device. The recipe says why: 80 steps produce 16 launches and 28 transfers, and only
-two of those launches are a fused loop. Breaking a softmax into its five operations puts every one
-of them on the device and gives the device five things to launch.
+512-wide encoder block over 128 steps runs in 14.6 ms against 8.6 ms for eager on the CPU, with 95%
+of it on the device. The recipe says where the time goes: 80 steps produce 19 launches and 28
+transfers.
 
-What would change that is fusing more per launch, which means a kernel that can read an operand
-with fewer elements than the result. A layer norm subtracts one mean per row, and that one
-broadcast is what keeps the rest of the chain from sharing a loop with it.
+Fusing more per launch is what moves that number. A kernel can read an operand with fewer elements
+than its result now, which is what a softmax and a layer norm subtract, and letting those chains
+stay together took the block from 21.9 ms to 14.6 and the fused loops from two to five. The
+transfers are next: 28 of them for four operations still on the host.
 
 ## How it fits together
 

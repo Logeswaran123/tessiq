@@ -467,3 +467,30 @@ def test_a_transformer_block_runs_without_softmax_or_layer_norm_kernels() -> Non
             model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
         )
         torch.testing.assert_close(compiled(example), model(example), rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize(
+    ("name", "shapes"),
+    [
+        ("row added to every row", ((4, 8), (8,))),
+        ("one value per row", ((4, 8), (4, 1))),
+        ("one value per row, rank 3", ((2, 6, 8), (2, 6, 1))),
+        ("a middle axis", ((2, 6, 8), (6, 1))),
+        ("a scalar", ((4, 8), (1, 1))),
+    ],
+)
+def test_a_broadcasting_chain_agrees_with_eager_and_is_one_kernel(
+    name: str, shapes: tuple[tuple[int, ...], ...]
+) -> None:
+    # Each of these used to end the group, which is what a softmax and a layer norm are made of.
+    def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return torch.relu(a - b) * 2.0
+
+    inputs = tuple(torch.randn(*shape) for shape in shapes)
+    recipe = build_recipe(captured(model, *inputs), tessiq.gpu, use_cache=False)
+    assert len(recipe.kernels) == 1, f"{name}: {recipe.kernels}"
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(*inputs), model(*inputs), rtol=1e-6, atol=1e-5)
