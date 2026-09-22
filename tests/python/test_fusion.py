@@ -105,7 +105,9 @@ def test_a_chain_of_transcendentals_is_one_group() -> None:
     assert groups(ir) == {0: 8}, ir
 
 
-def test_a_matmul_splits_the_chain() -> None:
+def test_a_matmul_splits_the_fused_chain_without_leaving_the_device() -> None:
+    # A matmul is claimed and is not elementwise, so it ends the loop its neighbours share while
+    # staying in their cluster. Two fusion groups, one cluster.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(torch.tanh(torch.relu(a + b) @ b))
 
@@ -113,6 +115,7 @@ def test_a_matmul_splits_the_chain() -> None:
     counts = groups(ir)
     assert len(counts) == 2, ir
     assert sorted(counts.values()) == [2, 2], ir
+    assert re.search(r"aten\.mm\.default[^\n]*tessiq\.supported = true", ir), ir
 
 
 def test_fusion_runs_in_the_compile_path() -> None:
@@ -210,8 +213,8 @@ def test_a_movement_operation_on_its_own_stays_on_the_host() -> None:
     # that back is two transfers for no work, so a group holding nothing but movement is left
     # where its input already was.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        return (a @ b).reshape(2, 32)
+        return torch.nn.functional.conv1d(a, b).reshape(4, 8)
 
-    ir = fused(model, torch.randn(8, 8), torch.randn(8, 8))
+    ir = fused(model, torch.randn(1, 4, 8), torch.randn(4, 4, 1))
     assert re.search(r"aten\.view\.default[^\n]*tessiq\.supported = true", ir), ir
     assert not re.search(r"aten\.view\.default[^\n]*tessiq\.cluster", ir), ir

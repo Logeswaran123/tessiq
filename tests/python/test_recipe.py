@@ -147,10 +147,10 @@ def test_a_spec_of_the_wrong_length_is_caught() -> None:
 
 
 def test_an_unclustered_graph_still_runs() -> None:
-    a, b = torch.randn(4, 4), torch.randn(4, 4)
-    recipe = build_recipe(forward_graph(lambda x, y: x @ y, a, b))
+    a, b = torch.randn(1, 4, 8), torch.randn(4, 4, 1)
+    recipe = build_recipe(forward_graph(lambda x, y: torch.nn.functional.conv1d(x, y), a, b))
     assert all(device == torch.device("cpu") for device in recipe.devices.values())
-    assert torch.allclose(execute(recipe)(a, b)[0], a @ b, atol=1e-5)
+    assert torch.allclose(execute(recipe)(a, b)[0], torch.nn.functional.conv1d(a, b), atol=1e-5)
 
 
 def test_host_is_the_sentinel_the_native_side_uses() -> None:

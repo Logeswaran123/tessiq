@@ -94,13 +94,8 @@ residual block: 3 of 7 operations on the device (43%), 3 claimable
   aten.convolution.default                             2
   aten._native_batch_norm_legit_no_training.default    2
 
-encoder block: 9 of 56 operations on the device (16%), 41 claimable
-  aten.view.default                                   17
-  aten.permute.default                                11
-  aten.addmm.default                                   6
-  aten.expand.default                                  4
+encoder block: 49 of 56 operations on the device (88%), 49 claimable
   aten.clone.default                                   4
-  aten.bmm.default                                     2
   aten.native_layer_norm.default                       2
   aten._softmax.default                                1
 ```
@@ -110,9 +105,13 @@ The two numbers differ on purpose. **Claimable** is what the backend has an impl
 nothing on either side, so a group holding nothing but views is left where its input already was
 rather than paying two transfers to rearrange indices somewhere else.
 
-Both blocks give the numbers eager gives, on the reference backend and on a GPU. The gap between
-41 and 9 closes when the matrix multiplies between those views are claimed, since the views then
-have work to travel with.
+Both blocks give the numbers eager gives, on the reference backend and on a GPU.
+
+**Correct is not yet fast on these.** A transformer encoder block at the size above runs in 2.3 ms
+against 0.11 ms for eager on the CPU, because the matrices are 12 by 32 and a GPU cannot earn a
+launch on those. At a realistic 512-wide block over 128 steps the gap is 10.4 ms against 8.6 ms.
+What is left is the seven operations still on the host: each one pulls its operands back and sends
+its result across again.
 
 ## How it fits together
 

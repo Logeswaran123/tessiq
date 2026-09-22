@@ -67,7 +67,7 @@ TEST(RecipeTest, StepsFollowGraphOrder) {
 TEST(RecipeTest, ClusterAssignmentIsCarriedThrough) {
   auto graph = partitioned(R"(graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
   %x = aten.add.Tensor(%a, %b) : f32[4]
-  %y = aten.mm.default(%x, %b) : f32[4]
+  %y = aten.convolution.default(%x, %b) : f32[4]
   %z = aten.tanh.default(%y) : f32[4]
   return %z
 }
@@ -77,7 +77,7 @@ TEST(RecipeTest, ClusterAssignmentIsCarriedThrough) {
   const auto recipe = build_recipe(*graph, kAlignment);
   ASSERT_TRUE(recipe.has_value());
   EXPECT_NE(step_for(*recipe, "x").cluster, kHost);
-  // No kernel for a matrix multiply, so it stays on the host and splits the two clusters.
+  // Nothing runs a convolution here, so it stays on the host and splits the two clusters.
   EXPECT_EQ(step_for(*recipe, "y").cluster, kHost);
   EXPECT_NE(step_for(*recipe, "z").cluster, kHost);
   EXPECT_NE(step_for(*recipe, "x").cluster, step_for(*recipe, "z").cluster);

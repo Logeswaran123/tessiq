@@ -58,20 +58,20 @@ def test_an_all_supported_model_becomes_one_cluster() -> None:
 
 def test_an_unsupported_op_splits_the_graph() -> None:
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        return torch.tanh(torch.relu(a + b) @ b)
+        return torch.tanh(torch.nn.functional.conv1d(torch.relu(a + b), b))
 
-    text = partitioned(model, torch.randn(4, 4), torch.randn(4, 4))
+    text = partitioned(model, torch.randn(1, 4, 8), torch.randn(4, 4, 1))
     assigned = clusters(text)
 
-    assert "tessiq.supported = false" in text, "mm has no kernel, so it should be marked"
-    assert len(set(assigned.values())) == 2, f"expected two clusters either side of mm:\n{text}"
+    assert "tessiq.supported = false" in text, "nothing runs a convolution, so it is marked"
+    assert len(set(assigned.values())) == 2, f"expected two clusters either side of it:\n{text}"
 
 
 def test_unsupported_nodes_get_no_cluster() -> None:
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        return a @ b
+        return torch.nn.functional.conv1d(a, b)
 
-    text = partitioned(model, torch.randn(4, 4), torch.randn(4, 4))
+    text = partitioned(model, torch.randn(1, 4, 8), torch.randn(4, 4, 1))
     assert "tessiq.cluster" not in text, text
     assert "tessiq.supported = false" in text, text
 
@@ -100,12 +100,12 @@ def test_clustering_without_marking_is_refused() -> None:
 
 def test_partition_reports_which_cluster_each_node_landed_in() -> None:
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        return torch.tanh(torch.relu(a + b) @ b)
+        return torch.tanh(torch.nn.functional.conv1d(torch.relu(a + b), b))
 
-    _, clusters = tessiq.partition(_capture(model, torch.randn(4, 4), torch.randn(4, 4)))
+    _, clusters = tessiq.partition(_capture(model, torch.randn(1, 4, 8), torch.randn(4, 4, 1)))
 
     assert clusters["add"] == clusters["relu"], "both are supported and adjacent"
-    assert "mm" not in clusters, "mm has no kernel, so it runs on the host"
+    assert "convolution" not in clusters, "nothing runs a convolution, so it is on the host"
     assert clusters["tanh"] != clusters["add"], "the host node splits the graph"
 
 
@@ -127,7 +127,11 @@ def test_partition_returns_the_ir_too() -> None:
 
 def test_a_fully_unsupported_model_clusters_nothing() -> None:
     _, clusters = tessiq.partition(
-        _capture(lambda a, b: a @ b, torch.randn(4, 4), torch.randn(4, 4))
+        _capture(
+            lambda a, b: torch.nn.functional.conv1d(a, b),
+            torch.randn(1, 4, 8),
+            torch.randn(4, 4, 1),
+        )
     )
     assert clusters == {}
 

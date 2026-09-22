@@ -21,6 +21,7 @@ from torch._dynamo.backends.common import aot_autograd
 
 import tessiq
 from conftest import load_operations
+from tessiq import _C
 from tessiq.recipe import build_recipe
 
 pytestmark = pytest.mark.cuda
@@ -102,14 +103,16 @@ def test_sizes_around_the_block_boundary(size: int) -> None:
     assert torch.allclose(tessiq.execute(recipe)(*inputs)[0], chain(*inputs), atol=1e-5)
 
 
-def test_a_matmul_splits_the_chain_and_both_halves_agree() -> None:
+def test_a_matmul_runs_between_two_fused_chains() -> None:
+    # A matmul used to split the chain and go to the host. cuBLAS runs it now, so the whole thing
+    # is three kernels on the device: the chain before it, the multiply, and the chain after.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(torch.tanh(torch.relu(a + b) @ b))
 
     inputs = (torch.randn(64, 64), torch.randn(64, 64))
     recipe = build_recipe(captured(model, *inputs), tessiq.gpu, use_cache=False)
 
-    assert len(recipe.kernels) == 2, recipe.kernels
+    assert len(recipe.kernels) == 3, recipe.kernels
     assert torch.allclose(tessiq.execute(recipe)(*inputs)[0], model(*inputs), atol=1e-4)
 
 
@@ -383,3 +386,59 @@ def test_an_axis_set_the_kernel_cannot_express_falls_back() -> None:
         model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
     )
     torch.testing.assert_close(compiled(x), model(x), rtol=1e-5, atol=1e-5)
+
+
+# --- matrix multiplies --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "call", "shapes"),
+    [
+        ("mm", lambda a, b: a @ b, ((12, 32), (32, 16))),
+        ("mm transposed", lambda a, b: a @ b.t(), ((12, 32), (16, 32))),
+        ("bmm", lambda a, b: torch.bmm(a, b), ((8, 6, 8), (8, 8, 6))),
+        ("mm square", lambda a, b: a @ b, ((64, 64), (64, 64))),
+        ("mm thin", lambda a, b: a @ b, ((1, 128), (128, 1))),
+    ],
+)
+def test_a_matmul_agrees_with_eager(
+    name: str, call: Callable[..., torch.Tensor], shapes: tuple[tuple[int, ...], ...]
+) -> None:
+    inputs = tuple(torch.randn(*shape) for shape in shapes)
+    recipe = build_recipe(captured(call, *inputs), tessiq.gpu, use_cache=False)
+    assert len(recipe.kernels) == 1, f"{name}: {recipe.kernels}"
+
+    compiled = torch.compile(
+        call, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(*inputs), call(*inputs), rtol=1e-4, atol=1e-4)
+
+
+def test_a_linear_layer_uses_a_transposed_weight_without_copying_it() -> None:
+    # nn.Linear stores its weight as [out, in] and computes with [in, out], so every one of them
+    # produces a transposed operand. BLAS takes that as a flag, which is the whole reason layouts
+    # are part of the type.
+    layer = torch.nn.Linear(32, 16).eval()
+    example = torch.randn(12, 32)
+
+    with torch.no_grad():
+        recipe = build_recipe(captured(layer, example), tessiq.gpu, use_cache=False)
+        gemm = next(k for k in recipe.kernels.values() if isinstance(k, _C.GemmKernel))
+        assert gemm.transposed == (False, True), gemm.transposed
+        assert gemm.extents == (1, 12, 16, 32), gemm.extents
+
+        compiled = torch.compile(
+            layer, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+        )
+        torch.testing.assert_close(compiled(example), layer(example), rtol=1e-4, atol=1e-4)
+
+
+def test_a_matmul_reads_its_operands_where_they_are() -> None:
+    # Every other kernel walks one index across every buffer, so the executor packs its inputs
+    # first. Packing a transposed operand would move the data and leave the transpose flag
+    # describing a layout that is no longer there, which is a wrong answer rather than a slow one.
+    layer = torch.nn.Linear(8, 4).eval()
+    with torch.no_grad():
+        recipe = build_recipe(captured(layer, torch.randn(3, 8)), tessiq.gpu, use_cache=False)
+    gemm = next(k for k in recipe.kernels.values() if isinstance(k, _C.GemmKernel))
+    assert not gemm.packs_inputs

@@ -174,10 +174,20 @@ TEST(DefaultOpSupportTest, AReductionStaysOutOfAnElementwiseGroupEvenWhenClaimed
   EXPECT_EQ(found.fused.count("aten.abs.default"), 1U);
 }
 
-TEST(DefaultOpSupportTest, DoesNotClaimOpsWithNoKernel) {
+TEST(DefaultOpSupportTest, DoesNotClaimWhatIsNotInTheTable) {
+  // The support set is seeded from ops.toml, so an operation nobody has added is declined by
+  // having no row rather than by a rule here.
   const OpSupport& support = default_op_support();
-  EXPECT_FALSE(support.supports("aten.mm.default")) << "matmul has no kernel shape";
   EXPECT_FALSE(support.supports("aten.convolution.default"));
+  EXPECT_FALSE(support.supports("aten.native_layer_norm.default"));
+  EXPECT_FALSE(support.supports("aten._softmax.default"));
+}
+
+TEST(DefaultOpSupportTest, ClaimsMatmuls) {
+  const OpSupport& support = default_op_support();
+  EXPECT_TRUE(support.supports("aten.mm.default"));
+  EXPECT_TRUE(support.supports("aten.addmm.default"));
+  EXPECT_TRUE(support.supports("aten.bmm.default"));
 }
 
 TEST(DefaultOpSupportTest, ClaimsReductions) {

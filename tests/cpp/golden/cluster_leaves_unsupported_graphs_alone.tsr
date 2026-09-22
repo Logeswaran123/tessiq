@@ -1,10 +1,10 @@
 // RUN: mark-supported,cluster
 graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
-  %x = aten.mm.default(%a, %b) : f32[4]
+  %x = aten.convolution.default(%a, %b) : f32[4]
   return %x
 }
 // ---
 graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
-  %x = aten.mm.default(%a, %b) {tessiq.supported = false} : f32[4]
+  %x = aten.convolution.default(%a, %b) {tessiq.supported = false} : f32[4]
   return %x
 }
