@@ -34,6 +34,11 @@ struct MemoryPlan {
 
   std::vector<Allocation> allocations;
 
+  /// Values the plan could not size, because a dynamic dimension has no byte count until the
+  /// graph runs. They are left out of the arena rather than guessed at, so a plan with any of
+  /// these describes part of the graph and says how much it left out.
+  std::size_t unsized = 0;
+
   /// Human-readable, one line per allocation, for `tessiq-opt --memory-plan` and for tests that
   /// would rather compare text than walk a structure.
   [[nodiscard]] std::string to_string() const;
@@ -46,8 +51,9 @@ struct MemoryPlan {
 /// must be a power of two. Passing the device's own alignment is what lets a kernel assume an
 /// aligned pointer instead of testing for one.
 ///
-/// Every shape must be static. A dynamic dimension means the size is unknown, and a plan built on
-/// a guess would hand a kernel a buffer smaller than what it writes.
+/// A value whose shape is not static is counted in `unsized` and left out, because a plan built
+/// on a guessed size would hand a kernel a buffer smaller than what it writes. Everything else is
+/// placed as usual, so a graph that is dynamic in part still gets a plan for the rest.
 Result<MemoryPlan> plan_memory(const Graph& graph, std::size_t alignment);
 
 } // namespace tessiq::ir
