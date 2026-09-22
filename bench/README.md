@@ -10,6 +10,8 @@ Report a distribution, not one timing, and drop the warmup.
   which is what fusion buys inside tessiq.
 - `against_torch.py` compares against PyTorch itself, both the kernel alone and the whole
   call. The two answers point opposite ways, which is why both are there.
+- `where_the_time_goes.py` splits a call into kernels, transfers and host work, and writes a
+  chrome trace. It answers why a block is behind rather than by how much.
 
 - `micro/` holds per-pattern comparisons, fused against unfused.
 - `models/` holds model-level runs, fusion on and off.
