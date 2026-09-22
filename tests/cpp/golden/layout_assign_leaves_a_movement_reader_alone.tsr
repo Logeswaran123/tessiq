@@ -1,0 +1,13 @@
+// RUN: mark-supported,layout-assign
+// A permute reads nothing in order. Given a packed copy it would produce a permuted view of the
+// copy, which is the same answer after a transfer nobody needed, so packing before one would undo
+// exactly what makes it free. Only an operation that reads through a generated kernel needs that.
+graph @g(%a: f32[4,8:1,4]) -> f32[8,4] {
+  %p = aten.permute.default(%a) {arg1 = [1,0]} : f32[8,4]
+  return %p
+}
+// ---
+graph @g(%a: f32[4,8:1,4]) -> f32[8,4] {
+  %p = aten.permute.default(%a) {arg1 = [1,0], tessiq.supported = true} : f32[8,4]
+  return %p
+}

@@ -53,6 +53,12 @@ std::optional<RuleKind> find_rule(std::string_view op) {
     return info->arity == 1 ? RuleKind::kUnaryElementwise : RuleKind::kBinaryElementwise;
   case OpCategory::kReduction:
     return RuleKind::kReduction;
+  case OpCategory::kMovement:
+    // No rule yet. A movement operation's result shape comes from its attributes, and each one
+    // reads them differently: a view takes the sizes it was given, a permute reorders the ones it
+    // has, a slice narrows one. Its layout changes too, which no rule here computes. Imported
+    // graphs carry the answer already, so shape-infer skips these rather than guessing.
+    return std::nullopt;
   case OpCategory::kMatmul:
     return RuleKind::kMatmul;
   }

@@ -193,3 +193,25 @@ def test_keepdim_is_carried_through_to_the_ir() -> None:
     assert "arg1 = [1]" in ir, ir
     assert "arg2 = true" in ir, ir
     assert "f32[4,1]" in ir, ir
+
+
+def test_a_movement_operation_joins_the_group_it_sits_in() -> None:
+    # A view between two claimed operations is on the device with them, and costs nothing there.
+    def model(a: torch.Tensor) -> torch.Tensor:
+        return torch.relu(a * 2.0).reshape(2, 32).tanh()
+
+    ir = fused(model, torch.randn(8, 8))
+    assert "aten.view.default" in ir, ir
+    assert re.search(r"aten\.view\.default[^\n]*tessiq\.cluster", ir), ir
+
+
+def test_a_movement_operation_on_its_own_stays_on_the_host() -> None:
+    # Claimed and not placed. Moving a tensor across to take a different view of it and moving
+    # that back is two transfers for no work, so a group holding nothing but movement is left
+    # where its input already was.
+    def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return (a @ b).reshape(2, 32)
+
+    ir = fused(model, torch.randn(8, 8), torch.randn(8, 8))
+    assert re.search(r"aten\.view\.default[^\n]*tessiq\.supported = true", ir), ir
+    assert not re.search(r"aten\.view\.default[^\n]*tessiq\.cluster", ir), ir

@@ -101,7 +101,7 @@ def test_an_operation_without_a_kernel_is_not_claimed() -> None:
 def test_the_coverage_document_matches_the_source() -> None:
     document = (ROOT / "docs" / "op_coverage.md").read_text()
     with_kernel = sum(1 for op in operations() if op["kernel"])
-    assert f"{with_kernel} of {len(operations())} operations have a kernel" in document
+    assert f"{with_kernel} of {len(operations())} operations can run on the device" in document
     for op in operations():
         assert f"`{op['name']}`" in document, f"{op['name']} is missing from the document"
 
