@@ -128,9 +128,36 @@ Strides contiguous_strides(const Shape& shape) {
   return strides;
 }
 
+namespace {
+
+/// Whether `strides` walk `shape` in packed row-major order.
+///
+/// An axis of extent 1 is skipped, because its stride is never used: there is no second index to
+/// step to. torch leaves whatever stride that axis happened to inherit, so a [1,64] tensor can
+/// arrive with strides (1,1) and be contiguous. Comparing against the computed strides exactly
+/// would call it strided, and every piece of code that reads a layout would then work from a step
+/// that means nothing.
+bool is_packed(const Shape& shape, const Strides& strides) {
+  if (strides.size() != shape.rank()) {
+    return false;
+  }
+  std::int64_t expected = 1;
+  for (std::size_t i = shape.rank(); i > 0; --i) {
+    const std::size_t axis = i - 1;
+    const std::int64_t extent = shape.dims()[axis];
+    if (extent != 1 && strides[axis] != expected) {
+      return false;
+    }
+    expected *= extent == kDynamic ? 1 : extent;
+  }
+  return true;
+}
+
+} // namespace
+
 TensorType::TensorType(DType dtype, Shape shape, Strides strides)
     : dtype_(dtype), shape_(std::move(shape)) {
-  if (strides != contiguous_strides(shape_)) {
+  if (!is_packed(shape_, strides)) {
     strides_ = std::move(strides);
   }
 }
