@@ -40,6 +40,18 @@ struct Step {
 ///
 /// Every value in `body` other than the inputs and the output stays in a register. That is the
 /// whole point of the group: the intermediates are never written anywhere.
+/// One value a fused kernel reads, and how it indexes it.
+///
+/// `index` is an expression in `i`, the thread's output position. It is `i` for an operand the
+/// same shape as the result, which is almost all of them. An operand with fewer elements, such as
+/// the per-row mean a layer norm subtracts, reads a different position, and the expression says
+/// which. The shapes are known when the kernel is written, so the arithmetic is emitted rather
+/// than worked out per element.
+struct KernelInput {
+  std::string name;
+  std::string index = "i";
+};
+
 struct FusedKernel {
   /// Identifier for the generated function. Valid in C, and unique within a graph.
   std::string name;
@@ -53,7 +65,10 @@ struct FusedKernel {
   std::int64_t elements = 0;
 
   /// Values read from memory, in the order the kernel takes them as parameters.
-  std::vector<std::string> inputs;
+  std::vector<KernelInput> inputs;
+
+  /// The inputs' names, in order, for callers that only bind buffers.
+  [[nodiscard]] std::vector<std::string> input_names() const;
 
   /// The value written to memory.
   std::string output;
@@ -69,6 +84,13 @@ struct FusedKernel {
 /// counts, or more than one value escaping. Those are conditions `fuse-elementwise` already
 /// refuses, so a failure here means the two disagree rather than that the graph is unusual.
 Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group);
+
+/// How a loop over `output` reads an operand of shape `operand`, as an expression in `i`.
+///
+/// Empty when there is none, which is how fusion asks whether an operand can be reached at all.
+/// The two have to agree: a group fusion allows and the emitter then declines is a group that
+/// silently does not become a kernel.
+[[nodiscard]] std::string index_for(const ir::Shape& output, const ir::Shape& operand);
 
 /// Fusion group numbers in a graph, ascending.
 [[nodiscard]] std::vector<std::int64_t> fusion_groups(const ir::Graph& graph);

@@ -48,7 +48,7 @@ TEST(ExtractTest, InputsAreTheValuesTheGroupDoesNotCompute) {
   ASSERT_TRUE(kernel.has_value()) << (kernel.has_value() ? "" : kernel.error().to_string());
 
   // %m, %s and %r are computed inside and never leave, so they are not parameters.
-  EXPECT_EQ(kernel->inputs, (std::vector<std::string>{"a", "b", "c"}));
+  EXPECT_EQ(kernel->input_names(), (std::vector<std::string>{"a", "b", "c"}));
   EXPECT_EQ(kernel->output, "g");
   EXPECT_EQ(kernel->body.size(), 4U);
   EXPECT_EQ(kernel->elements, 1024);
@@ -71,7 +71,7 @@ TEST(ExtractTest, AValueReadOutsideTheGroupIsTheOutput) {
   const auto kernel = extract_kernel(*graph, 0);
   ASSERT_TRUE(kernel.has_value()) << (kernel.has_value() ? "" : kernel.error().to_string());
   EXPECT_EQ(kernel->output, "q");
-  EXPECT_EQ(kernel->inputs, (std::vector<std::string>{"a"}));
+  EXPECT_EQ(kernel->input_names(), (std::vector<std::string>{"a"}));
 }
 
 TEST(ExtractTest, AConstantArgumentBecomesALiteral) {
@@ -219,6 +219,47 @@ TEST(CudaEmitterTest, TheBoundsCheckIsThere) {
 
   // A grid shaped to divide exactly is a grid somebody eventually launches wrongly.
   EXPECT_NE(source->find("if (i >= n) return;"), std::string::npos) << *source;
+}
+
+// --- reading an operand that broadcasts ------------------------------------------------------
+
+namespace {
+
+ir::Shape dims(std::vector<std::int64_t> extents) { return ir::Shape(std::move(extents)); }
+
+} // namespace
+
+TEST(IndexForTest, AnOperandTheSameShapeIsReadAtTheLoopIndex) {
+  EXPECT_EQ(index_for(dims({4, 8}), dims({4, 8})), "i");
+}
+
+TEST(IndexForTest, APerRowValueIsOneDivision) {
+  // What a softmax and a layer norm subtract. Every element of a row reads the same position.
+  EXPECT_EQ(index_for(dims({4, 8}), dims({4, 1})), "i / 8");
+  EXPECT_EQ(index_for(dims({2, 6, 8}), dims({2, 6, 1})), "i / 8");
+}
+
+TEST(IndexForTest, ARowAddedToEveryRowIsOneRemainder) {
+  // What a bias looks like. The position walks the row and starts again.
+  EXPECT_EQ(index_for(dims({4, 8}), dims({8})), "i % 8");
+  EXPECT_EQ(index_for(dims({2, 6, 8}), dims({6, 8})), "i % 48");
+}
+
+TEST(IndexForTest, AMiddleAxisNeedsTheGeneralForm) {
+  // Neither a prefix nor a suffix of the result, so the position is taken apart and put back
+  // together against the operand's own extents.
+  EXPECT_EQ(index_for(dims({2, 6, 8}), dims({6, 1})), "((i / 8) % 6)");
+}
+
+TEST(IndexForTest, AScalarReadsOnePosition) {
+  EXPECT_EQ(index_for(dims({4, 8}), dims({1, 1})), "i / 32");
+}
+
+TEST(IndexForTest, AnOperandThatDoesNotBroadcastHasNoExpression) {
+  // Fusion asks this, and an empty answer is what keeps a group from forming that the emitter
+  // would then decline.
+  EXPECT_TRUE(index_for(dims({4, 8}), dims({4, 4})).empty());
+  EXPECT_TRUE(index_for(dims({4, 8}), dims({2, 4, 8})).empty()) << "more axes than the result";
 }
 
 } // namespace
