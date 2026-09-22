@@ -14,6 +14,7 @@ Run with: python tools/model_coverage.py
 from __future__ import annotations
 
 import collections
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -26,20 +27,41 @@ import tessiq  # noqa: E402
 from test_models import EncoderBlock, ResidualBlock, capture  # noqa: E402
 
 
-def coverage(model: torch.nn.Module, example: torch.Tensor) -> tuple[int, int, collections.Counter]:
-    """Operations claimed, operations total, and what was declined."""
+@dataclasses.dataclass(frozen=True)
+class Coverage:
+    """What the backend could run, against what it actually will.
+
+    The two differ, and the difference is the point. `claimable` counts operations the backend has
+    an implementation for. `placed` counts the ones partitioning puts on the device, which is
+    fewer: a cluster holding nothing but movement operations is left on the host, because moving a
+    tensor across to take a different view of it and moving it back is two transfers for no work.
+    """
+
+    claimable: int
+    placed: int
+    total: int
+    on_host: collections.Counter[str]
+
+
+def coverage(model: torch.nn.Module, example: torch.Tensor) -> Coverage:
     text, _ = tessiq.partition(capture(model, example))
 
-    claimed = 0
-    declined: collections.Counter[str] = collections.Counter()
+    claimable = 0
+    placed = 0
+    on_host: collections.Counter[str] = collections.Counter()
+    total = 0
     for line in text.splitlines():
         if "tessiq.supported" not in line:
             continue
+        total += 1
+        operation = line.split("=", 1)[1].strip().split("(")[0]
         if "tessiq.supported = true" in line:
-            claimed += 1
+            claimable += 1
+        if "tessiq.cluster = " in line:
+            placed += 1
         else:
-            declined[line.split("=", 1)[1].strip().split("(")[0]] += 1
-    return claimed, claimed + sum(declined.values()), declined
+            on_host[operation] += 1
+    return Coverage(claimable, placed, total, on_host)
 
 
 def main() -> None:
@@ -50,13 +72,16 @@ def main() -> None:
 
     for name, model, example in blocks:
         with torch.no_grad():
-            claimed, total, declined = coverage(model, example)
-        share = 100.0 * claimed / total if total else 0.0
-        print(f"\n{name}: {claimed} of {total} operations on the device ({share:.0f}%)")
-        if not declined:
+            found = coverage(model, example)
+        share = 100.0 * found.placed / found.total if found.total else 0.0
+        print(
+            f"\n{name}: {found.placed} of {found.total} operations on the device ({share:.0f}%),"
+            f" {found.claimable} claimable"
+        )
+        if not found.on_host:
             continue
         print(f"  {'left on the host':<48}{'count':>6}")
-        for operation, count in declined.most_common():
+        for operation, count in found.on_host.most_common():
             print(f"  {operation:<48}{count:>6}")
 
 
