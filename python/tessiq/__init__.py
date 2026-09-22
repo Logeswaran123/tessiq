@@ -31,6 +31,7 @@ from tessiq.device import (
     memory_stats,
 )
 from tessiq.executor import execute
+from tessiq.explain import explain, explain_graph
 from tessiq.fx import (
     capture,
     default_pipeline,
@@ -61,6 +62,8 @@ __all__ = [
     "emit_cuda",
     "empty_cache",
     "execute",
+    "explain",
+    "explain_graph",
     "get_log_level",
     "gpu",
     "gpu_at",
