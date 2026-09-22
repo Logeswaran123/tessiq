@@ -36,7 +36,7 @@ class Event:
 
     Attributes:
         name: The graph node this was, or a description for anything that is not one.
-        category: ``kernel``, ``host`` or ``transfer``.
+        category: ``kernel``, ``interpreted`` or ``transfer``.
         device: Where it ran, as a string.
         microseconds: How long it took, with the device drained before the clock stopped.
         nbytes: Bytes moved, for a transfer. Zero otherwise.
@@ -54,23 +54,28 @@ class Profile:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._total = 0.0
         self.events: list[Event] = []
 
     def record(self, event: Event) -> None:
         with self._lock:
             self.events.append(event)
+            self._total += event.microseconds
 
     @property
     def microseconds(self) -> float:
         """Everything measured, which is most but not all of the call.
 
-        Events hold exclusive time, so this is a sum rather than an outermost duration.
+        Events hold exclusive time, so this is a running total rather than an outermost duration.
+        It is kept rather than summed because every measured region reads it twice, to work out
+        how much of itself belongs to regions inside it, and summing made the profiler quadratic
+        in the number of steps.
         """
         with self._lock:
-            return sum(event.microseconds for event in self.events)
+            return self._total
 
     def by_category(self) -> dict[str, tuple[int, float, int]]:
-        """Count, microseconds and bytes for each of kernel, host and transfer."""
+        """Count, microseconds and bytes for each of kernel, interpreted and transfer."""
         totals: dict[str, tuple[int, float, int]] = {}
         for event in self.events:
             count, micros, nbytes = totals.get(event.category, (0, 0.0, 0))
@@ -103,7 +108,7 @@ class Profile:
         One row per category rather than per thread, because the interesting grouping is what kind
         of work it was and everything here ran in sequence anyway.
         """
-        rows = {"kernel": 1, "transfer": 2, "host": 3}
+        rows = {"kernel": 1, "transfer": 2, "interpreted": 3}
         trace: list[dict[str, Any]] = []
         at = 0.0
         for event in self.events:
@@ -154,9 +159,18 @@ def current() -> Profile | None:
     return getattr(_active, "profile", None)
 
 
-def _synchronise(device: torch.device) -> None:
+#: Categories whose work the device may still be doing when the call returns.
+#:
+#: A kernel launch is asynchronous, so its region has to be drained to have measured anything. A
+#: transfer and an interpreted step are already synchronous by the time they return, and draining
+#: after them costs two microseconds each and measures nothing new. With one step in three being
+#: interpreted, paying it everywhere was most of the profiler's own cost.
+_NEEDS_DRAINING = frozenset({"kernel"})
+
+
+def _synchronise(category: str, device: torch.device) -> None:
     """Drain `device` so that a measured region has finished rather than been queued."""
-    if device.type != "cpu" and torch.cuda.is_available():
+    if category in _NEEDS_DRAINING and device.type != "cpu" and torch.cuda.is_available():
         torch.cuda.synchronize()
 
 
@@ -176,7 +190,7 @@ def measure(
     try:
         yield nbytes
     finally:
-        _synchronise(device)
+        _synchronise(category, device)
         elapsed = (time.perf_counter() - started) * 1e6
         nested = profile_.microseconds - before
         profile_.record(

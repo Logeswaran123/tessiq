@@ -51,7 +51,7 @@ def test_a_call_records_its_steps() -> None:
         run(torch.randn(8), torch.randn(8))
 
     assert collected.events, "a compiled call recorded nothing"
-    assert set(collected.by_category()) <= {"kernel", "host", "transfer"}
+    assert set(collected.by_category()) <= {"kernel", "interpreted", "transfer"}
 
 
 def test_the_profile_stops_collecting_after_the_block() -> None:
@@ -70,7 +70,7 @@ def test_time_is_exclusive() -> None:
     collected = Profile()
     # Written nested on purpose, because the nesting is the thing under test. Combining them into
     # one `with` means the same thing and stops it reading as one region inside another.
-    with tessiq.profiler.measure(collected, "outer", "host", tessiq.cpu):  # noqa: SIM117
+    with tessiq.profiler.measure(collected, "outer", "interpreted", tessiq.cpu):  # noqa: SIM117
         with tessiq.profiler.measure(collected, "inner", "transfer", tessiq.cpu) as nbytes:
             nbytes.append(4096)
             torch.randn(256, 256).sum()
@@ -87,14 +87,14 @@ def test_the_summary_adds_up() -> None:
     for name, category, micros in [
         ("a", "kernel", 10.0),
         ("b", "transfer", 30.0),
-        ("c", "host", 60.0),
+        ("c", "interpreted", 60.0),
     ]:
         collected.record(Event(name=name, category=category, device="cpu", microseconds=micros))
 
     assert collected.microseconds == pytest.approx(100.0)
     counts = collected.by_category()
-    assert counts["host"][1] == pytest.approx(60.0)
-    assert list(counts) == ["host", "transfer", "kernel"], "slowest first"
+    assert counts["interpreted"][1] == pytest.approx(60.0)
+    assert list(counts) == ["interpreted", "transfer", "kernel"], "slowest first"
     assert "60%" in collected.summary()
 
 
@@ -132,3 +132,24 @@ def test_a_gpu_call_reports_kernels_and_transfers() -> None:
     assert "transfer" in categories, collected.summary()
     moved = categories["transfer"][2]
     assert moved >= 4096 * 4, f"the inputs alone are 16 KB, saw {moved}"
+
+
+def test_the_running_total_matches_the_events() -> None:
+    # The total is kept rather than summed, because every measured region reads it twice to work
+    # out how much of itself belongs to regions inside it. Summing made the profiler quadratic in
+    # the number of steps and doubled the call it was measuring.
+    collected = Profile()
+    for i in range(500):
+        collected.record(Event(f"e{i}", "kernel", "cpu", float(i)))
+
+    assert collected.microseconds == pytest.approx(sum(float(i) for i in range(500)))
+
+
+def test_only_a_kernel_drains_the_device() -> None:
+    # A launch is asynchronous, so its region has to be drained to have measured anything. A
+    # transfer and an interpreted step have already finished, and draining after them measures
+    # nothing new at two microseconds a time, which with a third of the graph interpreted was most
+    # of what the profiler cost.
+    from tessiq.profiler import _NEEDS_DRAINING
+
+    assert {"kernel"} == _NEEDS_DRAINING

@@ -128,17 +128,19 @@ That was 2 ms.
 
 ```
               count        time   share       moved
-transfer         29      2.05 ms     42%     38.0 MB
-kernel           28      1.47 ms     30%
-host             41      1.32 ms     27%
+kernel           28      2.37 ms     41%
+transfer         29      2.01 ms     35%     38.0 MB
+interpreted      41      1.35 ms     24%
 ```
 
-Thirty-eight megabytes cross for a two megabyte input, and the eight slowest steps of the call are
-all transfers. The kernels are under a third of it.
+**Thirty-eight megabytes cross for a two megabyte input**, and seven of the eight slowest steps of
+the call are transfers.
 
-The host column is the other surprise: `view` and `permute` are claimed operations that partitioning
-leaves on the host when they sit in a group with nothing to compute, and there they cost 537 and
-190 microseconds rather than nothing.
+`interpreted` is the third of the graph that has no kernel and goes one operation at a time through
+PyTorch's dispatcher. All of it is placed on the device, so none of it is a round trip, and it
+costs about fourteen microseconds a step whatever the tensors are: a view of two megabytes costs
+14.2 and a view of ten kilobytes costs 10.8. That is the price of interpreting a graph rather than
+running it, and it is paid per operation.
 
 The generated code is not what is behind: on a single chain it is
 [1641 GB/s against Inductor's 775](bench/against_torch.py). Everything around it is.
