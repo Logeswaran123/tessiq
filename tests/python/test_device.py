@@ -308,3 +308,13 @@ def test_writing_through_a_view_reaches_the_base(
     write(host)
     write(staged)
     assert torch.equal(staged.cpu(), host)
+
+
+def test_registering_the_backend_makes_it_the_accelerator() -> None:
+    # PyTorch has one accelerator per process and registering a PrivateUse1 backend takes the
+    # title. Pinned here because it is load-bearing and invisible: the autograd engine looks for a
+    # tensor's stream among the accelerator's devices, so a CUDA backward pass in a process that
+    # has imported tessiq fails inside the engine. See docs/design_notes/0003.
+    current = torch.accelerator.current_accelerator()
+    assert current is not None
+    assert current.type == tessiq.DEVICE_NAME, current
