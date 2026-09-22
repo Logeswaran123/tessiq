@@ -85,11 +85,19 @@ std::optional<Alignment> align(const ir::TensorType& output, const ir::TensorTyp
 }
 
 /// Whether the steps are the packed row-major ones for `extents`, which is what `i` means.
+///
+/// An extent that is not known makes every step outside it unknowable too, so the walk stops
+/// there and answers yes for what it could check. That is safe because the only operands reaching
+/// this with an unknown extent are ones the type already records as contiguous, where packed is
+/// what contiguous means.
 bool steps_are_packed(const std::vector<std::int64_t>& extents,
                       const std::vector<std::int64_t>& steps) {
   std::int64_t expected = 1;
   for (std::size_t j = extents.size(); j > 0; --j) {
     const std::size_t axis = j - 1;
+    if (extents[axis] == ir::kDynamic || steps[axis] == ir::kDynamic) {
+      return true;
+    }
     if (extents[axis] != 1 && steps[axis] != expected) {
       return false;
     }
@@ -98,11 +106,24 @@ bool steps_are_packed(const std::vector<std::int64_t>& extents,
   return true;
 }
 
-/// `i / n` when the operand is the output packed, with a run of trailing axes read once each.
+/// The product of `dims[from, to)`, or `ir::kDynamic` when one of them is not known.
+std::int64_t span(const std::vector<std::int64_t>& dims, std::size_t from, std::size_t to) {
+  std::int64_t total = 1;
+  for (std::size_t j = from; j < to; ++j) {
+    if (dims[j] == ir::kDynamic) {
+      return ir::kDynamic;
+    }
+    total *= dims[j];
+  }
+  return total;
+}
+
+/// How many output elements share one operand element, when the operand is the output packed with
+/// a run of trailing axes read once each.
 ///
 /// The per-row value a softmax and a layer norm subtract, and the cheapest case there is.
-std::optional<std::string> prefix_index(const std::vector<std::int64_t>& out,
-                                        const Alignment& aligned) {
+std::optional<std::int64_t> repeated_divisor(const std::vector<std::int64_t>& out,
+                                             const Alignment& aligned) {
   std::size_t kept = out.size();
   while (kept > 0 && aligned.steps[kept - 1] == 0) {
     --kept;
@@ -115,17 +136,13 @@ std::optional<std::string> prefix_index(const std::vector<std::int64_t>& out,
   if (!steps_are_packed(aligned.extents, aligned.steps)) {
     return std::nullopt;
   }
-
-  std::int64_t collapsed = 1;
-  for (std::size_t j = kept; j < out.size(); ++j) {
-    collapsed *= out[j];
-  }
-  return collapsed == 1 ? std::string("i") : "i / " + std::to_string(collapsed);
+  return span(out, kept, out.size());
 }
 
-/// `i % n` when the operand is packed and matches only the output's trailing axes, a bias row.
-std::optional<std::string> suffix_index(const std::vector<std::int64_t>& out,
-                                        const Alignment& aligned) {
+/// How many elements the operand holds, when it is packed and matches only the output's trailing
+/// axes. A bias row, read over and over down the result.
+std::optional<std::int64_t> cycled_divisor(const std::vector<std::int64_t>& out,
+                                           const Alignment& aligned) {
   std::size_t leading = 0;
   while (leading < out.size() && aligned.steps[leading] == 0) {
     ++leading;
@@ -138,12 +155,7 @@ std::optional<std::string> suffix_index(const std::vector<std::int64_t>& out,
   if (!steps_are_packed(aligned.extents, aligned.steps)) {
     return std::nullopt;
   }
-
-  std::int64_t total = 1;
-  for (std::size_t j = leading; j < out.size(); ++j) {
-    total *= out[j];
-  }
-  return "i % " + std::to_string(total);
+  return span(out, leading, out.size());
 }
 
 /// The output position taken apart into coordinates and stepped through the operand.
@@ -191,30 +203,63 @@ std::string general_index(const std::vector<std::int64_t>& out, const Alignment&
 
 } // namespace
 
-std::string index_for(const ir::TensorType& output, const ir::TensorType& operand) {
-  if (passes::one_index_reads_both(output, operand)) {
+std::optional<OperandRead> operand_read(const ir::TensorType& output,
+                                        const ir::TensorType& operand) {
+  if (output.shape().dims() == operand.shape().dims() && operand.is_contiguous()) {
     // Identical dim lists, so one index walks both, whether or not the extents are known. Two
     // unknown extents both print as `?` and the IR cannot tell whether they are the same number,
     // so the launch compares the sizes it is actually handed. See `FusedKernel::launch`.
-    return "i";
-  }
-  if (!output.shape().is_static() || !operand.shape().is_static()) {
-    // Anything past this point divides and takes remainders by the extents, and an extent that is
-    // not known cannot be written into the kernel. Refusing leaves the operation to run one at a
-    // time, which is correct and slow, rather than reading the wrong elements.
-    return {};
+    return OperandRead{};
   }
   const std::optional<Alignment> aligned = align(output, operand);
   if (!aligned.has_value()) {
+    return std::nullopt;
+  }
+
+  const auto broadcast = [](OperandRead::Kind kind, std::int64_t divisor) {
+    OperandRead read;
+    read.kind = kind;
+    read.divisor = divisor;
+    return read;
+  };
+
+  const std::vector<std::int64_t>& out = output.shape().dims();
+  if (const std::optional<std::int64_t> repeated = repeated_divisor(out, *aligned)) {
+    // A divisor of one means every output position reads its own element, which is the same
+    // thing as having the result's shape and is cheaper to write.
+    return *repeated == 1 ? OperandRead{} : broadcast(OperandRead::Kind::kRepeated, *repeated);
+  }
+  if (const std::optional<std::int64_t> cycled = cycled_divisor(out, *aligned)) {
+    return broadcast(OperandRead::Kind::kCycled, *cycled);
+  }
+  if (!output.shape().is_static() || !operand.shape().is_static()) {
+    // The last form steps through the operand axis by axis, which needs every extent. There is no
+    // way to hand those over at the launch as one number, so an operand that got this far without
+    // them cannot be reached and the operation runs elsewhere.
+    return std::nullopt;
+  }
+  OperandRead strided;
+  strided.kind = OperandRead::Kind::kStrided;
+  return strided;
+}
+
+std::string index_for(const ir::TensorType& output, const ir::TensorType& operand) {
+  const std::optional<OperandRead> read = operand_read(output, operand);
+  if (!read.has_value() || !read->is_known()) {
     return {};
   }
-  if (const std::optional<std::string> prefix = prefix_index(output.shape().dims(), *aligned)) {
-    return *prefix;
+  switch (read->kind) {
+  case OperandRead::Kind::kSameShape:
+    return "i";
+  case OperandRead::Kind::kRepeated:
+    return "i / " + std::to_string(read->divisor);
+  case OperandRead::Kind::kCycled:
+    return "i % " + std::to_string(read->divisor);
+  case OperandRead::Kind::kStrided:
+    break;
   }
-  if (const std::optional<std::string> suffix = suffix_index(output.shape().dims(), *aligned)) {
-    return *suffix;
-  }
-  return general_index(output.shape().dims(), *aligned);
+  const std::optional<Alignment> aligned = align(output, operand);
+  return aligned.has_value() ? general_index(output.shape().dims(), *aligned) : std::string{};
 }
 
 std::vector<std::string> FusedKernel::input_names() const {
@@ -285,13 +330,16 @@ Result<Step> build_step(const ir::Node* node,
     const ir::Value* operand = node->operand(next_operand++);
     step.args.push_back({operand->name(), true});
     if (inside.count(operand->producer()) == 0 && seen.insert(operand->name()).second) {
-      const std::string index = index_for(output, operand->type());
-      if (index.empty()) {
+      const std::optional<OperandRead> read = operand_read(output, operand->type());
+      if (!read.has_value()) {
         return unsupported("'" + node->op() + "' reads " + operand->type().to_string() +
                            " into a loop over " + output.to_string() +
                            ", which no index expression describes");
       }
-      inputs.push_back({operand->name(), index, operand->type()});
+      // Empty for a divisor the source cannot hold, which is not a failure: the emitter writes
+      // that one as a parameter and the launch supplies the number.
+      inputs.push_back(
+          {operand->name(), index_for(output, operand->type()), *read, operand->type()});
     }
   }
 

@@ -102,6 +102,30 @@ std::string substitute(std::string_view expression, const std::vector<Argument>&
 /// The kernel takes raw pointers and an element count. It knows nothing about strides, which is
 /// the contract fusion already enforces: every buffer in a group has the same shape, so walking
 /// one index is walking all of them.
+/// Whether this operand's index needs a number the source cannot hold.
+bool needs_divisor(const FusedKernel& kernel, const KernelInput& input) {
+  return kernel.has_dynamic_extent() && !input.read.is_known();
+}
+
+/// The index expression for this operand, with the divisor folded in or named as a parameter.
+std::string read_index(const FusedKernel& kernel, const KernelInput& input) {
+  if (!needs_divisor(kernel, input)) {
+    return input.index;
+  }
+  switch (input.read.kind) {
+  case OperandRead::Kind::kRepeated:
+    return "i / d_" + input.name;
+  case OperandRead::Kind::kCycled:
+    return "i % d_" + input.name;
+  case OperandRead::Kind::kSameShape:
+  case OperandRead::Kind::kStrided:
+    break;
+  }
+  // Unreachable: `operand_read` gives only those two an unknown divisor, and refuses a strided
+  // operand outright when the extents are not known.
+  return {};
+}
+
 class CudaEmitter final : public Emitter {
  public:
   [[nodiscard]] std::string_view name() const override { return "cuda"; }
@@ -113,6 +137,12 @@ class CudaEmitter final : public Emitter {
     const bool sized = kernel.elements > 0 || kernel.has_dynamic_extent();
     if (c_type(kernel.dtype).empty() || !sized || kernel.body.empty()) {
       return false;
+    }
+    for (const KernelInput& input : kernel.inputs) {
+      // A known kernel has every index folded in, so an empty one means no expression exists.
+      if (!needs_divisor(kernel, input) && input.index.empty()) {
+        return false;
+      }
     }
     for (const Step& step : kernel.body) {
       if (passes::elementwise_expression(step.op).empty()) {
@@ -127,7 +157,10 @@ class CudaEmitter final : public Emitter {
     if (c_type(kernel.dtype).empty()) {
       return false;
     }
-    if (kernel.reduce <= 0 || kernel.outputs() <= 0 || kernel.inner <= 0) {
+    // The three extents reach the kernel as arguments, so a shape that is not known yet is no
+    // obstacle to writing the source. What it must not be is empty or malformed.
+    const auto usable = [](std::int64_t extent) { return extent > 0 || extent == ir::kDynamic; };
+    if (!usable(kernel.reduce) || !usable(kernel.outer) || !usable(kernel.inner)) {
       return false;
     }
     // An integer mean would be an integer division, which is not what torch computes. torch
@@ -202,15 +235,25 @@ class CudaEmitter final : public Emitter {
       source += "    const scalar_t* __restrict__ p_" + input.name + ",\n";
     }
     source += "    scalar_t* __restrict__ p_" + kernel.output + ",\n";
-    source += "    long long n) {\n";
+    source += "    long long n";
+    // A kernel written for a shape nobody knows yet cannot fold a broadcast's divisor into the
+    // source, so it takes it beside the element count. One parameter per operand that needs one,
+    // in operand order, which is the order the launch fills them in.
+    for (const KernelInput& input : kernel.inputs) {
+      if (needs_divisor(kernel, input)) {
+        source += ",\n    long long d_" + input.name;
+      }
+    }
+    source += ") {\n";
     source += "  long long i = blockIdx.x * (long long)blockDim.x + threadIdx.x;\n";
     source += "  if (i >= n) return;\n\n";
 
     for (const KernelInput& input : kernel.inputs) {
       // Almost always `i`. An operand with fewer elements than the result, such as the per-row
       // mean a layer norm subtracts, reads a position worked out from the shapes when the kernel
-      // was written rather than from strides passed in.
-      source += "  scalar_t v_" + input.name + " = p_" + input.name + "[" + input.index + "];\n";
+      // was written, or from a divisor passed in when they were not known then.
+      source += "  scalar_t v_" + input.name + " = p_" + input.name + "[" +
+                read_index(kernel, input) + "];\n";
     }
     source += "\n";
 

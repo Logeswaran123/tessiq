@@ -59,24 +59,43 @@ struct Dims {
   std::int64_t columns = 0;
 };
 
+/// The product of `sizes`, or `kDynamic` if any of them is.
+std::int64_t product_or_dynamic(const std::vector<std::int64_t>& sizes, std::size_t end) {
+  std::int64_t total = 1;
+  for (std::size_t i = 0; i < end; ++i) {
+    if (sizes[i] == ir::kDynamic) {
+      return ir::kDynamic;
+    }
+    total *= sizes[i];
+  }
+  return total;
+}
+
+/// Whether an extent is either a usable number or an honest `?`.
+///
+/// Zero and the negative values other than `kDynamic` are neither, and multiplying them together
+/// is how an unknown batch would quietly become 1.
+bool is_extent(std::int64_t value) { return value > 0 || value == ir::kDynamic; }
+
 std::optional<Dims> matrix_dims(const ir::TensorType& type) {
   const std::vector<std::int64_t>& sizes = type.shape().dims();
-  if (sizes.size() < 2 || !type.shape().is_static()) {
-    // BLAS takes the extents at the call, so a dynamic matmul is not out of reach, but the
-    // description built here holds numbers and the batch product below would silently multiply
-    // two unknowns into 1. Declined until the description can carry an extent it reads later.
+  if (sizes.size() < 2) {
     return std::nullopt;
   }
   Dims dims;
   dims.rows = sizes[sizes.size() - 2];
   dims.columns = sizes.back();
-  for (std::size_t i = 0; i + 2 < sizes.size(); ++i) {
-    dims.batch *= sizes[i];
-  }
-  if (dims.rows <= 0 || dims.columns <= 0 || dims.batch <= 0) {
+  dims.batch = product_or_dynamic(sizes, sizes.size() - 2);
+  if (!is_extent(dims.rows) || !is_extent(dims.columns) || !is_extent(dims.batch)) {
     return std::nullopt;
   }
   return dims;
+}
+
+/// Whether two extents are known to differ. Two unknowns are not a mismatch and not a match: the
+/// launch compares the tensors it is handed, which is the only place the numbers exist.
+bool disagree(std::int64_t a, std::int64_t b) {
+  return a != ir::kDynamic && b != ir::kDynamic && a != b;
 }
 
 } // namespace
@@ -108,9 +127,9 @@ Result<std::optional<GemmKernel>> extract_gemm(const ir::Node& node) {
   if (!left.has_value() || !right.has_value() || !result.has_value()) {
     return std::optional<GemmKernel>{};
   }
-  if (left->columns != right->rows || left->rows != result->rows ||
-      right->columns != result->columns || left->batch != right->batch ||
-      left->batch != result->batch) {
+  if (disagree(left->columns, right->rows) || disagree(left->rows, result->rows) ||
+      disagree(right->columns, result->columns) || disagree(left->batch, right->batch) ||
+      disagree(left->batch, result->batch)) {
     return invalid_argument(
         node.op() + " has operands that do not multiply: " + lhs->type().to_string() + " by " +
         rhs->type().to_string() + " giving " + out->type().to_string());
@@ -149,13 +168,22 @@ Result<std::optional<GemmKernel>> extract_gemm(const ir::Node& node) {
     // A row of n values added to every row. Anything else, such as a full matrix, is a shape this
     // does not handle and runs elsewhere.
     const std::vector<std::int64_t>& sizes = bias->type().shape().dims();
-    if (sizes.size() != 1 || sizes.front() != kernel.n || !bias->type().is_contiguous()) {
+    if (sizes.size() != 1 || disagree(sizes.front(), kernel.n) || !bias->type().is_contiguous()) {
       return std::optional<GemmKernel>{};
     }
     kernel.bias = bias->name();
   }
 
   return std::optional<GemmKernel>{std::move(kernel)};
+}
+
+bool GemmExtents::are_usable() const {
+  return batch > 0 && m > 0 && n > 0 && k > 0 && lhs_leading > 0 && rhs_leading > 0;
+}
+
+bool GemmKernel::has_dynamic_extent() const {
+  const GemmExtents known = extents();
+  return !known.are_usable();
 }
 
 std::string broadcast_row_source(ir::DType dtype, std::string_view name) {

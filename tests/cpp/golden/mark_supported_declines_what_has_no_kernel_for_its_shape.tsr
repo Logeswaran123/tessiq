@@ -1,20 +1,19 @@
 // RUN: mark-supported
 // Support is normally a property of the operation alone. An extent that is not known until the
-// call is the one case where it is not: a reduction folds the extents into its launch and a matrix
-// multiply into its call, so neither has a kernel here however well known the operation is. The
-// elementwise chain above them does, because one index reads every buffer whatever the sizes are.
-graph @g(%a: f32[?,32], %b: f32[?,32], %w: f32[32,32]) -> f32[?,1] {
-  %m = aten.mul.Tensor(%a, %b) : f32[?,32]
-  %r = aten.relu.default(%m) : f32[?,32]
-  %p = aten.mm.default(%r, %w) : f32[?,32]
-  %s = aten.sum.dim_IntList(%p) {arg1 = [1]} : f32[?,1]
+// call is the one case where it is not, and what decides it is whether the numbers can arrive
+// with the tensors. A reduction takes its three as arguments beside its buffers, and a loop whose
+// buffers share a shape needs none at all. Stepping through a permuted operand cannot: that needs
+// an extent per axis written into the source, and there are none to write.
+graph @g(%a: f32[?,4,8], %b: f32[?,4,8], %t: f32[4,8:1,4]) -> f32[?,4] {
+  %m = aten.mul.Tensor(%a, %b) : f32[?,4,8]
+  %x = aten.add.Tensor(%m, %t) : f32[?,4,8]
+  %s = aten.sum.dim_IntList(%x) {arg1 = [2]} : f32[?,4]
   return %s
 }
 // ---
-graph @g(%a: f32[?,32], %b: f32[?,32], %w: f32[32,32]) -> f32[?,1] {
-  %m = aten.mul.Tensor(%a, %b) {tessiq.supported = true} : f32[?,32]
-  %r = aten.relu.default(%m) {tessiq.supported = true} : f32[?,32]
-  %p = aten.mm.default(%r, %w) {tessiq.supported = false} : f32[?,32]
-  %s = aten.sum.dim_IntList(%p) {arg1 = [1], tessiq.supported = false} : f32[?,1]
+graph @g(%a: f32[?,4,8], %b: f32[?,4,8], %t: f32[4,8:1,4]) -> f32[?,4] {
+  %m = aten.mul.Tensor(%a, %b) {tessiq.supported = true} : f32[?,4,8]
+  %x = aten.add.Tensor(%m, %t) {tessiq.supported = false} : f32[?,4,8]
+  %s = aten.sum.dim_IntList(%x) {arg1 = [2], tessiq.supported = true} : f32[?,4]
   return %s
 }

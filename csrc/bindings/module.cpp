@@ -106,6 +106,16 @@ void bind_kernels(py::module_& m) {
       .def_readonly("output", &tessiq::torch_backend::FusedKernel::output)
       .def_readonly("members", &tessiq::torch_backend::FusedKernel::members)
       .def_readonly("elements", &tessiq::torch_backend::FusedKernel::elements)
+      .def("output_shape",
+           [](const tessiq::torch_backend::FusedKernel& kernel,
+              const std::vector<at::Tensor>& tensors) {
+             // Every buffer in a group has the result's shape, which is what lets one index walk
+             // all of them, so the first input is the answer.
+             static_cast<void>(kernel);
+             return tensors.empty() ? std::vector<std::int64_t>{}
+                                    : std::vector<std::int64_t>(tensors.front().sizes().begin(),
+                                                                tensors.front().sizes().end());
+           })
       .def_property_readonly("has_dynamic_extent",
                              [](const tessiq::torch_backend::FusedKernel& kernel) {
                                return kernel.elements == tessiq::ir::kDynamic;
@@ -137,8 +147,22 @@ void bind_kernels(py::module_& m) {
       .def_readonly("outer", &tessiq::torch_backend::ReductionKernel::outer)
       .def_readonly("reduce", &tessiq::torch_backend::ReductionKernel::reduce)
       .def_readonly("inner", &tessiq::torch_backend::ReductionKernel::inner)
-      .def_readonly("blocks", &tessiq::torch_backend::ReductionKernel::blocks)
+      .def_property_readonly("blocks",
+                             [](const tessiq::torch_backend::ReductionKernel& kernel) {
+                               return tessiq::codegen::blocks_for(kernel.shape, kernel.extents());
+                             })
       .def_property_readonly("elements", &tessiq::torch_backend::ReductionKernel::inputs)
+      .def_property_readonly("has_dynamic_extent",
+                             &tessiq::torch_backend::ReductionKernel::has_dynamic_extent)
+      .def("output_shape",
+           [](const tessiq::torch_backend::ReductionKernel& kernel,
+              const std::vector<at::Tensor>& tensors) {
+             auto shape = kernel.output_shape(tensors);
+             if (!shape) {
+               raise_from_error(shape.error());
+             }
+             return std::move(shape).value();
+           })
       .def_property_readonly("packs_inputs",
                              [](const tessiq::torch_backend::ReductionKernel&) { return true; })
       .def(
@@ -180,6 +204,17 @@ void bind_kernels(py::module_& m) {
                                                       kernel.description.n,
                                                       kernel.description.k);
                              })
+      .def_property_readonly("has_dynamic_extent",
+                             &tessiq::torch_backend::GemmKernel::has_dynamic_extent)
+      .def("output_shape",
+           [](const tessiq::torch_backend::GemmKernel& kernel,
+              const std::vector<at::Tensor>& tensors) {
+             auto shape = kernel.output_shape(tensors);
+             if (!shape) {
+               raise_from_error(shape.error());
+             }
+             return std::move(shape).value();
+           })
       .def(
           "launch",
           [](const tessiq::torch_backend::GemmKernel& kernel,

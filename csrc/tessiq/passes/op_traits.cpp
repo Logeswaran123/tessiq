@@ -32,8 +32,4 @@ std::vector<std::string> elementwise_ops() {
   return names;
 }
 
-bool one_index_reads_both(const ir::TensorType& output, const ir::TensorType& operand) {
-  return output.shape().dims() == operand.shape().dims() && operand.is_contiguous();
-}
-
 } // namespace tessiq::passes
