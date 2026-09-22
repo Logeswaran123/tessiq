@@ -417,6 +417,22 @@ TEST(LayoutTest, ALayoutIsPartOfTheType) {
   EXPECT_EQ(transposed.contiguous(), packed);
 }
 
+TEST(LayoutTest, AnAxisOfOneHasNoStrideWorthComparing) {
+  // There is no second index to step to on an axis of extent one, so whatever stride it carries is
+  // never used. torch leaves whatever that axis inherited, so a [1,64] row of a matrix arrives
+  // with strides (1,1) and is contiguous. Reading the 1 as a leading dimension is how a backward
+  // pass ended up handing cuBLAS an illegal value.
+  const TensorType row(DType::kF32, Shape({1, 64}), Strides{1, 1});
+  EXPECT_TRUE(row.is_contiguous()) << row.to_string();
+  EXPECT_EQ(row, TensorType(DType::kF32, Shape({1, 64})));
+
+  const TensorType column(DType::kF32, Shape({64, 1}), Strides{1, 1});
+  EXPECT_TRUE(column.is_contiguous()) << column.to_string();
+
+  // An axis that does have a second index still has to step correctly.
+  EXPECT_FALSE(TensorType(DType::kF32, Shape({2, 64}), Strides{1, 2}).is_contiguous());
+}
+
 TEST(LayoutTest, AStridedTypePrintsItsSteps) {
   EXPECT_EQ(TensorType(DType::kF32, Shape({2, 4}), Strides{1, 2}).to_string(), "f32[2,4:1,2]");
   EXPECT_EQ(TensorType(DType::kF32, Shape({2, 4})).to_string(), "f32[2,4]");
