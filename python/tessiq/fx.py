@@ -79,6 +79,56 @@ def pass_names() -> list[str]:
     return list(_C.pass_names())
 
 
+def default_pipeline() -> list[str]:
+    """The passes the backend runs to decide what it takes, in order.
+
+    Read from the compiler rather than written down again here. A second copy of this list is a
+    second thing that can be wrong, and the way it goes wrong is a tool describing a compilation
+    that never happened.
+    """
+    return str(_C.default_pipeline()).split(",")
+
+
+def capture(
+    model: torch.nn.Module, example: torch.Tensor, *, dynamic: bool = False
+) -> torch.fx.GraphModule:
+    """The graph the backend would receive for `model` called with `example`.
+
+    Runs Dynamo and AOTAutograd without compiling anything, so the result is the functionalised,
+    decomposed graph the passes actually see. The decompositions are tessiq's own rather than core
+    ATen's, which is what makes a softmax arrive as the five operations it is made of.
+
+    Args:
+        model: Any module. Put it in eval mode first unless training is what you mean to capture.
+        example: One input, used to trace. Its values do not matter, only its shape and dtype.
+        dynamic: True to capture with symbolic shapes, which is what Dynamo does by itself the
+            second time a dimension changes.
+
+    Returns:
+        The graph module, with a fake tensor on every node's ``meta["val"]``.
+    """
+    from torch._dynamo.backends.common import aot_autograd
+
+    from tessiq.decompositions import decompositions
+
+    graphs: list[torch.fx.GraphModule] = []
+
+    def collect(graph_module: torch.fx.GraphModule, _inputs: object) -> object:
+        graphs.append(graph_module)
+        return graph_module.forward
+
+    torch._dynamo.reset()
+    with torch.no_grad():
+        torch.compile(
+            model,
+            backend=aot_autograd(fw_compiler=collect, decompositions=decompositions()),
+            dynamic=dynamic,
+        )(example)
+    if not graphs:
+        raise ValueError("tracing produced no graph; the model may have nothing to compile")
+    return graphs[0]
+
+
 def emit_cuda(ir: str) -> str:
     """CUDA source for every fusion group in `ir`, in group order.
 

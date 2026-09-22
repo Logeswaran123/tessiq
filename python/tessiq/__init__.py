@@ -31,7 +31,15 @@ from tessiq.device import (
     memory_stats,
 )
 from tessiq.executor import execute
-from tessiq.fx import emit_cuda, import_graph, partition, pass_names, run_passes
+from tessiq.fx import (
+    capture,
+    default_pipeline,
+    emit_cuda,
+    import_graph,
+    partition,
+    pass_names,
+    run_passes,
+)
 from tessiq.profiler import Profile, profile
 from tessiq.recipe import Recipe, build_recipe
 
@@ -45,8 +53,10 @@ __all__ = [
     "backend_name",
     "build_recipe",
     "cache_stats",
+    "capture",
     "clear_cache",
     "cpu",
+    "default_pipeline",
     "device_count",
     "emit_cuda",
     "empty_cache",

@@ -17,11 +17,9 @@ import collections
 import pytest
 import torch
 from torch import nn
-from torch._dynamo.backends.common import aot_autograd
 
 import tessiq
 from conftest import load_operations
-from tessiq.decompositions import decompositions
 
 
 class ResidualBlock(nn.Module):
@@ -84,22 +82,9 @@ def block_cases() -> list[object]:
 
 
 def capture(model: nn.Module, example: torch.Tensor) -> torch.fx.GraphModule:
-    graphs: list[torch.fx.GraphModule] = []
-
-    def backend(graph_module: torch.fx.GraphModule, _inputs: object) -> object:
-        graphs.append(graph_module)
-        return graph_module.forward
-
-    torch._dynamo.reset()
-    with torch.no_grad():
-        torch.compile(
-            model,
-            # tessiq's own table rather than core ATen's, so what this captures is what the
-            # backend compiles: a softmax arrives here as the five operations it is made of.
-            backend=aot_autograd(fw_compiler=backend, decompositions=decompositions()),
-            dynamic=False,
-        )(example)
-    return graphs[0]
+    # The package's own, so that what these tests compile is what the backend compiles. A second
+    # copy here would drift, and the way it drifts is a test passing on a graph nobody produces.
+    return tessiq.capture(model, example)
 
 
 @pytest.fixture(autouse=True)

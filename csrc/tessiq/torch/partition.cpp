@@ -46,6 +46,8 @@ Result<std::unique_ptr<ir::Graph>> prepare(const pybind11::object& graph_module,
 
 } // namespace
 
+std::string_view default_pipeline() { return kPipeline; }
+
 Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::string name) {
   TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name)));
 

@@ -393,6 +393,11 @@ PYBIND11_MODULE(_C, m) {
         "fuse-elementwise.");
 
   m.def(
+      "default_pipeline",
+      []() { return std::string(tessiq::torch_backend::default_pipeline()); },
+      "The passes the backend runs to decide what it takes, in order, comma separated.");
+
+  m.def(
       "pass_names",
       []() { return tessiq::passes::PassRegistry::instance().names(); },
       "Names of the registered passes.");
