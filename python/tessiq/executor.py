@@ -19,6 +19,7 @@ from typing import Any
 
 import torch
 
+from tessiq import profiler
 from tessiq.recipe import Recipe
 
 
@@ -34,7 +35,16 @@ def _move(value: Any, device: torch.device, resident: ResidentInputs | None = No
     if isinstance(value, torch.Tensor):
         if value.device == device:
             return value
-        return value.to(device) if resident is None else resident.move(value, device)
+
+        collecting = profiler.current()
+        if collecting is None:
+            return value.to(device) if resident is None else resident.move(value, device)
+
+        with profiler.measure(collecting, f"{value.device} to {device}", "transfer", device) as n:
+            moved = value.to(device) if resident is None else resident.move(value, device)
+            if moved is not value:
+                n.append(value.numel() * value.element_size())
+            return moved
     if isinstance(value, (list, tuple)):
         return type(value)(_move(item, device, resident) for item in value)
     return value
@@ -139,7 +149,17 @@ class RecipeExecutor(torch.fx.Interpreter):
         # Recorded because call_function is handed the target and the arguments, not the node, and
         # where a step runs is a property of the node.
         self._node = n
-        return super().run_node(n)
+
+        collecting = profiler.current()
+        if collecting is None or n.op != "call_function":
+            return super().run_node(n)
+
+        # Anything without a kernel runs here, which on a tessiq tensor means the fallback and a
+        # round trip. Named after the operation rather than the node, since what a reader wants to
+        # know is which operation is costing them.
+        device = self._devices.get(n.name, self._host)
+        with profiler.measure(collecting, str(n.target), "host", device):
+            return super().run_node(n)
 
     def _run_kernel(self, kernel: Any, node: torch.fx.Node) -> torch.Tensor:
         """Runs a whole fusion group as one launch."""
@@ -160,7 +180,13 @@ class RecipeExecutor(torch.fx.Interpreter):
         # device's own, which is a blocking stream. The legacy default stream orders itself
         # against those, so a copy issued after this waits for the kernel without an explicit
         # synchronise here.
-        kernel.launch(inputs, out)
+        collecting = profiler.current()
+        if collecting is None:
+            kernel.launch(inputs, out)
+            return out
+
+        with profiler.measure(collecting, node.name, "kernel", device):
+            kernel.launch(inputs, out)
         return out
 
     def call_function(self, target: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
