@@ -60,19 +60,27 @@ def compile_graph(
     device = _device_from(options)
 
     def compile_forward(traced: torch.fx.GraphModule, _inputs: Sequence[Any]) -> Callable[..., Any]:
-        if not is_static(traced):
-            # Dynamo recompiles with symbolic shapes the second time a dimension changes, whether
-            # or not anyone asked for it, so this is the ordinary path rather than an opt-in one.
-            # Nothing here models a symbolic extent: a kernel is compiled for one set of shapes and
-            # every index in it is a constant folded at compile time. Running the graph as it
-            # arrived is correct and is what a backend should do with something it cannot compile.
-            _log.debug("graph has symbolic shapes; running it without compiling")
+        try:
+            recipe = build_recipe(traced, device)
+            _log.debug(
+                "compiled a graph with %s shapes: %d kernel(s)",
+                "known" if is_static(traced) else "symbolic",
+                len(recipe.kernels),
+            )
+        except TypeError as error:
+            # TypeError is what the compiler raises for a graph it cannot represent, as opposed to
+            # one that is malformed, which raises ValueError and is a bug worth seeing. Running an
+            # unrepresentable graph as it arrived is correct and is what a backend should do with
+            # something it cannot compile. Dynamo recompiles with symbolic shapes the second time
+            # a dimension changes, whether or not anyone asked for it, so a graph that reaches
+            # here is an ordinary one rather than an exotic one.
+            _log.debug("running the graph without compiling it: %s", error)
             return traced.forward
 
         # Boxed, so AOTAutograd hands the arguments over in a list it can drop its own reference
         # to. Unboxed it holds every input alive for the length of the call, which in training is
         # the whole activation set.
-        return make_boxed_func(execute(build_recipe(traced, device)))
+        return make_boxed_func(execute(recipe))
 
     # AOTAutograd is what makes the graph importable: it functionalises the mutations Dynamo leaves
     # in and lowers to core ATen, which is the op set the passes and the support table assume. The

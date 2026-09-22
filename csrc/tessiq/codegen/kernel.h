@@ -66,7 +66,14 @@ struct FusedKernel {
 
   /// Elements each input and the output hold. Fusion refuses a shape change, so there is one
   /// count rather than one per buffer.
+  ///
+  /// `ir::kDynamic` when the graph was traced for more than one shape and the count is not known
+  /// until the call. The generated code is the same either way, because the count reaches the
+  /// kernel as an argument rather than as a constant; only the launch differs.
   std::int64_t elements = 0;
+
+  /// Whether the element count arrives with the tensors rather than being known here.
+  [[nodiscard]] bool has_dynamic_extent() const { return elements == ir::kDynamic; }
 
   /// Values read from memory, in the order the kernel takes them as parameters.
   std::vector<KernelInput> inputs;

@@ -66,6 +66,7 @@ class FusedKernel:
     output: str
     members: list[str]
     elements: int
+    has_dynamic_extent: bool
     packs_inputs: bool
     def launch(self, inputs: list[Any], out: Any) -> None: ...
 

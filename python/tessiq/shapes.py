@@ -9,8 +9,17 @@ asking for one.
 
 Symbolic here means more than "unknown". A dimension arrives as its own graph input, shapes are
 expressions over those inputs such as ``(s33, s50, 32)``, strides are expressions too, and there
-are nodes doing arithmetic on them. Nothing in this compiler models any of that, and a kernel is
-compiled for one set of shapes with every index in it folded to a constant.
+are nodes doing arithmetic on them. The compiler takes such a graph: the IR records an extent it
+does not know as ``?``, and a fusion group whose buffers all have the same shape compiles to a
+kernel that is handed its element count at the launch.
+
+What it does not take is anything that needs the number while the kernel is being written. A
+broadcast reads a position worked out by dividing by the extents, a reduction folds them into its
+launch, and a matmul into its call, so those keep running one operation at a time until each
+learns to read its extents from the tensors it is given.
+
+This predicate is what tells the two apart for logging and for tests. Nothing decides whether to
+compile by asking it: that answer comes from what the compiler managed to claim.
 """
 
 from __future__ import annotations
@@ -34,8 +43,7 @@ def _is_symbolic(value: object) -> bool:
 def is_static(graph_module: torch.fx.GraphModule) -> bool:
     """Whether every value in `graph_module` has a shape known at compile time.
 
-    False for a graph Dynamo captured with symbolic shapes, which the compiler declines rather than
-    guessing at. Checked on the whole graph rather than on its inputs, because a symbolic dimension
-    can enter through an operation that computes one.
+    False for a graph Dynamo captured with symbolic shapes. Checked on the whole graph rather than
+    on its inputs, because a symbolic dimension can enter through an operation that computes one.
     """
     return not any(_is_symbolic(node.meta.get("val")) for node in graph_module.graph.nodes)

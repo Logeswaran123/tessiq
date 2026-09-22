@@ -135,7 +135,7 @@ TEST(RecipeTest, ParametersAndResultsAreNotBuffers) {
   EXPECT_EQ(recipe->arena_bytes, 0U);
 }
 
-TEST(RecipeTest, ADynamicShapeIsRefused) {
+TEST(RecipeTest, ADynamicShapeStillGetsARecipe) {
   auto graph = parsed(R"(graph @g(%x: f32[?]) -> f32[?] {
   %a = relu(%x) : f32[?]
   %b = neg(%a) : f32[?]
@@ -144,10 +144,13 @@ TEST(RecipeTest, ADynamicShapeIsRefused) {
 )");
   ASSERT_NE(graph, nullptr);
 
+  // Where each step runs does not depend on how big the tensors are, so a graph whose extents
+  // arrive at run time gets the same answer to that question as any other. Only the arena is
+  // empty, because nothing here can be sized ahead of the call.
   const auto recipe = build_recipe(*graph, kAlignment);
-  ASSERT_FALSE(recipe.has_value());
-  EXPECT_NE(recipe.error().message().find("shape-infer"), std::string::npos)
-      << recipe.error().message();
+  ASSERT_TRUE(recipe.has_value()) << recipe.error().to_string();
+  EXPECT_EQ(recipe->steps.size(), 2U);
+  EXPECT_EQ(recipe->arena_bytes, 0U);
 }
 
 TEST(RecipeTest, ArenaMatchesThePlan) {

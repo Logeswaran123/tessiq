@@ -4,9 +4,13 @@
 #include "tessiq/torch/importer.h"
 
 #include <ATen/core/Tensor.h>
+#include <c10/core/SymBool.h>
+#include <c10/core/SymInt.h>
+#include <c10/core/TensorImpl.h>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <pybind11/pybind11.h>
 #include <string>
 #include <unordered_map>
@@ -25,6 +29,9 @@ namespace {
 namespace py = pybind11;
 
 constexpr std::string_view kLogModule = "importer";
+
+/// What an argument list whose entries are computed reads as in the IR.
+constexpr std::string_view kComputedList = "dynamic";
 
 Result<ir::DType> to_ir_dtype(at::ScalarType dtype) {
   switch (dtype) {
@@ -53,8 +60,50 @@ Result<ir::DType> to_ir_dtype(at::ScalarType dtype) {
 ///
 /// That is the only place shape and dtype are recorded. A node without it has not been through
 /// shape propagation, and guessing would put a wrong type on a value the passes then trust.
+/// A symbolic extent or step as the IR spells it: the number when torch knows it, `kDynamic`
+/// otherwise. maybe_as_int() is the question that does not add a guard, which matters because a
+/// guard added here would narrow the graph torch compiles on our behalf.
+std::int64_t known_or_dynamic(const c10::SymInt& value) {
+  const std::optional<std::int64_t> known = value.maybe_as_int();
+  return known.value_or(ir::kDynamic);
+}
+
+/// The type of a tensor whose shape torch only knows symbolically.
+///
+/// Every unknown extent becomes the same `?`. The IR does not record which symbol an extent came
+/// from, so it cannot tell two unknowns apart, and nothing here concludes that two `?` axes match.
+/// The kernels that run on a shape like this check the sizes they were actually handed instead.
+ir::TensorType symbolic_tensor_type(const at::Tensor& tensor, ir::DType dtype) {
+  const c10::TensorImpl* impl = tensor.unsafeGetTensorImpl();
+
+  std::vector<std::int64_t> dims;
+  dims.reserve(static_cast<std::size_t>(tensor.dim()));
+  for (const c10::SymInt& dim : tensor.sym_sizes()) {
+    dims.push_back(known_or_dynamic(dim));
+  }
+
+  // Asked of torch rather than worked out from the steps, because `[?,32]` with steps `[32,1]`
+  // is contiguous and comparing an unknown step against an unknown product cannot show it.
+  // GUARD_OR_FALSE answers "not contiguous" when it cannot decide, which costs a fusion rather
+  // than producing a kernel that reads the wrong elements.
+  if (TORCH_GUARD_OR_FALSE(impl->sym_is_contiguous())) {
+    return {dtype, ir::Shape(std::move(dims))};
+  }
+
+  ir::Strides strides;
+  strides.reserve(static_cast<std::size_t>(tensor.dim()));
+  for (const c10::SymInt& stride : tensor.sym_strides()) {
+    strides.push_back(known_or_dynamic(stride));
+  }
+  return {dtype, ir::Shape(std::move(dims)), std::move(strides)};
+}
+
 Result<ir::TensorType> tensor_type(const at::Tensor& tensor) {
   TESSIQ_ASSIGN_OR_RETURN(const ir::DType dtype, to_ir_dtype(tensor.scalar_type()));
+
+  if (tensor.unsafeGetTensorImpl()->has_symbolic_sizes_strides()) {
+    return symbolic_tensor_type(tensor, dtype);
+  }
 
   std::vector<std::int64_t> dims;
   dims.reserve(static_cast<std::size_t>(tensor.dim()));
@@ -73,6 +122,26 @@ Result<ir::TensorType> tensor_type(const at::Tensor& tensor) {
   }
 
   return ir::TensorType(dtype, ir::Shape(std::move(dims)), std::move(strides));
+}
+
+/// The IR type of a symbolic scalar, or nothing when `value` is not one.
+///
+/// A graph traced for more than one shape carries its extents as values: `s33`, `s50` and the
+/// `s33*s50` a view multiplies them into. They are integers that are not known yet, so they are
+/// typed as the rank-0 integers they are. Nothing claims the arithmetic on them, which is right:
+/// it is a handful of host operations feeding the shapes, not work for an accelerator.
+std::optional<ir::DType> symbolic_scalar_dtype(const py::object& value) {
+  static const py::module_ torch = py::module_::import("torch");
+  if (py::isinstance(value, torch.attr("SymInt"))) {
+    return ir::DType::kI64;
+  }
+  if (py::isinstance(value, torch.attr("SymFloat"))) {
+    return ir::DType::kF64;
+  }
+  if (py::isinstance(value, torch.attr("SymBool"))) {
+    return ir::DType::kI1;
+  }
+  return std::nullopt;
 }
 
 /// The types an FX node produces, one per result.
@@ -94,6 +163,9 @@ Result<std::vector<ir::TensorType>> types_of(const py::object& node) {
   if (THPVariable_Check(value.ptr())) {
     TESSIQ_ASSIGN_OR_RETURN(ir::TensorType type, tensor_type(value.cast<at::Tensor>()));
     return std::vector<ir::TensorType>{std::move(type)};
+  }
+  if (const std::optional<ir::DType> scalar = symbolic_scalar_dtype(value)) {
+    return std::vector<ir::TensorType>{ir::TensorType(*scalar, ir::Shape())};
   }
 
   if (!py::isinstance<py::tuple>(value) && !py::isinstance<py::list>(value)) {
@@ -197,6 +269,48 @@ struct ImportState {
   std::unordered_map<std::string, std::unordered_map<std::int64_t, std::string>> selections;
 };
 
+/// Whether a list or tuple argument holds a value the graph computes rather than a constant.
+///
+/// A reshape in a graph traced for more than one shape takes its sizes as `[s33*s50, 32]`, where
+/// the first entry is a node. The list is an argument, not a constant.
+bool holds_fx_node(const py::object& value) {
+  if (!py::isinstance<py::list>(value) && !py::isinstance<py::tuple>(value)) {
+    return false;
+  }
+  for (const py::handle item : value) {
+    if (is_fx_node(py::reinterpret_borrow<py::object>(item))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Marks an argument list whose entries the graph computes.
+///
+/// The nodes in it become operands, so the IR shows what the operation reads. The attribute
+/// records the spelling `kDynamic` rather than a list of numbers, because there are no numbers:
+/// a pass reading it finds something it cannot interpret and declines the node, which is what an
+/// operation whose sizes arrive at run time should do until the kernels can take them.
+Result<void> attach_computed_list(const py::object& value,
+                                  std::size_t position,
+                                  const std::unordered_map<std::string, ir::Value*>& scope,
+                                  ir::Node& node) {
+  for (const py::handle item : value) {
+    const auto entry = py::reinterpret_borrow<py::object>(item);
+    if (!is_fx_node(entry)) {
+      continue;
+    }
+    const auto name = entry.attr("name").cast<std::string>();
+    const auto it = scope.find(name);
+    if (it == scope.end()) {
+      return internal_error("fx node references %" + name + " before it is defined");
+    }
+    node.append_operand(it->second);
+  }
+  node.set_attribute("arg" + std::to_string(position), ir::Attribute{std::string(kComputedList)});
+  return ok();
+}
+
 /// Attaches one FX argument to a node.
 ///
 /// Tensor-valued arguments become operands. Everything else becomes an attribute keyed by its
@@ -217,6 +331,10 @@ Result<void> attach_argument(const py::handle& argument,
     return ok();
   }
 
+  if (holds_fx_node(value)) {
+    return attach_computed_list(value, position, scope, node);
+  }
+
   auto attribute = to_attribute(argument);
   if (!attribute) {
     return std::move(attribute).error().with_context("argument " + std::to_string(position) +
@@ -226,8 +344,28 @@ Result<void> attach_argument(const py::handle& argument,
   return ok();
 }
 
+/// How the IR spells an FX target.
+///
+/// A torch overload already prints as `aten.view.default`. A plain Python function prints as
+/// `<built-in function mul>`, which is not a name the textual IR can be read back from, so one is
+/// built from the module and the function: `operator.mul`.
+std::string op_name(const py::object& target) {
+  auto printed = py::str(target).cast<std::string>();
+  if (!printed.starts_with('<') || !py::hasattr(target, "__qualname__")) {
+    return printed;
+  }
+  // `_operator` is the C module behind `operator`, and the second is what anyone reading the IR
+  // would go looking for.
+  const auto module = py::hasattr(target, "__module__")
+                          ? py::str(target.attr("__module__")).cast<std::string>()
+                          : std::string();
+  const std::string prefix = module == "_operator" ? "operator" : module;
+  const auto function = target.attr("__qualname__").cast<std::string>();
+  return prefix.empty() ? function : prefix + "." + function;
+}
+
 Result<void> import_call(const py::object& fx_node, ImportState& state, ir::Graph& graph) {
-  const auto op = py::str(fx_node.attr("target")).cast<std::string>();
+  const auto op = op_name(fx_node.attr("target"));
   ir::Node* node = graph.add_node(op);
 
   // Materialised before iterating. `attr()` yields an accessor proxy, and iterating one directly

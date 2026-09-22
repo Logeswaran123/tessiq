@@ -1,0 +1,15 @@
+// RUN: mark-supported,cluster,fuse-elementwise
+// A graph traced for more than one shape. The extents print as `?` because the IR does not know
+// them, and the group forms anyway: every buffer has the same dim list, so one index walks all of
+// them and the kernel is handed its element count at the launch.
+graph @g(%a: f32[?,32], %b: f32[?,32]) -> f32[?,32] {
+  %m = aten.mul.Tensor(%a, %b) : f32[?,32]
+  %r = aten.relu.default(%m) : f32[?,32]
+  return %r
+}
+// ---
+graph @g(%a: f32[?,32], %b: f32[?,32]) -> f32[?,32] {
+  %m = aten.mul.Tensor(%a, %b) {tessiq.cluster = 0, tessiq.fusion = 0, tessiq.supported = true} : f32[?,32]
+  %r = aten.relu.default(%m) {tessiq.cluster = 0, tessiq.fusion = 0, tessiq.supported = true} : f32[?,32]
+  return %r
+}

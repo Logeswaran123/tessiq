@@ -129,7 +129,7 @@ TEST(MemoryPlanTest, OffsetsAreAligned) {
   }
 }
 
-TEST(MemoryPlanTest, ADynamicShapeIsRefusedWithTheFix) {
+TEST(MemoryPlanTest, ADynamicShapeIsCountedRatherThanPlaced) {
   auto graph = parsed(R"(graph @g(%x: f32[?]) -> f32[?] {
   %a = relu(%x) : f32[?]
   %b = neg(%a) : f32[?]
@@ -138,10 +138,33 @@ TEST(MemoryPlanTest, ADynamicShapeIsRefusedWithTheFix) {
 )");
   ASSERT_NE(graph, nullptr);
 
+  // %a is the only intermediate, and it has no byte count until the graph runs. Refusing the
+  // whole plan over it would refuse every graph traced for more than one shape.
   const auto plan = plan_memory(*graph, kAlignment);
-  ASSERT_FALSE(plan.has_value());
-  EXPECT_NE(plan.error().message().find("shape-infer"), std::string::npos)
-      << plan.error().message();
+  ASSERT_TRUE(plan.has_value()) << plan.error().to_string();
+  EXPECT_EQ(plan->unsized, 1U);
+  EXPECT_TRUE(plan->allocations.empty());
+  EXPECT_EQ(plan->arena_bytes, 0U);
+  EXPECT_NE(plan->to_string().find("1 value(s) not sized"), std::string::npos) << plan->to_string();
+}
+
+TEST(MemoryPlanTest, AMixedGraphPlacesWhatItCanSize) {
+  auto graph = parsed(R"(graph @g(%x: f32[?], %y: f32[256]) -> f32[?] {
+  %a = relu(%y) : f32[256]
+  %b = neg(%a) : f32[256]
+  %c = abs(%x) : f32[?]
+  %d = tanh(%c) : f32[?]
+  return %d
+}
+)");
+  ASSERT_NE(graph, nullptr);
+
+  const auto plan = plan_memory(*graph, kAlignment);
+  ASSERT_TRUE(plan.has_value()) << plan.error().to_string();
+  EXPECT_EQ(plan->unsized, 1U);
+  ASSERT_EQ(plan->allocations.size(), 2U);
+  EXPECT_EQ(plan->allocations[0].value->name(), "a");
+  EXPECT_EQ(plan->allocations[1].value->name(), "b");
 }
 
 TEST(MemoryPlanTest, PlanningIsReproducible) {

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,12 +39,11 @@ bool overlaps(std::size_t a_first, std::size_t a_last, std::size_t b_first, std:
   return a_first <= b_last && b_first <= a_last;
 }
 
-Result<std::size_t> byte_size(const Value* value, std::size_t alignment) {
+/// Bytes `value` needs, or nothing when its shape is not known until the graph runs.
+std::optional<std::size_t> byte_size(const Value* value, std::size_t alignment) {
   const TensorType& type = value->type();
   if (!type.shape().is_static()) {
-    return invalid_argument("cannot plan memory for %" + value->name() + " of type " +
-                            type.to_string() +
-                            ": a dynamic dimension has no size; run shape-infer first");
+    return std::nullopt;
   }
   const auto elements = static_cast<std::size_t>(type.shape().element_count());
   return round_up(elements * dtype_size(type.dtype()), alignment);
@@ -76,7 +76,11 @@ std::size_t first_gap(const std::vector<Placed>& placed,
 
 std::string MemoryPlan::to_string() const {
   std::string text = "arena " + std::to_string(arena_bytes) + " bytes, naive " +
-                     std::to_string(naive_bytes) + " bytes\n";
+                     std::to_string(naive_bytes) + " bytes";
+  if (unsized != 0) {
+    text += ", " + std::to_string(unsized) + " value(s) not sized";
+  }
+  text += "\n";
   for (const Allocation& allocation : allocations) {
     text += "  %" + allocation.value->name() + " @ " + std::to_string(allocation.offset) + " + " +
             std::to_string(allocation.size) + "\n";
@@ -101,7 +105,12 @@ Result<MemoryPlan> plan_memory(const Graph& graph, std::size_t alignment) {
       continue;
     }
 
-    TESSIQ_ASSIGN_OR_RETURN(const std::size_t size, byte_size(range.value, alignment));
+    const std::optional<std::size_t> sized = byte_size(range.value, alignment);
+    if (!sized.has_value()) {
+      ++plan.unsized;
+      continue;
+    }
+    const std::size_t size = *sized;
     const std::size_t offset = first_gap(placed, range.first, range.last, size);
 
     placed.push_back({range.first, range.last, offset, offset + size});

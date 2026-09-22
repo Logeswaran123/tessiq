@@ -1,0 +1,17 @@
+// RUN: mark-supported,cluster,fuse-elementwise
+// The same graph with one operand broadcasting. Reading a per-row value means dividing the output
+// position by the row length, and there is no number to divide by, so no kernel can be written
+// for the subtract. It is marked unsupported and stays on the host, which is the point: claiming
+// it would put it on the device with nothing to run it, and it would reach the host anyway with a
+// transfer each way for the trip.
+graph @g(%a: f32[?,32], %m: f32[?,1]) -> f32[?,32] {
+  %s = aten.sub.Tensor(%a, %m) : f32[?,32]
+  %e = aten.exp.default(%s) : f32[?,32]
+  return %e
+}
+// ---
+graph @g(%a: f32[?,32], %m: f32[?,1]) -> f32[?,32] {
+  %s = aten.sub.Tensor(%a, %m) {tessiq.supported = false} : f32[?,32]
+  %e = aten.exp.default(%s) {tessiq.cluster = 0, tessiq.fusion = 0, tessiq.supported = true} : f32[?,32]
+  return %e
+}

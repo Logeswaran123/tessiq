@@ -17,6 +17,7 @@
 #include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
 #include "tessiq/codegen/reduction.h"
+#include "tessiq/ir/types.h"
 #include "tessiq/support/logging.h"
 
 namespace tessiq::torch_backend {
@@ -38,6 +39,19 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
                             std::to_string(tensors.size()));
   }
 
+  // A kernel compiled for a graph whose extents were not known takes its count from the output it
+  // is handed. The check below is then the only thing standing between a wrong size and a kernel
+  // reading past a buffer, because the IR records every unknown extent as the same `?` and cannot
+  // tell two of them apart. Every input has to match exactly: a broadcast operand reads a
+  // position worked out from the extents, which is why those groups are not compiled at all.
+  const bool dynamic = elements == ir::kDynamic;
+  const std::int64_t count = dynamic ? out.numel() : elements;
+  if (count == 0) {
+    // An extent that turned out to be zero, which only a dynamic kernel meets: a group of no
+    // elements is never compiled in the first place. There is nothing to launch.
+    return ok();
+  }
+
   std::vector<void*> buffers;
   buffers.reserve(tensors.size() + 1);
   for (std::size_t i = 0; i < tensors.size(); ++i) {
@@ -51,21 +65,22 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
     // Not every input has as many elements as the result. One that broadcasts, such as the
     // per-row mean a layer norm subtracts, has fewer, and the kernel was written knowing where to
     // read it. More than the result is always wrong.
-    if (tensor.numel() > elements || tensor.numel() <= 0) {
+    const bool fits = dynamic ? tensor.numel() == count : tensor.numel() <= count;
+    if (!fits || tensor.numel() <= 0) {
       return invalid_argument("fusion group " + std::to_string(group) + " was given an input of " +
                               std::to_string(tensor.numel()) + " elements for a result of " +
-                              std::to_string(elements));
+                              std::to_string(count));
     }
     buffers.push_back(tensor.data_ptr());
   }
-  if (!out.is_contiguous() || out.numel() != elements) {
+  if (!out.is_contiguous() || out.numel() != count) {
     return invalid_argument("fusion group " + std::to_string(group) +
-                            " was given an output that is not " + std::to_string(elements) +
+                            " was given an output that is not " + std::to_string(count) +
                             " contiguous elements");
   }
   buffers.push_back(out.data_ptr());
 
-  return program->launch(buffers, elements);
+  return program->launch(buffers, count);
 }
 
 Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordinal) {
