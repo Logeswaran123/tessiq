@@ -100,6 +100,26 @@ class ResidentInputs:
             return self._hits, self._misses
 
 
+def _output_for(
+    kernel: Any,
+    node: torch.fx.Node,
+    inputs: list[torch.Tensor],
+    device: torch.device,
+) -> torch.Tensor:
+    """Allocates the tensor a kernel writes.
+
+    The shape usually comes from the fake tensor AOTAutograd left on the node, which is the same
+    answer torch would give. In a graph traced for more than one shape that fake tensor holds
+    symbolic extents and has no size, so the answer comes from the kernel's own input instead. A
+    kernel compiled for such a graph reads every input at the output position, which is the only
+    shape it is given, so the first input has the result's shape by construction.
+    """
+    if getattr(kernel, "has_dynamic_extent", False):
+        return torch.empty_like(inputs[0], device=device)
+    meta = node.meta["val"]
+    return torch.empty(meta.shape, dtype=meta.dtype, device=device)
+
+
 @dataclasses.dataclass(frozen=True)
 class _Entry:
     source: weakref.ref[torch.Tensor]
@@ -176,8 +196,7 @@ class RecipeExecutor(torch.fx.Interpreter):
         ]
         inputs = [t.contiguous() for t in moved] if kernel.packs_inputs else moved
 
-        meta = node.meta["val"]
-        out = torch.empty(meta.shape, dtype=meta.dtype, device=device)
+        out = _output_for(kernel, node, inputs, device)
 
         # The launch goes to the default stream and the transfers the runtime does go to the
         # device's own, which is a blocking stream. The legacy default stream orders itself

@@ -106,6 +106,10 @@ void bind_kernels(py::module_& m) {
       .def_readonly("output", &tessiq::torch_backend::FusedKernel::output)
       .def_readonly("members", &tessiq::torch_backend::FusedKernel::members)
       .def_readonly("elements", &tessiq::torch_backend::FusedKernel::elements)
+      .def_property_readonly("has_dynamic_extent",
+                             [](const tessiq::torch_backend::FusedKernel& kernel) {
+                               return kernel.elements == tessiq::ir::kDynamic;
+                             })
       .def_property_readonly("packs_inputs",
                              [](const tessiq::torch_backend::FusedKernel&) { return true; })
       .def(

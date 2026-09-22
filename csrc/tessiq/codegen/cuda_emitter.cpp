@@ -107,7 +107,11 @@ class CudaEmitter final : public Emitter {
   [[nodiscard]] std::string_view name() const override { return "cuda"; }
 
   [[nodiscard]] bool supports(const FusedKernel& kernel) const override {
-    if (c_type(kernel.dtype).empty() || kernel.elements <= 0 || kernel.body.empty()) {
+    // A dynamic count is allowed: it reaches the kernel as the argument `n` either way, and the
+    // source below holds no extent of its own once every index is `i`, which is the only shape a
+    // fusion group gets when its extents are not known.
+    const bool sized = kernel.elements > 0 || kernel.has_dynamic_extent();
+    if (c_type(kernel.dtype).empty() || !sized || kernel.body.empty()) {
       return false;
     }
     for (const Step& step : kernel.body) {

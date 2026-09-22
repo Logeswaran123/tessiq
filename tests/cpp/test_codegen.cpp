@@ -282,5 +282,61 @@ TEST(IndexForTest, AnOperandThatDoesNotBroadcastHasNoExpression) {
   EXPECT_TRUE(index_for(dims({4, 8}), dims({2, 4, 8})).empty()) << "more axes than the result";
 }
 
+// --- extents that are not known until the call ------------------------------------------------
+
+TEST(IndexForTest, AnUnknownExtentIsStillTheLoopIndexWhenTheShapesMatch) {
+  // The one case that needs no extent: identical dim lists read contiguously, where one index
+  // walks every buffer whatever the sizes turn out to be.
+  EXPECT_EQ(index_for(dims({ir::kDynamic, 32}), dims({ir::kDynamic, 32})), "i");
+  EXPECT_EQ(index_for(dims({ir::kDynamic, ir::kDynamic}), dims({ir::kDynamic, ir::kDynamic})), "i");
+}
+
+TEST(IndexForTest, AnUnknownExtentHasNoBroadcastExpression) {
+  // Every other form divides and takes remainders by the extents, and there is no number to
+  // write. `[?,32]` reading `[?,1]` would be `i / 32` only if the leading extents matched, which
+  // is exactly what two unknowns cannot be asked.
+  EXPECT_TRUE(index_for(dims({ir::kDynamic, 32}), dims({ir::kDynamic, 1})).empty());
+  EXPECT_TRUE(index_for(dims({ir::kDynamic, 32}), dims({32})).empty()) << "a bias row";
+  EXPECT_TRUE(index_for(dims({4, 8}), dims({ir::kDynamic, 1})).empty()) << "unknown operand";
+}
+
+TEST(ExtractTest, AGroupWithUnknownExtentsCarriesNoElementCount) {
+  auto graph = fused(R"(graph @g(%a: f32[?,32], %b: f32[?,32]) -> f32[?,32] {
+  %m = aten.mul.Tensor(%a, %b) : f32[?,32]
+  %r = aten.relu.default(%m) : f32[?,32]
+  return %r
+}
+)");
+  ASSERT_NE(graph, nullptr);
+
+  const auto kernel = extract_kernel(*graph, 0);
+  ASSERT_TRUE(kernel.has_value()) << (kernel.has_value() ? "" : kernel.error().to_string());
+  EXPECT_TRUE(kernel->has_dynamic_extent());
+  EXPECT_EQ(kernel->elements, ir::kDynamic);
+  EXPECT_EQ(kernel->body.size(), 2U);
+}
+
+TEST(CudaEmitterTest, AKernelForUnknownExtentsHoldsNoExtent) {
+  auto graph = fused(R"(graph @g(%a: f32[?,32], %b: f32[?,32]) -> f32[?,32] {
+  %m = aten.mul.Tensor(%a, %b) : f32[?,32]
+  %r = aten.relu.default(%m) : f32[?,32]
+  return %r
+}
+)");
+  ASSERT_NE(graph, nullptr);
+  const auto kernel = extract_kernel(*graph, 0);
+  ASSERT_TRUE(kernel.has_value());
+  ASSERT_TRUE(cuda_emitter().supports(*kernel));
+
+  const auto source = cuda_emitter().emit(*kernel);
+  ASSERT_TRUE(source.has_value()) << (source.has_value() ? "" : source.error().to_string());
+
+  // The count reaches the kernel as `n`, so the same text serves every shape. This is what makes
+  // one compile enough: nothing in the body would have to change if the extents did.
+  EXPECT_NE(source->find("long long n) {"), std::string::npos) << *source;
+  EXPECT_NE(source->find("[i]"), std::string::npos) << *source;
+  EXPECT_EQ(source->find("32"), std::string::npos) << "an extent was written into the body";
+}
+
 } // namespace
 } // namespace tessiq::codegen

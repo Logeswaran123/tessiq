@@ -192,8 +192,17 @@ std::string general_index(const std::vector<std::int64_t>& out, const Alignment&
 } // namespace
 
 std::string index_for(const ir::TensorType& output, const ir::TensorType& operand) {
-  if (output.shape().dims() == operand.shape().dims() && operand.is_contiguous()) {
+  if (passes::one_index_reads_both(output, operand)) {
+    // Identical dim lists, so one index walks both, whether or not the extents are known. Two
+    // unknown extents both print as `?` and the IR cannot tell whether they are the same number,
+    // so the launch compares the sizes it is actually handed. See `FusedKernel::launch`.
     return "i";
+  }
+  if (!output.shape().is_static() || !operand.shape().is_static()) {
+    // Anything past this point divides and takes remainders by the extents, and an extent that is
+    // not known cannot be written into the kernel. Refusing leaves the operation to run one at a
+    // time, which is correct and slow, rather than reading the wrong elements.
+    return {};
   }
   const std::optional<Alignment> aligned = align(output, operand);
   if (!aligned.has_value()) {
@@ -313,10 +322,6 @@ std::vector<std::string> escaping_values(const ir::Graph& graph,
 Result<ir::TensorType> common_type(const std::vector<const ir::Node*>& members,
                                    std::int64_t group) {
   const ir::TensorType& first = members.front()->result(0)->type();
-  if (!first.shape().is_static()) {
-    return invalid_argument("fusion group " + std::to_string(group) + " has shape " +
-                            first.to_string() + ", which has no element count");
-  }
   for (const ir::Node* node : members) {
     if (node->result_count() != 1) {
       return invalid_argument("fusion group " + std::to_string(group) + " contains '" + node->op() +
@@ -347,7 +352,9 @@ Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group) {
   FusedKernel kernel;
   kernel.name = "tessiq_fused_" + std::to_string(group);
   kernel.dtype = type.dtype();
-  kernel.elements = type.shape().element_count();
+  // `kDynamic` when the shape is not known here. The kernel already takes its element count as an
+  // argument, so the number is one the launch reads off the output tensor instead.
+  kernel.elements = type.shape().is_static() ? type.shape().element_count() : ir::kDynamic;
 
   std::unordered_set<std::string> seen;
   for (const ir::Node* node : members) {
