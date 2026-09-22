@@ -237,3 +237,74 @@ def test_live_blocks_balance_out() -> None:
     assert tessiq.memory_stats().live_blocks == before + 8
     del tensors
     assert tessiq.memory_stats().live_blocks == before
+
+
+# --- views ---------------------------------------------------------------------------------------
+
+#: Every way of taking a view that these registrations have to cover. Only as_strided, view and
+#: _reshape_alias are registered; the rest are written in terms of as_strided, which is why the
+#: list is long and the registration is short.
+VIEWS = [
+    pytest.param(lambda t: t.view(16), id="view"),
+    pytest.param(lambda t: t.reshape(16), id="reshape"),
+    pytest.param(lambda t: t.permute(1, 0), id="permute"),
+    pytest.param(lambda t: t.transpose(0, 1), id="transpose"),
+    pytest.param(lambda t: t.unsqueeze(0).squeeze(0), id="squeeze"),
+    pytest.param(lambda t: t.unsqueeze(0), id="unsqueeze"),
+    pytest.param(lambda t: t[1:3], id="slice"),
+    pytest.param(lambda t: t[2], id="select"),
+    pytest.param(lambda t: t[::2, 1:], id="strided-slice"),
+    pytest.param(lambda t: t.as_strided((2, 2), (4, 1)), id="as-strided"),
+]
+
+
+def test_a_view_shares_its_storage(device: torch.device) -> None:
+    # The whole contract of a view. Before these were registered, a view fell back to the host,
+    # which copies, so what came back was a different buffer and writing through it reached
+    # nothing. torch warns about exactly this, and the result was wrong rather than slow.
+    base = torch.zeros(4, 4, device=device)
+    view = base.view(16)
+    assert view.untyped_storage().data_ptr() == base.untyped_storage().data_ptr()
+
+    view.fill_(7.0)
+    assert base.sum().item() == pytest.approx(112.0), base.cpu()
+
+
+@pytest.mark.parametrize("take", VIEWS)
+def test_a_movement_operation_aliases_rather_than_copies(
+    device: torch.device, take: Callable[[torch.Tensor], torch.Tensor]
+) -> None:
+    base = torch.zeros(4, 4, device=device)
+    assert take(base).untyped_storage().data_ptr() == base.untyped_storage().data_ptr()
+
+
+@pytest.mark.parametrize("take", VIEWS)
+def test_a_view_round_trips_through_the_host(
+    device: torch.device, take: Callable[[torch.Tensor], torch.Tensor]
+) -> None:
+    # A view starts partway into its storage, and the elements before that offset belong to the
+    # tensor it was taken from. Staging it means moving the whole storage and taking the same view
+    # of the copy, not moving from the offset.
+    host = torch.randn(4, 4)
+    assert torch.equal(take(host.to(device)).cpu(), take(host))
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(lambda t: t[1:3].fill_(5.0), id="slice"),
+        pytest.param(lambda t: t[2].fill_(5.0), id="select"),
+        pytest.param(lambda t: t.transpose(0, 1)[0].fill_(5.0), id="transposed-row"),
+        pytest.param(lambda t: t.view(16)[4:8].fill_(5.0), id="view"),
+    ],
+)
+def test_writing_through_a_view_reaches_the_base(
+    device: torch.device, write: Callable[[torch.Tensor], object]
+) -> None:
+    # The read-modify-write half. Writing a view touches part of a storage the rest of which
+    # belongs to something else, so the untouched part has to come back unchanged.
+    host = torch.zeros(4, 4)
+    staged = host.to(device)
+    write(host)
+    write(staged)
+    assert torch.equal(staged.cpu(), host)
