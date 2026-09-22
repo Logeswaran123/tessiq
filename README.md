@@ -55,11 +55,15 @@ Thirty-seven of the 38 operations the compiler knows have kernels; only matmul d
 [`docs/op_coverage.md`](docs/op_coverage.md) is generated from [`ops.toml`](ops.toml) and lists all
 of them. [PHASES.md](PHASES.md) has the full breakdown.
 
-**Shapes have to be known.** Dynamo captures concrete shapes the first time it sees a function and
-recompiles with symbolic ones the second time a dimension changes, which is its default rather
-than something a caller asks for. Nothing here models a symbolic extent, so such a graph is
-declined and runs as it arrived. Correct, and not compiled: a model called with one shape gets
-kernels, and one called with several gets them for the first shape only.
+**A shape that changes costs kernels, not a recompile.** Dynamo captures concrete shapes the first
+time it sees a function and recompiles with symbolic ones the second time a dimension changes,
+which is its default rather than something a caller asks for. The IR records an extent it does not
+know as `?`, and a fusion group whose buffers all have the same shape becomes a kernel that is
+handed its element count at the launch, so one compile serves every shape after that. What still
+needs the number while the kernel is written does not: a broadcast divides by the extents, a
+reduction folds them into its launch, and a matmul into its call. On the encoder block in
+[`tests/python/test_models.py`](tests/python/test_models.py) that is 9 kernels against the 28 a
+fixed shape gets, with the rest interpreted.
 
 `(a*b + c).relu().sigmoid()` on 4M floats on an RTX 5080. The generated kernel is good and the
 path around it is not, so both are measured. From
