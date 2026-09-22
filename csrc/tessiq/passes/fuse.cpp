@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include "tessiq/codegen/kernel.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/passes/op_traits.h"
 #include "tessiq/passes/pass.h"
@@ -40,17 +41,20 @@ const std::int64_t* cluster_of(const ir::Node* node) {
 ///    the other needing the value from memory, so it has to be written out regardless.
 ///  - The producer's result must not be returned by the graph, which is the same condition: a
 ///    caller reading it needs it in memory.
-/// Whether every operand of `node` has as many elements as its result.
+/// Whether a loop over `node`'s result can reach every one of its operands.
 ///
-/// A fused kernel reads `p_in[i]` and writes `p_out[i]`, one index across every buffer, so an
-/// operand smaller than the result has no element at most of those indices. `x - mean` with a mean
-/// of one value per row is the common case, and it arrives from a softmax or a layer norm. There
-/// is nothing wrong with the operation, only with putting it in this loop, so it stays out of the
-/// group and runs on its own.
-bool reads_one_element_per_output(const ir::Node* node) {
-  const std::int64_t elements = node->result(0)->type().shape().element_count();
+/// An operand the same shape as the result is read at the loop's own index, which is what almost
+/// all of them are. One with fewer elements is read somewhere else, and the emitter works out
+/// where from the shapes, so the question here is whether such an expression exists rather than
+/// whether the shapes match. `x - mean` with one mean per row is the common case and arrives from
+/// every softmax and layer norm.
+///
+/// It asks the code generator rather than deciding for itself, because a group this pass allows
+/// and the emitter then declines is a group that silently does not become a kernel.
+bool every_operand_is_reachable(const ir::Node* node) {
+  const ir::Shape& result = node->result(0)->type().shape();
   for (const ir::Value* operand : node->operands()) {
-    if (operand == nullptr || operand->type().shape().element_count() != elements) {
+    if (operand == nullptr || codegen::index_for(result, operand->type().shape()).empty()) {
       return false;
     }
   }
@@ -64,7 +68,7 @@ bool can_fuse(const ir::Graph& graph, const ir::Node* producer, const ir::Node* 
   if (producer->result_count() != 1 || consumer->result_count() != 1) {
     return false;
   }
-  if (!reads_one_element_per_output(producer) || !reads_one_element_per_output(consumer)) {
+  if (!every_operand_is_reachable(producer) || !every_operand_is_reachable(consumer)) {
     return false;
   }
 
