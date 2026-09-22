@@ -50,6 +50,10 @@ struct Step {
 struct KernelInput {
   std::string name;
   std::string index = "i";
+
+  /// The layout the index expression was written for. The launch checks it, because an index
+  /// worked out for one layout and applied to another reads the right buffer in the wrong order.
+  ir::TensorType type;
 };
 
 struct FusedKernel {
@@ -85,12 +89,17 @@ struct FusedKernel {
 /// refuses, so a failure here means the two disagree rather than that the graph is unusual.
 Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group);
 
-/// How a loop over `output` reads an operand of shape `operand`, as an expression in `i`.
+/// How a loop over `output` reads `operand`, as an expression in `i`.
+///
+/// Covers both reasons an operand is not read at `i`. It may have fewer elements, which is a
+/// broadcast, and it may hold the ones it has in a different order, which is a stride. Both are
+/// the same arithmetic: a step per axis, zero where the operand broadcasts and its own where it
+/// does not.
 ///
 /// Empty when there is none, which is how fusion asks whether an operand can be reached at all.
 /// The two have to agree: a group fusion allows and the emitter then declines is a group that
 /// silently does not become a kernel.
-[[nodiscard]] std::string index_for(const ir::Shape& output, const ir::Shape& operand);
+[[nodiscard]] std::string index_for(const ir::TensorType& output, const ir::TensorType& operand);
 
 /// Fusion group numbers in a graph, ascending.
 [[nodiscard]] std::vector<std::int64_t> fusion_groups(const ir::Graph& graph);

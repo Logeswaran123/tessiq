@@ -225,7 +225,15 @@ TEST(CudaEmitterTest, TheBoundsCheckIsThere) {
 
 namespace {
 
-ir::Shape dims(std::vector<std::int64_t> extents) { return ir::Shape(std::move(extents)); }
+/// A contiguous f32 type of these extents, which is what almost every operand is.
+ir::TensorType dims(std::vector<std::int64_t> extents) {
+  return {ir::DType::kF32, ir::Shape(std::move(extents))};
+}
+
+/// An f32 type of these extents laid out with these steps, which is what a permute produces.
+ir::TensorType strided(std::vector<std::int64_t> extents, ir::Strides steps) {
+  return {ir::DType::kF32, ir::Shape(std::move(extents)), std::move(steps)};
+}
 
 } // namespace
 
@@ -253,6 +261,18 @@ TEST(IndexForTest, AMiddleAxisNeedsTheGeneralForm) {
 
 TEST(IndexForTest, AScalarReadsOnePosition) {
   EXPECT_EQ(index_for(dims({4, 8}), dims({1, 1})), "i / 32");
+}
+
+TEST(IndexForTest, APermutedOperandIsSteppedThroughItsOwnLayout) {
+  // What every clone in a transformer block materialises, and what layout-assign used to insert a
+  // copy for. The same bytes in a different order, so the loop steps through them rather than
+  // walking them.
+  EXPECT_EQ(index_for(dims({4, 8}), strided({4, 8}, {1, 4})), "((i / 8) % 4) + (i % 8) * 4");
+}
+
+TEST(IndexForTest, AContiguousOperandOfTheSameShapeIsStillJustTheIndex) {
+  // The fast path has to survive the layout arithmetic, since it is what almost every operand is.
+  EXPECT_EQ(index_for(dims({2, 6, 8}), strided({2, 6, 8}, {48, 8, 1})), "i");
 }
 
 TEST(IndexForTest, AnOperandThatDoesNotBroadcastHasNoExpression) {
