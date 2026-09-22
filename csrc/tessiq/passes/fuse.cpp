@@ -52,9 +52,9 @@ const std::int64_t* cluster_of(const ir::Node* node) {
 /// It asks the code generator rather than deciding for itself, because a group this pass allows
 /// and the emitter then declines is a group that silently does not become a kernel.
 bool every_operand_is_reachable(const ir::Node* node) {
-  const ir::Shape& result = node->result(0)->type().shape();
+  const ir::TensorType& result = node->result(0)->type();
   for (const ir::Value* operand : node->operands()) {
-    if (operand == nullptr || codegen::index_for(result, operand->type().shape()).empty()) {
+    if (operand == nullptr || codegen::index_for(result, operand->type()).empty()) {
       return false;
     }
   }
@@ -90,12 +90,27 @@ bool can_fuse(const ir::Graph& graph, const ir::Node* producer, const ir::Node* 
   return std::find(results.begin(), results.end(), value) == results.end();
 }
 
+/// Whether a node the group could not grow around is still worth a kernel by itself.
+///
+/// Anything the emitter can write a loop for, which is an elementwise operation the backend
+/// claims and whose operands it can reach. The alternative for such a node is the fallback, which
+/// moves its operands to the host and its result back.
+bool runs_alone_as_a_kernel(const ir::Node* node) {
+  if (!is_elementwise(node->op()) || node->result_count() != 1) {
+    return false;
+  }
+  if (cluster_of(node) == nullptr) {
+    return false;
+  }
+  return every_operand_is_reachable(node);
+}
+
 /// Groups chains of elementwise operations that can run as one kernel.
 ///
 /// Precondition: `cluster` has run, so the nodes the backend claims carry `tessiq.cluster`.
-/// Postcondition: every node in a group of two or more carries `tessiq.fusion`. A node that fuses
-/// with nothing carries none, because a group of one is a kernel per operation, which is what not
-/// fusing already means.
+/// Postcondition: every node that becomes a kernel carries `tessiq.fusion`, including one that
+/// fused with nothing. A group of one is still a kernel, because the alternative is not "a kernel
+/// per operation" but no kernel: a node without the attribute reaches the fallback.
 ///
 /// Legality is argued per condition in `can_fuse`. The structural part is worth stating separately:
 /// unlike clustering, this cannot create a cycle, so it needs no check for one. Fusing happens only
@@ -159,7 +174,11 @@ class ElementwiseFusion final : public Pass {
     bool changed = false;
     std::unordered_map<std::size_t, std::int64_t> numbering;
     for (std::size_t i = 0; i < nodes.size(); ++i) {
-      if (sizes[group[i]] < 2) {
+      // A group of one still gets a kernel. It used to be skipped, on the reasoning that not
+      // fusing already means a kernel per operation, and that was wrong: a node with no fusion
+      // group has no kernel at all, so it reached the fallback and cost a round trip. A lone
+      // relu on the device was a transfer to the host and back.
+      if (sizes[group[i]] < 2 && !runs_alone_as_a_kernel(nodes[i])) {
         continue;
       }
       const auto [it, inserted] =
