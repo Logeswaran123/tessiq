@@ -442,3 +442,28 @@ def test_a_matmul_reads_its_operands_where_they_are() -> None:
         recipe = build_recipe(captured(layer, torch.randn(3, 8)), tessiq.gpu, use_cache=False)
     gemm = next(k for k in recipe.kernels.values() if isinstance(k, _C.GemmKernel))
     assert not gemm.packs_inputs
+
+
+def test_a_broadcasting_chain_agrees_with_eager() -> None:
+    # This crashed before the fusion guard: the group was built and the launch was handed an
+    # operand of the wrong size. It runs one operation at a time now, which is slower and right.
+    def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return torch.relu(a - b) * 2.0
+
+    inputs = (torch.randn(4, 8), torch.randn(8))
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(*inputs), model(*inputs), rtol=1e-6, atol=1e-5)
+
+
+def test_a_transformer_block_runs_without_softmax_or_layer_norm_kernels() -> None:
+    import test_models
+
+    model = test_models.EncoderBlock().eval()
+    example = torch.randn(2, 6, 32)
+    with torch.no_grad():
+        compiled = torch.compile(
+            model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+        )
+        torch.testing.assert_close(compiled(example), model(example), rtol=1e-4, atol=1e-4)

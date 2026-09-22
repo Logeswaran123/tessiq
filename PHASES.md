@@ -101,7 +101,7 @@ measured, reproducible speedup over the unfused path on the 5080, and bit-compar
 the CPU reference.
 
 ### Phase 7: Op coverage and real models
-YAML op definitions + `gen_ops.py`; broad elementwise/reduction/movement coverage; GEMM via cuBLAS;
+TOML op definitions + `gen_ops.py`; broad elementwise/reduction/movement coverage; GEMM via cuBLAS;
 conv via cuDNN; layernorm/softmax kernels; layout assignment.
 **Milestone:** a ResNet-18 block and a transformer encoder block compile and run correctly on both
 backends. `docs/op_coverage.md` is generated and non-trivial.
@@ -120,7 +120,7 @@ head-to-head benchmark against the NVRTC emitter on identical clusters.
 
 ### Phase 10: MLIR export target (optional)
 `MlirTarget` implementing `LoweringTarget`; Tessiq IR → `linalg`-on-tensors converter; `gen_ops.py`
-extended to emit ODS from the same YAML; standard MLIR bufferization + lowering pipeline to LLVM.
+extended to emit ODS from the same TOML; standard MLIR bufferization + lowering pipeline to LLVM.
 Gated behind `-DTESSIQ_ENABLE_MLIR=ON`, off by default.
 **Milestone:** a subset of ops exports to valid MLIR, round-trips through `mlir-opt`, and executes
 end-to-end on one model with results matching the CPU reference.
