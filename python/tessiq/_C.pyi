@@ -66,6 +66,7 @@ class FusedKernel:
     output: str
     members: list[str]
     elements: int
+    packs_inputs: bool
     def launch(self, inputs: list[Any], out: Any) -> None: ...
 
 class ReductionKernel:
@@ -76,12 +77,22 @@ class ReductionKernel:
     inner: int
     blocks: int
     elements: int
+    packs_inputs: bool
+    def launch(self, inputs: list[Any], out: Any) -> None: ...
+
+class GemmKernel:
+    output: str
+    inputs: list[str]
+    packs_inputs: bool
+    transposed: tuple[bool, bool]
+    extents: tuple[int, int, int, int]
     def launch(self, inputs: list[Any], out: Any) -> None: ...
 
 class CompiledGraph:
     recipe: Recipe
     kernels: list[FusedKernel]
     reductions: list[ReductionKernel]
+    gemms: list[GemmKernel]
 
 def build_recipe_fx(
     graph_module: object, name: str = ..., alignment: int = ..., ordinal: int = ...

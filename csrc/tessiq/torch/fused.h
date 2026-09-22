@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "tessiq/codegen/gemm.h"
 #include "tessiq/codegen/program.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/support/result.h"
@@ -88,5 +89,35 @@ struct ReductionKernel {
 /// A reduction it declines is not a failure. It runs on the host, which is what happened to every
 /// reduction before this existed.
 Result<std::vector<ReductionKernel>> compile_reductions(const ir::Graph& graph, int ordinal);
+
+/// One matrix multiply, ready to run through cuBLAS.
+///
+/// Unlike the other two this has no compiled code behind it. What it carries is the shape of the
+/// call: which operands, whether the library reads either transposed, and the extents.
+struct GemmKernel {
+  codegen::GemmKernel description;
+
+  /// The CUDA device it runs on, which cuBLAS needs in order to pick its handle.
+  int ordinal = 0;
+
+  /// Fills the result with the bias before the multiply, when there is one. BLAS only takes an
+  /// accumulator by scaling what is already there, so the bias has to be written first, and doing
+  /// that through torch costs a host round trip per multiply.
+  const codegen::Program* fill = nullptr;
+
+  /// The IR names of the values read, in the order `launch` expects them: the two matrices, and
+  /// the bias last when there is one.
+  [[nodiscard]] std::vector<std::string> inputs() const;
+
+  /// The IR name of the value written.
+  [[nodiscard]] const std::string& output() const { return description.output; }
+
+  /// Runs it. `tensors` matches `inputs()`.
+  [[nodiscard]] Result<void> launch(const std::vector<at::Tensor>& tensors,
+                                    const at::Tensor& out) const;
+};
+
+/// Describes every matrix multiply in `graph` that cuBLAS can run.
+Result<std::vector<GemmKernel>> compile_gemms(const ir::Graph& graph, int ordinal);
 
 } // namespace tessiq::torch_backend

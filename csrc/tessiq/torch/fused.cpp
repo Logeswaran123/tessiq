@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "tessiq/codegen/blas.h"
 #include "tessiq/codegen/cubin_cache.h"
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
@@ -189,6 +190,98 @@ Result<std::vector<ReductionKernel>> compile_reductions(const ir::Graph& graph, 
 
   TESSIQ_LOG(kDebug, kLogModule) << "compiled " << compiled.size() << " of " << candidates.size()
                                  << " reduction(s)";
+  return compiled;
+}
+
+std::vector<std::string> GemmKernel::inputs() const {
+  std::vector<std::string> names{description.lhs.name, description.rhs.name};
+  if (description.bias.has_value()) {
+    names.push_back(*description.bias);
+  }
+  return names;
+}
+
+Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
+                                const at::Tensor& out) const {
+  const std::vector<std::string> expected = inputs();
+  if (tensors.size() != expected.size()) {
+    return invalid_argument("gemm " + description.output + " takes " +
+                            std::to_string(expected.size()) + " inputs, got " +
+                            std::to_string(tensors.size()));
+  }
+  if (!out.is_contiguous() || out.numel() != description.output_elements()) {
+    return invalid_argument("gemm " + description.output + " expects " +
+                            std::to_string(description.output_elements()) +
+                            " contiguous output elements, got " + std::to_string(out.numel()));
+  }
+
+  // cuBLAS scales the destination and adds, so what the multiply accumulates into has to be there
+  // first: zeros for a plain matmul, the bias repeated down every row for an addmm. Both are one
+  // write of the output, which is small beside the multiply.
+  const std::int64_t total = description.output_elements();
+  if (description.bias.has_value()) {
+    const at::Tensor& bias = tensors.back();
+    if (bias.numel() != description.n) {
+      return invalid_argument("gemm " + description.output + " expects a bias of " +
+                              std::to_string(description.n) + ", got " +
+                              std::to_string(bias.numel()));
+    }
+    if (fill == nullptr) {
+      return internal_error("gemm " + description.output +
+                            " has a bias and no kernel to lay it "
+                            "down");
+    }
+    const std::vector<void*> buffers{bias.data_ptr(), out.data_ptr()};
+    TESSIQ_RETURN_IF_ERROR(
+        fill->launch(buffers,
+                     {total, description.n},
+                     (total + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
+                         static_cast<std::int64_t>(codegen::kBlockSize)));
+  } else {
+    TESSIQ_RETURN_IF_ERROR(codegen::zero_fill(out.data_ptr(),
+                                              static_cast<std::size_t>(total) *
+                                                  static_cast<std::size_t>(out.element_size()),
+                                              ordinal));
+  }
+
+  const codegen::GemmBuffers buffers{.lhs = tensors[0].const_data_ptr(),
+                                     .rhs = tensors[1].const_data_ptr(),
+                                     .output = out.data_ptr()};
+  return codegen::launch_gemm(description, buffers, ordinal);
+}
+
+Result<std::vector<GemmKernel>> compile_gemms(const ir::Graph& graph, int ordinal) {
+  std::vector<GemmKernel> compiled;
+  if (!codegen::blas_available()) {
+    return compiled;
+  }
+
+  const std::vector<const ir::Node*> candidates = codegen::gemm_nodes(graph);
+  if (candidates.empty()) {
+    return compiled;
+  }
+  TESSIQ_ASSIGN_OR_RETURN(const auto capability, codegen::device_capability(ordinal));
+
+  for (const ir::Node* node : candidates) {
+    TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_gemm(*node));
+    if (!description.has_value()) {
+      TESSIQ_LOG(kDebug, kLogModule) << "no gemm shape for " << node->op() << ", leaving it alone";
+      continue;
+    }
+    const codegen::Program* fill = nullptr;
+    if (description->bias.has_value()) {
+      const std::string name = "tessiq_bias_" + description->output;
+      const std::string source = codegen::broadcast_row_source(description->dtype, name);
+      TESSIQ_ASSIGN_OR_RETURN(
+          const codegen::Cubin cubin,
+          codegen::compile_cached(source, name, capability.first, capability.second));
+      TESSIQ_ASSIGN_OR_RETURN(fill, codegen::load_program(cubin, name, ordinal));
+    }
+    compiled.push_back(GemmKernel{.description = *description, .ordinal = ordinal, .fill = fill});
+  }
+
+  TESSIQ_LOG(kDebug, kLogModule) << "described " << compiled.size() << " of " << candidates.size()
+                                 << " matmul(s)";
   return compiled;
 }
 

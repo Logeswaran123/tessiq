@@ -75,7 +75,12 @@ class RecipeExecutor(torch.fx.Interpreter):
     def _run_kernel(self, kernel: Any, node: torch.fx.Node) -> torch.Tensor:
         """Runs a whole fusion group as one launch."""
         device = self._devices.get(node.name, self._host)
-        inputs = [_move(self.env[self._nodes[name]], device).contiguous() for name in kernel.inputs]
+        # Most kernels walk one index across every buffer, which is only the same elements when
+        # the layouts agree, so their inputs are packed first. A matmul is the exception: it reads
+        # the layout it was given, and packing a transposed operand would move the data and leave
+        # the transpose flag describing something that is no longer there.
+        moved = [_move(self.env[self._nodes[name]], device) for name in kernel.inputs]
+        inputs = [t.contiguous() for t in moved] if kernel.packs_inputs else moved
 
         meta = node.meta["val"]
         out = torch.empty(meta.shape, dtype=meta.dtype, device=device)
