@@ -177,7 +177,7 @@ pre-commit install --hook-type commit-msg
 |---|---|
 | [`csrc/`](csrc/) | C++/CUDA core: runtime, IR, passes, lowering, codegen, kernels |
 | [`python/tessiq/`](python/tessiq/) | Python API and the `torch.compile` backend |
-| [`ops/`](ops/) | Op definitions in YAML, and the source of truth for codegen (phase 7) |
+| [`ops.toml`](ops.toml) | Every operation the compiler knows, and what generates the rest from it |
 | [`tools/`](tools/) | `gen_ops.py`, `tessiq-opt`, `tessiq-explain` (phases 3, 7, 8) |
 | [`tests/`](tests/) | gtest suites and golden pass tests; Python accuracy and end-to-end tests |
 | [`bench/`](bench/) | Benchmarks, and the scripts behind any number published here |

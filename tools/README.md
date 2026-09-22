@@ -3,7 +3,7 @@
 | | | |
 |---|---|---|
 | `tessiq-opt` | Reads textual IR, runs a pass pipeline, prints the result | **built** |
-| `gen_ops.py` | Generates C++ and docs from `ops/*.yaml` | phase 7 |
+| `gen_ops.py` | Generates the C++ op table and `docs/op_coverage.md` from `ops.toml` | **built** |
 | `tessiq-explain` | Shows a model's whole compilation: graph, per-pass diffs, kernel schedule | phase 8 |
 
 `tessiq-opt` is the one that makes the pass suite testable. Text in, text out, no PyTorch and no
