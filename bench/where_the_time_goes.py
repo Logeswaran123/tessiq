@@ -4,8 +4,8 @@
 """What a compiled call actually spends its time on.
 
 `against_torch.py` says how far behind PyTorch a whole block is. This says why: how much of a call
-is kernels, how much is moving data across PCIe, and how much is operations the backend does not
-run and sends to the host.
+is kernels, how much is moving data across PCIe, and how much is steps that have no kernel and go
+one operation at a time through PyTorch's dispatcher.
 
 The clock is the host's and every region is drained before it stops, so the total here is longer
 than the call it describes. The proportions are the point.
@@ -60,13 +60,13 @@ def main() -> None:
         moved = f"   {event.nbytes / 2**20:.1f} MB" if event.nbytes else ""
         print(f"  {event.microseconds:8.1f} us  {event.category:9} {event.name[:40]}{moved}")
 
-    on_host: collections.Counter[str] = collections.Counter()
+    interpreted: collections.Counter[str] = collections.Counter()
     for event in collected.events:
-        if event.category == "host":
-            on_host[event.name] += int(event.microseconds)
-    if on_host:
-        print("\nhost time by operation")
-        for name, micros in on_host.most_common(6):
+        if event.category == "interpreted":
+            interpreted[event.name] += int(event.microseconds)
+    if interpreted:
+        print("\ninterpreted time by operation")
+        for name, micros in interpreted.most_common(6):
             print(f"  {micros:8d} us  {name}")
 
     if len(sys.argv) > 1:

@@ -154,11 +154,14 @@ class RecipeExecutor(torch.fx.Interpreter):
         if collecting is None or n.op != "call_function":
             return super().run_node(n)
 
-        # Anything without a kernel runs here, which on a tessiq tensor means the fallback and a
-        # round trip. Named after the operation rather than the node, since what a reader wants to
-        # know is which operation is costing them.
+        # Anything without a kernel runs one operation at a time through PyTorch's dispatcher,
+        # wherever the recipe placed it. That is not the same as running on the host: a movement
+        # operation placed on the device is interpreted there and costs almost nothing, while an
+        # operation the device cannot run reaches the fallback and a round trip. The event carries
+        # the device so the two are told apart, and is named after the operation rather than the
+        # node, since what a reader wants is which operation is costing them.
         device = self._devices.get(n.name, self._host)
-        with profiler.measure(collecting, str(n.target), "host", device):
+        with profiler.measure(collecting, str(n.target), "interpreted", device):
             return super().run_node(n)
 
     def _run_kernel(self, kernel: Any, node: torch.fx.Node) -> torch.Tensor:
