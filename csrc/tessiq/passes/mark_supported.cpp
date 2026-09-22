@@ -1,15 +1,74 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
+#include "tessiq/ir/graph.h"
+#include "tessiq/ir/types.h"
 #include "tessiq/passes/op_support.h"
+#include "tessiq/passes/op_table.h"
+#include "tessiq/passes/op_traits.h"
 #include "tessiq/passes/pass.h"
 
 namespace tessiq::passes {
 
 namespace {
+
+/// Whether anything a node reads or writes has an extent that is not known until the graph runs.
+bool any_extent_is_unknown(const ir::Node& node) {
+  for (std::size_t i = 0; i < node.result_count(); ++i) {
+    if (!node.result(i)->type().shape().is_static()) {
+      return true;
+    }
+  }
+  for (std::size_t i = 0; i < node.operand_count(); ++i) {
+    const ir::Value* operand = node.operand(i);
+    if (operand != nullptr && !operand->type().shape().is_static()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Whether there can be a kernel for this node given the types it actually has.
+///
+/// Support is a property of the operation for every shape the compiler knows, and this is the one
+/// case where it is not. When an extent is not known until the call, the only kernel that can be
+/// written is a loop whose every buffer is read at the output position: a reduction folds the
+/// extents into its launch, a matrix multiply into its call, and a broadcast divides by them.
+///
+/// Claiming those anyway is worse than leaving them alone. A node on the device with no kernel
+/// reaches the host fallback, which is the same computation plus a transfer each way, so the
+/// graph gets slower the more of it the compiler claims. Measured on the encoder block: claiming
+/// everything put 69 operations on that path and took 12.2 ms against 0.7 ms for eager.
+bool has_a_kernel_for_these_types(const ir::Node& node) {
+  if (!any_extent_is_unknown(node)) {
+    return true;
+  }
+  const OpInfo* info = find_op(node.op());
+  if (info == nullptr) {
+    return false;
+  }
+  if (info->category == OpCategory::kMovement) {
+    // No kernel either way. A movement operation is interpreted wherever it is placed, and
+    // `cluster` already keeps one that moves nothing onto the host.
+    return true;
+  }
+  if (info->category != OpCategory::kElementwise || node.result_count() != 1) {
+    return false;
+  }
+
+  const ir::TensorType& result = node.result(0)->type();
+  for (std::size_t i = 0; i < node.operand_count(); ++i) {
+    const ir::Value* operand = node.operand(i);
+    if (operand == nullptr || !one_index_reads_both(result, operand->type())) {
+      return false;
+    }
+  }
+  return result.is_contiguous();
+}
 
 /// Records on each node whether the backend can run it.
 ///
@@ -32,7 +91,7 @@ class MarkSupported final : public Pass {
     bool changed = false;
 
     for (ir::Node* node : graph.nodes()) {
-      const bool supported = support.supports(node->op());
+      const bool supported = support.supports(node->op()) && has_a_kernel_for_these_types(*node);
       const ir::Attribute* existing = node->attribute(kAttribute);
       if (existing != nullptr && std::get_if<bool>(existing) != nullptr &&
           *std::get_if<bool>(existing) == supported) {

@@ -1,0 +1,20 @@
+// RUN: mark-supported
+// Support is normally a property of the operation alone. An extent that is not known until the
+// call is the one case where it is not: a reduction folds the extents into its launch and a matrix
+// multiply into its call, so neither has a kernel here however well known the operation is. The
+// elementwise chain above them does, because one index reads every buffer whatever the sizes are.
+graph @g(%a: f32[?,32], %b: f32[?,32], %w: f32[32,32]) -> f32[?,1] {
+  %m = aten.mul.Tensor(%a, %b) : f32[?,32]
+  %r = aten.relu.default(%m) : f32[?,32]
+  %p = aten.mm.default(%r, %w) : f32[?,32]
+  %s = aten.sum.dim_IntList(%p) {arg1 = [1]} : f32[?,1]
+  return %s
+}
+// ---
+graph @g(%a: f32[?,32], %b: f32[?,32], %w: f32[32,32]) -> f32[?,1] {
+  %m = aten.mul.Tensor(%a, %b) {tessiq.supported = true} : f32[?,32]
+  %r = aten.relu.default(%m) {tessiq.supported = true} : f32[?,32]
+  %p = aten.mm.default(%r, %w) {tessiq.supported = false} : f32[?,32]
+  %s = aten.sum.dim_IntList(%p) {arg1 = [1], tessiq.supported = false} : f32[?,1]
+  return %s
+}

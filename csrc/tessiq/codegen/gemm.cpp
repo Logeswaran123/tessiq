@@ -61,7 +61,10 @@ struct Dims {
 
 std::optional<Dims> matrix_dims(const ir::TensorType& type) {
   const std::vector<std::int64_t>& sizes = type.shape().dims();
-  if (sizes.size() < 2) {
+  if (sizes.size() < 2 || !type.shape().is_static()) {
+    // BLAS takes the extents at the call, so a dynamic matmul is not out of reach, but the
+    // description built here holds numbers and the batch product below would silently multiply
+    // two unknowns into 1. Declined until the description can carry an extent it reads later.
     return std::nullopt;
   }
   Dims dims;
