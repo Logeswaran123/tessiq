@@ -36,83 +36,132 @@ namespace {
 ///
 /// Broadcasting aligns shapes to the right, so a missing axis reads as 1. An axis that is neither
 /// 1 nor the output's own extent is not a broadcast of it.
-std::optional<std::vector<std::int64_t>> aligned_extents(const ir::Shape& output,
-                                                         const ir::Shape& operand) {
-  const std::vector<std::int64_t>& out = output.dims();
-  const std::vector<std::int64_t>& in = operand.dims();
+struct Alignment {
+  /// The operand's extents lined up against the output's, 1 where it has no axis.
+  std::vector<std::int64_t> extents;
+  /// What to step by on each axis of the output: the operand's own stride, or zero where it
+  /// broadcasts and the same element is read for the whole axis.
+  std::vector<std::int64_t> steps;
+};
+
+std::optional<Alignment> align(const ir::TensorType& output, const ir::TensorType& operand) {
+  const std::vector<std::int64_t>& out = output.shape().dims();
+  const std::vector<std::int64_t>& in = operand.shape().dims();
   if (in.size() > out.size()) {
     return std::nullopt;
   }
 
-  std::vector<std::int64_t> padded(out.size(), 1);
+  // Contiguous is recorded as no layout, so the strides it implies are computed here.
+  const ir::Strides strides =
+      operand.is_contiguous() ? ir::contiguous_strides(operand.shape()) : operand.strides();
+  if (strides.size() != in.size()) {
+    return std::nullopt;
+  }
+
+  Alignment aligned;
+  aligned.extents.assign(out.size(), 1);
+  aligned.steps.assign(out.size(), 0);
+
   const std::size_t offset = out.size() - in.size();
   for (std::size_t j = 0; j < in.size(); ++j) {
-    padded[offset + j] = in[j];
+    aligned.extents[offset + j] = in[j];
+    aligned.steps[offset + j] = strides[j];
   }
   for (std::size_t j = 0; j < out.size(); ++j) {
-    if (padded[j] != out[j] && padded[j] != 1) {
+    if (aligned.extents[j] != out[j] && aligned.extents[j] != 1) {
+      return std::nullopt;
+    }
+    if (aligned.extents[j] == 1) {
+      // One element read for the whole axis, whatever stride it nominally has.
+      aligned.steps[j] = 0;
+    }
+    if (aligned.steps[j] < 0) {
+      // A negative stride is a reversed view. Nothing here produces one and the arithmetic below
+      // would need an origin to count back from, so it is refused rather than guessed at.
       return std::nullopt;
     }
   }
-  return padded;
+  return aligned;
 }
 
-/// Elements in the output from axis `from` onwards.
-std::int64_t extent_from(const std::vector<std::int64_t>& out, std::size_t from) {
-  std::int64_t total = 1;
-  for (std::size_t j = from; j < out.size(); ++j) {
-    total *= out[j];
+/// Whether the steps are the packed row-major ones for `extents`, which is what `i` means.
+bool steps_are_packed(const std::vector<std::int64_t>& extents,
+                      const std::vector<std::int64_t>& steps) {
+  std::int64_t expected = 1;
+  for (std::size_t j = extents.size(); j > 0; --j) {
+    const std::size_t axis = j - 1;
+    if (extents[axis] != 1 && steps[axis] != expected) {
+      return false;
+    }
+    expected *= extents[axis];
   }
-  return total;
+  return true;
 }
 
-/// `i / n` when the operand is the output with a run of trailing axes collapsed to 1.
+/// `i / n` when the operand is the output packed, with a run of trailing axes read once each.
 ///
 /// The per-row value a softmax and a layer norm subtract, and the cheapest case there is.
 std::optional<std::string> prefix_index(const std::vector<std::int64_t>& out,
-                                        const std::vector<std::int64_t>& padded) {
+                                        const Alignment& aligned) {
   std::size_t kept = out.size();
-  while (kept > 0 && padded[kept - 1] == 1) {
+  while (kept > 0 && aligned.steps[kept - 1] == 0) {
     --kept;
   }
   for (std::size_t j = 0; j < kept; ++j) {
-    if (padded[j] != out[j]) {
+    if (aligned.extents[j] != out[j]) {
       return std::nullopt;
     }
   }
-  const std::int64_t collapsed = extent_from(out, kept);
+  if (!steps_are_packed(aligned.extents, aligned.steps)) {
+    return std::nullopt;
+  }
+
+  std::int64_t collapsed = 1;
+  for (std::size_t j = kept; j < out.size(); ++j) {
+    collapsed *= out[j];
+  }
   return collapsed == 1 ? std::string("i") : "i / " + std::to_string(collapsed);
 }
 
-/// `i % n` when the operand matches only the output's trailing axes, which is a bias row.
+/// `i % n` when the operand is packed and matches only the output's trailing axes, a bias row.
 std::optional<std::string> suffix_index(const std::vector<std::int64_t>& out,
-                                        const std::vector<std::int64_t>& padded) {
+                                        const Alignment& aligned) {
   std::size_t leading = 0;
-  while (leading < out.size() && padded[leading] == 1) {
+  while (leading < out.size() && aligned.steps[leading] == 0) {
     ++leading;
   }
   for (std::size_t j = leading; j < out.size(); ++j) {
-    if (padded[j] != out[j]) {
+    if (aligned.extents[j] != out[j]) {
       return std::nullopt;
     }
   }
-  return "i % " + std::to_string(extent_from(out, leading));
+  if (!steps_are_packed(aligned.extents, aligned.steps)) {
+    return std::nullopt;
+  }
+
+  std::int64_t total = 1;
+  for (std::size_t j = leading; j < out.size(); ++j) {
+    total *= out[j];
+  }
+  return "i % " + std::to_string(total);
 }
 
-/// The output position taken apart into coordinates and put back together against the operand.
-std::string general_index(const std::vector<std::int64_t>& out,
-                          const std::vector<std::int64_t>& padded) {
+/// The output position taken apart into coordinates and stepped through the operand.
+///
+/// What a permuted or otherwise strided operand needs, and what materialising one used to be for.
+std::string general_index(const std::vector<std::int64_t>& out, const Alignment& aligned) {
   std::string text;
-  std::int64_t stride = 1;
   for (std::size_t j = out.size(); j > 0; --j) {
     const std::size_t axis = j - 1;
-    const std::int64_t step = stride;
-    stride *= padded[axis];
-    if (padded[axis] == 1) {
+    if (aligned.steps[axis] == 0) {
       continue;
     }
 
-    const std::int64_t divisor = extent_from(out, axis + 1);
+    std::int64_t divisor = 1;
+    for (std::size_t d = axis + 1; d < out.size(); ++d) {
+      divisor *= out[d];
+    }
+
     std::string term = "(";
     if (divisor == 1) {
       term += "i";
@@ -124,9 +173,9 @@ std::string general_index(const std::vector<std::int64_t>& out,
     term += " % ";
     term += std::to_string(out[axis]);
     term += ")";
-    if (step != 1) {
+    if (aligned.steps[axis] != 1) {
       term += " * ";
-      term += std::to_string(step);
+      term += std::to_string(aligned.steps[axis]);
     }
 
     if (text.empty()) {
@@ -142,21 +191,21 @@ std::string general_index(const std::vector<std::int64_t>& out,
 
 } // namespace
 
-std::string index_for(const ir::Shape& output, const ir::Shape& operand) {
-  if (output.dims() == operand.dims()) {
+std::string index_for(const ir::TensorType& output, const ir::TensorType& operand) {
+  if (output.shape().dims() == operand.shape().dims() && operand.is_contiguous()) {
     return "i";
   }
-  const std::optional<std::vector<std::int64_t>> padded = aligned_extents(output, operand);
-  if (!padded.has_value()) {
+  const std::optional<Alignment> aligned = align(output, operand);
+  if (!aligned.has_value()) {
     return {};
   }
-  if (const std::optional<std::string> prefix = prefix_index(output.dims(), *padded)) {
+  if (const std::optional<std::string> prefix = prefix_index(output.shape().dims(), *aligned)) {
     return *prefix;
   }
-  if (const std::optional<std::string> suffix = suffix_index(output.dims(), *padded)) {
+  if (const std::optional<std::string> suffix = suffix_index(output.shape().dims(), *aligned)) {
     return *suffix;
   }
-  return general_index(output.dims(), *padded);
+  return general_index(output.shape().dims(), *aligned);
 }
 
 std::vector<std::string> FusedKernel::input_names() const {
@@ -193,7 +242,7 @@ std::vector<const ir::Node*> members_of(const ir::Graph& graph, std::int64_t gro
 
 /// Turns one node into a step, recording any operand the group does not compute as an input.
 Result<Step> build_step(const ir::Node* node,
-                        const ir::Shape& output,
+                        const ir::TensorType& output,
                         const std::unordered_set<const ir::Node*>& inside,
                         std::unordered_set<std::string>& seen,
                         std::vector<KernelInput>& inputs) {
@@ -227,13 +276,13 @@ Result<Step> build_step(const ir::Node* node,
     const ir::Value* operand = node->operand(next_operand++);
     step.args.push_back({operand->name(), true});
     if (inside.count(operand->producer()) == 0 && seen.insert(operand->name()).second) {
-      const std::string index = index_for(output, operand->type().shape());
+      const std::string index = index_for(output, operand->type());
       if (index.empty()) {
         return unsupported("'" + node->op() + "' reads " + operand->type().to_string() +
                            " into a loop over " + output.to_string() +
                            ", which no index expression describes");
       }
-      inputs.push_back({operand->name(), index});
+      inputs.push_back({operand->name(), index, operand->type()});
     }
   }
 
@@ -292,7 +341,7 @@ Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group) {
   }
   TESSIQ_ASSIGN_OR_RETURN(const ir::TensorType type, common_type(members, group));
 
-  const ir::Shape& result_shape = type.shape();
+  const ir::TensorType& result_type = type;
   const std::unordered_set<const ir::Node*> inside(members.begin(), members.end());
 
   FusedKernel kernel;
@@ -302,7 +351,7 @@ Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group) {
 
   std::unordered_set<std::string> seen;
   for (const ir::Node* node : members) {
-    TESSIQ_ASSIGN_OR_RETURN(Step step, build_step(node, result_shape, inside, seen, kernel.inputs));
+    TESSIQ_ASSIGN_OR_RETURN(Step step, build_step(node, result_type, inside, seen, kernel.inputs));
     kernel.body.push_back(std::move(step));
   }
 

@@ -40,12 +40,13 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
 
   std::vector<void*> buffers;
   buffers.reserve(tensors.size() + 1);
-  for (const at::Tensor& tensor : tensors) {
-    // The kernel walks one index across every buffer, which is only the same elements if the
-    // layouts agree. A non-contiguous input would be read in the wrong order silently.
+  for (std::size_t i = 0; i < tensors.size(); ++i) {
+    const at::Tensor& tensor = tensors[i];
+    // The kernel walks one index across every buffer, which is only the same elements when the
+    // layouts agree, so a non-contiguous input would be read in the wrong order silently.
     if (!tensor.is_contiguous()) {
-      return invalid_argument("fusion group " + std::to_string(group) +
-                              " was given a non-contiguous input");
+      return invalid_argument("fusion group " + std::to_string(group) + " input " +
+                              std::to_string(i) + " is not contiguous");
     }
     // Not every input has as many elements as the result. One that broadcasts, such as the
     // per-row mean a layer norm subtracts, has fewer, and the kernel was written knowing where to

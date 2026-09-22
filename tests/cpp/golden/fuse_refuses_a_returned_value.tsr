@@ -8,7 +8,7 @@ graph @g(%x: f32[8]) -> (f32[8], f32[8]) {
 }
 // ---
 graph @g(%x: f32[8]) -> (f32[8], f32[8]) {
-  %p = aten.relu.default(%x) {tessiq.cluster = 0, tessiq.supported = true} : f32[8]
-  %c = aten.tanh.default(%p) {tessiq.cluster = 0, tessiq.supported = true} : f32[8]
+  %p = aten.relu.default(%x) {tessiq.cluster = 0, tessiq.fusion = 0, tessiq.supported = true} : f32[8]
+  %c = aten.tanh.default(%p) {tessiq.cluster = 0, tessiq.fusion = 1, tessiq.supported = true} : f32[8]
   return %p, %c
 }

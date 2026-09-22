@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "tessiq/codegen/kernel.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/ir/types.h"
 #include "tessiq/passes/op_support.h"
@@ -45,10 +46,10 @@ bool reads_through_a_kernel(const ir::Node* node) {
          (info->category == OpCategory::kElementwise || info->category == OpCategory::kReduction);
 }
 
-/// Makes every value a generated kernel reads contiguous, by copying the ones that are not.
+/// Copies the strided values a generated kernel cannot step through.
 ///
 /// Precondition: `mark-supported` has run, so every node says whether the backend claims it.
-/// Postcondition: no node that reads through a kernel reads a strided value.
+/// Postcondition: every value a kernel reads is one the emitter has an index expression for.
 ///
 /// Every kernel this backend generates reads `p_in[i]` and writes `p_out[i]`, one index across
 /// every buffer. That is only the same elements when the buffers are laid out the same way, so a
@@ -57,9 +58,9 @@ bool reads_through_a_kernel(const ir::Node* node) {
 /// the copies were invisible to everything that reasons about the graph, including the memory
 /// plan and anyone reading the IR to find out why a chain did not fuse.
 ///
-/// This pass makes them visible. It does not make them happen, and it does not yet make them
-/// stop: eliminating one means teaching a kernel to walk a strided input, which is a different
-/// kernel shape.
+/// Teaching the emitter to step through a layout is what made most of these stop. What is left is
+/// the layouts no index expression describes, such as one with a negative stride, and there the
+/// copy is the only way the value can be read at all.
 class LayoutAssign final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "layout-assign"; }

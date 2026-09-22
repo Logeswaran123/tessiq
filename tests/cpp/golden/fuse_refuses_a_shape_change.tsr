@@ -8,7 +8,7 @@ graph @g(%small: f32[8], %big: f32[4,8]) -> f32[4,8] {
 }
 // ---
 graph @g(%small: f32[8], %big: f32[4,8]) -> f32[4,8] {
-  %p = aten.relu.default(%small) {tessiq.cluster = 0, tessiq.supported = true} : f32[8]
-  %c = aten.add.Tensor(%p, %big) {tessiq.cluster = 0, tessiq.supported = true} : f32[4,8]
+  %p = aten.relu.default(%small) {tessiq.cluster = 0, tessiq.fusion = 0, tessiq.supported = true} : f32[8]
+  %c = aten.add.Tensor(%p, %big) {tessiq.cluster = 0, tessiq.fusion = 1, tessiq.supported = true} : f32[4,8]
   return %c
 }

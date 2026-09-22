@@ -105,15 +105,29 @@ rather than paying two transfers to rearrange indices somewhere else.
 
 Both blocks give the numbers eager gives, on the reference backend and on a GPU.
 
-**Correct is not yet fast on these, and coverage is no longer what is holding it back.** A
-512-wide encoder block over 128 steps runs in 14.6 ms against 8.6 ms for eager on the CPU, with 95%
-of it on the device. The recipe says where the time goes: 80 steps produce 19 launches and 28
-transfers.
+**A whole block is a different measurement, and a less flattering one.** A 512-wide encoder block
+over 128 steps, from [`bench/against_torch.py`](bench/against_torch.py):
 
-Fusing more per launch is what moves that number. A kernel can read an operand with fewer elements
-than its result now, which is what a softmax and a layer norm subtract, and letting those chains
-stay together took the block from 21.9 ms to 14.6 and the fused loops from two to five. The
-transfers are next: 28 of them for four operations still on the host.
+| | | |
+|---|---|---|
+| tessiq | 6.4 ms | |
+| torch on the same GPU, moving the input too | 1.1 ms | 5.8x faster |
+| torch on the same GPU, everything resident | 0.55 ms | 11.6x faster |
+| `torch.compile` inductor, resident | 0.51 ms | 12.5x faster |
+| torch eager on the CPU | 9.4 ms | 1.5x slower |
+
+Ahead of the CPU and a long way behind the card it is running on. Two things account for it, and
+they are different problems.
+
+**The weights cross every call.** AOTAutograd lifts parameters to graph inputs, so the 12 MB of
+weights moves with the 2 MB of input each time, where a `.cuda()` module keeps them resident.
+Measured on its own that is 2 ms of the 6.4.
+
+**Twenty-eight transfers across eighty steps.** Splitting those from what the kernels cost needs a
+profiler, which is phase 8.
+
+The generated code is not what is behind: on a single chain it is
+[1641 GB/s against Inductor's 775](bench/against_torch.py). Everything around it is.
 
 ## How it fits together
 

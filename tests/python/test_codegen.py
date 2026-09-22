@@ -112,5 +112,13 @@ def test_every_supported_operation_compiles(tmp_path: Path) -> None:
 
 
 def test_a_graph_with_no_groups_says_so() -> None:
-    graph = "graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {\n  %s = aten.add.Tensor(%a, %b) : f32[8]\n  return %s\n}\n"
+    # Nothing the backend claims, so there is nothing to write. A lone elementwise operation is
+    # not this case: it gets a kernel of its own rather than reaching the fallback.
+    graph = "graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {\n  %s = aten.convolution.default(%a, %b) : f32[8]\n  return %s\n}\n"
     assert "no fusion groups" in tessiq.emit_cuda(tessiq.run_passes(graph, PIPELINE))
+
+
+def test_a_lone_operation_becomes_a_kernel() -> None:
+    graph = "graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {\n  %s = aten.add.Tensor(%a, %b) : f32[8]\n  return %s\n}\n"
+    source = tessiq.emit_cuda(tessiq.run_passes(graph, PIPELINE))
+    assert source.count("__global__") == 1, source
