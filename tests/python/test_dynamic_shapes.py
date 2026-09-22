@@ -130,11 +130,9 @@ def test_a_symbolic_graph_compiles_kernels() -> None:
     graph = captured(model(), torch.randn(2, 6, 32), dynamic=True)
     recipe = build_recipe(graph, tessiq.gpu, use_cache=False)
     assert recipe.kernels, "a symbolic graph should still compile to kernels"
-    # Only fusion groups, and every one of them takes its count at the launch. A reduction or a
-    # matmul here would mean something claimed a shape it cannot know.
-    groups = [k for k in recipe.kernels.values() if isinstance(k, _C.FusedKernel)]
-    assert len(groups) == len(recipe.kernels)
-    assert all(group.has_dynamic_extent for group in groups)
+    # Every one of them takes the numbers it needs at the launch. A kernel here that thought it
+    # knew its extents would have got them from a shape that is only one of many.
+    assert all(kernel.has_dynamic_extent for kernel in recipe.kernels.values())
 
 
 @pytest.mark.cuda
@@ -207,16 +205,69 @@ def test_a_mismatched_input_is_caught_at_the_launch() -> None:
 
 
 @pytest.mark.cuda
-def test_what_a_symbolic_graph_does_not_claim_yet() -> None:
-    # A record of where the line is, so that moving it is a deliberate change to this number
-    # rather than something noticed later. The matmuls, the reductions and the fusions with a
-    # broadcast in them all need an extent written into the kernel.
+def test_a_symbolic_graph_claims_what_a_concrete_one_does() -> None:
+    # The milestone. Not knowing the shapes costs nothing in coverage: the same operations get
+    # kernels, and the numbers they would have been compiled with arrive at the launch instead.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
     from tessiq.recipe import build_recipe
+    from test_models import EncoderBlock
 
-    example = torch.randn(2, 6, 32)
-    static = build_recipe(captured(model(), example, dynamic=False), tessiq.gpu, use_cache=False)
-    symbolic = build_recipe(captured(model(), example, dynamic=True), tessiq.gpu, use_cache=False)
-    assert 0 < len(symbolic.kernels) < len(static.kernels)
+    torch.manual_seed(0)
+    net = EncoderBlock().eval()
+    example = torch.randn(4, 9, 32)
+    static = build_recipe(captured(net, example, dynamic=False), tessiq.gpu, use_cache=False)
+    symbolic = build_recipe(captured(net, example, dynamic=True), tessiq.gpu, use_cache=False)
+    assert len(symbolic.kernels) == len(static.kernels)
+    assert {type(k).__name__ for k in symbolic.kernels.values()} == {
+        type(k).__name__ for k in static.kernels.values()
+    }
+
+
+@pytest.mark.cuda
+def test_a_softmax_gets_its_row_length_at_the_launch() -> None:
+    # The one case the divisor cannot be folded into the source: a softmax's rows are as long as
+    # the sequence, which is the thing that changes. The kernel takes the length as an argument,
+    # so one compile still covers every sequence length.
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    from test_models import EncoderBlock
+
+    torch.manual_seed(0)
+    net = EncoderBlock().eval()
+    compiled = torch.compile(net, backend="tessiq", options={"device": str(tessiq.gpu)})
+    with torch.no_grad():
+        for steps in (6, 13, 4, 29):
+            example = torch.randn(3, steps, 32)
+            torch.testing.assert_close(compiled(example), net(example), rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.cuda
+def test_the_work_stays_on_the_device_between_kernels() -> None:
+    # Coverage is not the point on its own: an operation the compiler claims but cannot run falls
+    # back to the host and costs a transfer each way. What this checks is that a symbolic graph
+    # crosses the boundary no more often than a concrete one, which is what makes the kernels
+    # worth having.
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    from tessiq import profiler
+    from test_models import EncoderBlock
+
+    torch.manual_seed(0)
+    net = EncoderBlock().eval()
+    crossings = {}
+    for label, dynamic in (("symbolic", True), ("concrete", False)):
+        torch._dynamo.reset()
+        compiled = torch.compile(
+            net, backend="tessiq", dynamic=dynamic, options={"device": str(tessiq.gpu)}
+        )
+        with torch.no_grad():
+            compiled(torch.randn(4, 16, 32))
+            with profiler.profile() as collected:
+                compiled(torch.randn(4, 16, 32))
+        crossings[label] = sum(1 for e in collected.events if e.category == "transfer")
+
+    assert crossings["symbolic"] == crossings["concrete"], crossings

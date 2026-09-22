@@ -55,15 +55,15 @@ Thirty-seven of the 38 operations the compiler knows have kernels; only matmul d
 [`docs/op_coverage.md`](docs/op_coverage.md) is generated from [`ops.toml`](ops.toml) and lists all
 of them. [PHASES.md](PHASES.md) has the full breakdown.
 
-**A shape that changes costs kernels, not a recompile.** Dynamo captures concrete shapes the first
-time it sees a function and recompiles with symbolic ones the second time a dimension changes,
-which is its default rather than something a caller asks for. The IR records an extent it does not
-know as `?`, and a fusion group whose buffers all have the same shape becomes a kernel that is
-handed its element count at the launch, so one compile serves every shape after that. What still
-needs the number while the kernel is written does not: a broadcast divides by the extents, a
-reduction folds them into its launch, and a matmul into its call. On the encoder block in
-[`tests/python/test_models.py`](tests/python/test_models.py) that is 9 kernels against the 28 a
-fixed shape gets, with the rest interpreted.
+**A shape that changes costs one compile, not one per shape.** Dynamo captures concrete shapes the
+first time it sees a function and recompiles with symbolic ones the second time a dimension
+changes, which is its default rather than something a caller asks for. The IR records an extent it
+does not know as `?`, and every kernel takes the numbers it needs as arguments: the element count
+and a broadcast's divisor for a fused loop, three extents for a reduction, and m, n and k for a
+matmul. On the encoder block in [`tests/python/test_models.py`](tests/python/test_models.py) that
+is the same 28 kernels a fixed shape gets, crossing between host and device the same 29 times and
+moving the same 1.7 MB. The one form left out is stepping through a permuted operand axis by axis,
+which needs an extent per axis written into the source.
 
 `(a*b + c).relu().sigmoid()` on 4M floats on an RTX 5080. The generated kernel is good and the
 path around it is not, so both are measured. From

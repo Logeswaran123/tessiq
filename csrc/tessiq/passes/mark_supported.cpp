@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 
+#include "tessiq/codegen/kernel.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/ir/types.h"
 #include "tessiq/passes/op_support.h"
@@ -35,9 +37,11 @@ bool any_extent_is_unknown(const ir::Node& node) {
 /// Whether there can be a kernel for this node given the types it actually has.
 ///
 /// Support is a property of the operation for every shape the compiler knows, and this is the one
-/// case where it is not. When an extent is not known until the call, the only kernel that can be
-/// written is a loop whose every buffer is read at the output position: a reduction folds the
-/// extents into its launch, a matrix multiply into its call, and a broadcast divides by them.
+/// case where it is not. When an extent is not known until the call, what can still run is
+/// anything whose numbers can arrive with the tensors: a matrix multiply, a reduction, and a loop
+/// reading operands at the output position or in whole runs or cycles of it. What cannot is a
+/// loop that steps through a permuted operand axis by axis, because that needs every extent
+/// written into the source and there are none to write.
 ///
 /// Claiming those anyway is worse than leaving them alone. A node on the device with no kernel
 /// reaches the host fallback, which is the same computation plus a transfer each way, so the
@@ -56,6 +60,14 @@ bool has_a_kernel_for_these_types(const ir::Node& node) {
     // `cluster` already keeps one that moves nothing onto the host.
     return true;
   }
+  if (info->category == OpCategory::kMatmul || info->category == OpCategory::kReduction) {
+    // Both take their extents as arguments: BLAS at the call, the reduction kernel as three
+    // numbers beside its buffers. So a shape that changes does not stop either. Whether the
+    // layout or the axes are ones they can handle is a separate question, and one that
+    // `extract_gemm` and `extract_reduction` already answer when the kernels are built, exactly
+    // as they do for a shape that is known. This asks only what the extents decide.
+    return true;
+  }
   if (info->category != OpCategory::kElementwise || node.result_count() != 1) {
     return false;
   }
@@ -63,7 +75,7 @@ bool has_a_kernel_for_these_types(const ir::Node& node) {
   const ir::TensorType& result = node.result(0)->type();
   for (std::size_t i = 0; i < node.operand_count(); ++i) {
     const ir::Value* operand = node.operand(i);
-    if (operand == nullptr || !one_index_reads_both(result, operand->type())) {
+    if (operand == nullptr || !codegen::operand_read(result, operand->type()).has_value()) {
       return false;
     }
   }
