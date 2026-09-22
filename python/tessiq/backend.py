@@ -10,6 +10,7 @@ registration under the same name.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -21,6 +22,9 @@ from tessiq.decompositions import decompositions
 from tessiq.device import DEVICE_NAME, _resolve
 from tessiq.executor import execute
 from tessiq.recipe import build_recipe
+from tessiq.shapes import is_static
+
+_log = logging.getLogger(__name__)
 
 _OPTIONS = frozenset({"device"})
 
@@ -56,6 +60,15 @@ def compile_graph(
     device = _device_from(options)
 
     def compile_forward(traced: torch.fx.GraphModule, _inputs: Sequence[Any]) -> Callable[..., Any]:
+        if not is_static(traced):
+            # Dynamo recompiles with symbolic shapes the second time a dimension changes, whether
+            # or not anyone asked for it, so this is the ordinary path rather than an opt-in one.
+            # Nothing here models a symbolic extent: a kernel is compiled for one set of shapes and
+            # every index in it is a constant folded at compile time. Running the graph as it
+            # arrived is correct and is what a backend should do with something it cannot compile.
+            _log.debug("graph has symbolic shapes; running it without compiling")
+            return traced.forward
+
         # Boxed, so AOTAutograd hands the arguments over in a list it can drop its own reference
         # to. Unboxed it holds every input alive for the length of the call, which in training is
         # the whole activation set.
