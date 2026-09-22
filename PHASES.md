@@ -16,14 +16,15 @@ work it describes.
 | 4 | Graph capture | done |
 | 5 | Shape inference, memory planning, recipe cache | done |
 | 6 | Fusion and CUDA codegen | done |
-| 7 | Op coverage and real models | next |
-| 8 | Training, dynamic shapes, tooling | |
-| 9 | Triton emitter | optional |
-| 10 | MLIR export target | optional |
+| 7 | Op coverage and real models | done |
+| 8 | Training, dynamic shapes, tooling | next |
+| 9 | Convolution | optional |
+| 10 | Triton emitter | optional |
+| 11 | MLIR export target | optional |
 
 ---
 
-### Phase 0: Scaffolding and engineering standards
+### Phase 0: Scaffolding and engineering standards (done)
 Repo init, CMake + scikit-build-core skeleton, pybind11 hello-world extension, pytest + gtest wired
 up, LICENSE, README skeleton. **All of the quality automation lands here, before the first real line of
 code:** `-Werror`, clang-format + clang-tidy, ruff + mypy, pre-commit hooks, ASan/UBSan build config,
@@ -79,14 +80,14 @@ Graph/Node/Value, TensorType, builder, verifier, printer, parser. PassManager + 
 **Milestone:** `tessiq-opt --passes=dce,cse in.tsr` produces expected output; parse/print roundtrip
 is property-tested; no torch dependency in any of it.
 
-### Phase 4: Graph capture
+### Phase 4: Graph capture (done)
 FX importer, capability partitioner, `torch.compile` backend registration, CPU fallback for
 unsupported ops, naive lowering (one kernel per node, no fusion yet). Delivered as three pull
 requests: the importer, then the partitioner, then the backend registration that joins them.
 **Milestone:** `torch.compile(mlp, backend="tessiq")` runs an MLP end-to-end with correct results,
 and a graph containing a deliberately unsupported op still produces correct results via fallback.
 
-### Phase 5: Shape inference, memory planning, recipe cache
+### Phase 5: Shape inference, memory planning, recipe cache (done)
 Shape inference pass, canonicalization set, liveness analysis, memory planner, `Recipe`, recipe cache
 with signature hashing. `Recipe` carries an output spec, because a backward graph returns `None` at
 every position whose input takes no gradient and the IR records only the values a graph computes.
@@ -94,17 +95,20 @@ See `docs/design_notes/0002-output-structure-is-calling-convention.md`.
 **Milestone:** second call with same shapes hits the cache (assert via counter); measured peak memory
 below naive allocation; measured reduction in per-call overhead.
 
-### Phase 6: Fusion and CUDA codegen
+### Phase 6: Fusion and CUDA codegen (done)
 Elementwise fusion pass; fused kernel emitter; NVRTC compilation with on-disk cubin cache; benchmarks.
 **Milestone:** a chain like `(a*b + c).relu().sigmoid()` runs as **one** kernel launch, with a
 measured, reproducible speedup over the unfused path on the 5080, and bit-comparable results against
 the CPU reference.
 
-### Phase 7: Op coverage and real models
+### Phase 7: Op coverage and real models (done)
 TOML op definitions + `gen_ops.py`; broad elementwise/reduction/movement coverage; GEMM via cuBLAS;
-conv via cuDNN; layernorm/softmax kernels; layout assignment.
+layernorm and softmax as decompositions rather than kernels; layout assignment.
 **Milestone:** a ResNet-18 block and a transformer encoder block compile and run correctly on both
 backends. `docs/op_coverage.md` is generated and non-trivial.
+**Moved out:** conv via cuDNN, to phase 9. It is a second vendor library binding, and the phase's
+own measurements say the backend is held back by transfers and launches rather than by the
+operations it cannot run.
 
 ### Phase 8: Training, dynamic shapes, tooling
 AOTAutograd backward graphs; symbolic shapes + bucketing; profiler with chrome-trace export;
@@ -112,13 +116,23 @@ AOTAutograd backward graphs; symbolic shapes + bucketing; profiler with chrome-t
 **Milestone:** a small model **trains** to convergence on the tessiq backend; sequence-length
 variation doesn't trigger recompilation every step.
 
-### Phase 9: Triton emitter (optional)
+### Phase 9: Convolution (optional)
+`aten.convolution` via cuDNN, and batch norm alongside it, which together take a ResNet-18 block
+from a third of its operations on the device to all of them.
+**Milestone:** the residual block in `tests/python/test_models.py` runs entirely on the device, and
+`tools/model_coverage.py` reports it.
+**Why it is optional and why it is here.** It is a binding rather than a compiler: cuDNN picks the
+algorithm and tessiq passes descriptors. Phases 7.8 to 7.12 each raised coverage and found the time
+going elsewhere, so a phase whose only product is more coverage earns its place after the tooling
+that would show whether it helped, not before.
+
+### Phase 10: Triton emitter (optional)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;
 head-to-head benchmark against the NVRTC emitter on identical clusters.
 **Milestone:** `TESSIQ_EMITTER=triton` produces correct results on the full op test suite, and
 `bench/emitters/` publishes a per-pattern comparison table of the two emitters.
 
-### Phase 10: MLIR export target (optional)
+### Phase 11: MLIR export target (optional)
 `MlirTarget` implementing `LoweringTarget`; Tessiq IR → `linalg`-on-tensors converter; `gen_ops.py`
 extended to emit ODS from the same TOML; standard MLIR bufferization + lowering pipeline to LLVM.
 Gated behind `-DTESSIQ_ENABLE_MLIR=ON`, off by default.
@@ -132,7 +146,7 @@ additive and mostly under your own control. If time gets tight, a repo that stop
 Phase 6, with fusion working and measured, is a strong artifact. A repo that sprawls into Phase 8
 with a broken Phase 4 is not.
 
-### The seams that phases 9 and 10 depend on
+### The seams that phases 10 and 11 depend on
 
 Both optional phases are additive only because three interfaces get built earlier. Retrofitting
 them later would mean a rewrite.
@@ -143,8 +157,12 @@ them later would mean a rewrite.
 | `LoweringTarget` abstraction | Phase 5 | `Recipe` is one target; an MLIR module can be another |
 | A small, orthogonal, target-neutral IR op set | Phase 3 onward | Ad-hoc fused ops have no `linalg` equivalent later |
 
-**Phases 9 and 10 are explicitly optional**, and framing them that way is deliberate. Their value to
-the project is mostly realized in Phases 5 and 6, when the seams get built. A plan that
-*demonstrably could* take a Triton emitter or an MLIR target, with the interfaces in place to prove
-it, already shows the architectural judgment. Building them is a bonus; designing for them is the
-skill. Do not let either become the reason Phase 7 never ships.
+**Phases 9 to 11 are explicitly optional**, and framing them that way is deliberate. For the two
+alternative backends the value is mostly realized in phases 5 and 6, when the seams get built: a
+plan that *demonstrably could* take a Triton emitter or an MLIR target, with the interfaces in
+place to prove it, already shows the architectural judgment. Building them is a bonus; designing
+for them is the skill.
+
+Convolution is optional for a different reason. It is a binding rather than a compiler, and phase 7
+ended with the backend held back by transfers and launches rather than by the operations it cannot
+run, so more coverage is not what the next measurement wants.

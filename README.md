@@ -110,21 +110,21 @@ over 128 steps, from [`bench/against_torch.py`](bench/against_torch.py):
 
 | | | |
 |---|---|---|
-| tessiq | 6.4 ms | |
-| torch on the same GPU, moving the input too | 1.1 ms | 5.8x faster |
-| torch on the same GPU, everything resident | 0.55 ms | 11.6x faster |
-| `torch.compile` inductor, resident | 0.51 ms | 12.5x faster |
-| torch eager on the CPU | 9.4 ms | 1.5x slower |
+| tessiq | 5.5 ms | |
+| torch on the same GPU, moving the input too | 0.90 ms | 6.1x faster |
+| torch on the same GPU, everything resident | 0.52 ms | 10.6x faster |
+| `torch.compile` inductor, resident | 0.46 ms | 11.8x faster |
+| torch eager on the CPU | 12.0 ms | 2.2x slower |
 
-Ahead of the CPU and a long way behind the card it is running on. Two things account for it, and
-they are different problems.
+Ahead of the CPU and a long way behind the card it is running on.
 
-**The weights cross every call.** AOTAutograd lifts parameters to graph inputs, so the 12 MB of
-weights moves with the 2 MB of input each time, where a `.cuda()` module keeps them resident.
-Measured on its own that is 2 ms of the 6.4.
+**The weights used to cross on every call**, because AOTAutograd lifts parameters to graph inputs
+and they arrive as ordinary arguments. The executor keeps the device copy of an input that has not
+changed, checked against its version counter so a parameter an optimizer writes to crosses again.
+That was 2 ms.
 
-**Twenty-eight transfers across eighty steps.** Splitting those from what the kernels cost needs a
-profiler, which is phase 8.
+**What is left is twenty-eight transfers across eighty steps.** Splitting those from what the
+kernels cost needs a profiler, which is phase 8.
 
 The generated code is not what is behind: on a single chain it is
 [1641 GB/s against Inductor's 775](bench/against_torch.py). Everything around it is.

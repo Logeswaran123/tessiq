@@ -191,8 +191,8 @@ def block() -> None:
     print(f"  torch inductor         {compiled:8.4f} ms   {mine / compiled:5.1f}x")
     print(f"  torch cpu              {on_cpu:8.4f} ms   {mine / on_cpu:5.1f}x")
     print(
-        "\n  tessiq moves the weights every call, because AOTAutograd lifts them to graph\n"
-        "  inputs and nothing here keeps a graph input on the device between calls."
+        "\n  the weights cross once rather than every call: AOTAutograd lifts them to graph\n"
+        "  inputs, and the executor keeps the device copy of an input that has not changed."
     )
 
 
