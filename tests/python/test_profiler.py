@@ -10,6 +10,7 @@ nothing when nobody is asking.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import pytest
 import torch
 
 import tessiq
-from tessiq.profiler import Event, Profile
+from tessiq.profiler import Event, Profile, measure, profile
 
 
 def chain(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -145,11 +146,80 @@ def test_the_running_total_matches_the_events() -> None:
     assert collected.microseconds == pytest.approx(sum(float(i) for i in range(500)))
 
 
-def test_only_a_kernel_drains_the_device() -> None:
-    # A launch is asynchronous, so its region has to be drained to have measured anything. A
-    # transfer and an interpreted step have already finished, and draining after them measures
-    # nothing new at two microseconds a time, which with a third of the graph interpreted was most
-    # of what the profiler cost.
-    from tessiq.profiler import _NEEDS_DRAINING
+def test_only_a_kernel_asks_the_device_clock() -> None:
+    # A launch is the one region whose work outlives it, so the host clock around it measures the
+    # asking rather than the doing. A transfer and an interpreted step have finished by the time
+    # their region ends, and marking the stream for them would measure nothing new.
+    from tessiq.profiler import _TIMED_ON_THE_DEVICE
 
-    assert {"kernel"} == _NEEDS_DRAINING
+    assert {"kernel"} == _TIMED_ON_THE_DEVICE
+
+
+def test_a_region_with_no_device_clock_records_none() -> None:
+    # Most regions cannot ask, and the difference between "did not ask" and "took no time" has to
+    # survive into the event. A zero would read as a kernel that ran instantly.
+    collected = Profile()
+    with measure(collected, "n", "interpreted", torch.device("cpu")):
+        pass
+    collected.resolve()
+
+    assert collected.events[0].device_microseconds is None
+    assert collected.device_microseconds == 0.0
+
+
+@pytest.mark.cuda
+def test_a_kernel_records_what_the_device_spent() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    source = torch.randn(256, 256, device=str(tessiq.gpu))
+    with profile(device_time=True) as collected, measure(collected, "n", "kernel", tessiq.gpu):
+        source.transpose(0, 1).contiguous()
+
+    event = collected.events[0]
+    assert event.device_microseconds is not None
+    assert event.device_microseconds > 0.0
+    assert collected.device_microseconds == pytest.approx(event.device_microseconds)
+
+
+@pytest.mark.cuda
+def test_the_device_clock_is_not_read_unless_it_is_asked_for() -> None:
+    # Marking the stream costs about what a small kernel costs on this card, so a profile that
+    # only wants to know where the host time went must not pay for it.
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    source = torch.randn(256, 256, device=str(tessiq.gpu))
+    with profile() as collected, measure(collected, "n", "kernel", tessiq.gpu):
+        source.transpose(0, 1).contiguous()
+
+    assert collected.events[0].device_microseconds is None
+
+
+@pytest.mark.cuda
+def test_profiling_does_not_double_the_call() -> None:
+    # The old profiler drained after every kernel, which turned a pipeline the device overlaps
+    # into a serial one and more than doubled a transformer block. Marking the stream costs the
+    # host a command in a queue, so the shape of the call survives being measured.
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    source = torch.randn(512, 512, device=str(tessiq.gpu))
+
+    def work() -> None:
+        for _ in range(20):
+            source.transpose(0, 1).contiguous()
+
+    work()
+    bare = time.perf_counter()
+    work()
+    bare = time.perf_counter() - bare
+
+    watched = time.perf_counter()
+    with profile():
+        work()
+    watched = time.perf_counter() - watched
+
+    # Generous, because this is a wall clock on a shared machine. What it catches is a profiler
+    # that serialises, which was a factor of two rather than a few percent.
+    assert watched < bare * 4 + 0.05
