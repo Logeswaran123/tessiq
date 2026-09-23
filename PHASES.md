@@ -178,16 +178,19 @@ not the next thing to do for speed.
 **That note was wrong, and why is worth keeping.** It extrapolated from phase 10's measurement of
 the encoder block, which was already entirely on the device, to the residual block, which was
 not. There convolution sat on the host and forced a transfer each way around it, which is the
-cost that goes away when it moves. Measured on the residual block at batch 8, 32 by 32:
+cost that goes away when it moves. Measured on the residual block at batch 8, 32 by 32, with each
+commit built and the three timed alternately for five rounds:
 
-| | per call |
-|---|---|
-| before, convolution and batch norm on the host | 1.45 ms |
-| batch norm decomposed, convolution still on the host | 1.74 ms |
-| both on the device | 0.59 ms |
+| | median | range |
+|---|---|---|
+| before, convolution and batch norm on the host | 0.90 ms | 0.84 to 1.02 |
+| batch norm decomposed, convolution still on the host | 1.41 ms | 1.15 to 1.66 |
+| both on the device | 0.57 ms | 0.56 to 0.58 |
 
-Two and a half times faster, and only with both: batch norm on its own made it slower, for the
-same reason every partial move in phases 7 and 8 did. The four operations left on the host are
+About 1.6 times faster, and only with both: batch norm on its own made it slower, for the same
+reason every partial move in phases 7 and 8 did. This table first said 1.45 ms before and two and a
+half times faster. That was one run of the old code while the machine was busy, and the versions
+that convolve on the host are the ones that vary. The four operations left on the host are
 float32 to float32 casts the batch norm decomposition inserts on its running statistics.
 
 ### Phase 12: Triton emitter (optional)
