@@ -60,12 +60,14 @@ bool has_a_kernel_for_these_types(const ir::Node& node) {
     // `cluster` already keeps one that moves nothing onto the host.
     return true;
   }
-  if (info->category == OpCategory::kMatmul || info->category == OpCategory::kReduction) {
-    // Both take their extents as arguments: BLAS at the call, the reduction kernel as three
-    // numbers beside its buffers. So a shape that changes does not stop either. Whether the
-    // layout or the axes are ones they can handle is a separate question, and one that
-    // `extract_gemm` and `extract_reduction` already answer when the kernels are built, exactly
-    // as they do for a shape that is known. This asks only what the extents decide.
+  if (info->category == OpCategory::kMatmul || info->category == OpCategory::kReduction ||
+      info->category == OpCategory::kCopy) {
+    // All three take their extents as arguments: BLAS at the call, the reduction kernel as three
+    // numbers beside its buffers, and the pack kernel as one extent and one step per axis. So a
+    // shape that changes does not stop any of them. Whether the layout or the axes are ones they
+    // can handle is a separate question, and one that `extract_gemm`, `extract_reduction` and the
+    // pack registration already answer, exactly as they do for a shape that is known. This asks
+    // only what the extents decide.
     return true;
   }
   if (info->category != OpCategory::kElementwise || node.result_count() != 1) {

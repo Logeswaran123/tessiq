@@ -147,21 +147,39 @@ def test_what_a_block_claims_matches_the_table(model: nn.Module, example: torch.
         assert claimed == (operation in with_kernels), f"{operation}: claimed={claimed}\n{line}"
 
 
-@pytest.mark.parametrize(("model", "example"), block_cases())
-def test_a_block_has_something_to_run_and_something_it_cannot(
-    model: nn.Module, example: torch.Tensor
-) -> None:
-    # Both halves matter. Nothing claimed would mean the backend contributes nothing; nothing
-    # declined would mean these blocks have stopped being the hard case they were chosen to be.
-    text, clusters = tessiq.partition(capture(model, example))
+def claimed_and_declined(model: nn.Module, example: torch.Tensor) -> tuple[int, int]:
+    """How many operations the backend claims in this block, and how many it leaves."""
+    text, _ = tessiq.partition(capture(model, example))
     counts = collections.Counter(
         "tessiq.supported = true" in line
         for line in text.splitlines()
         if "tessiq.supported" in line
     )
+    return counts[True], counts[False]
+
+
+@pytest.mark.parametrize(("model", "example"), block_cases())
+def test_a_block_has_something_to_run(model: nn.Module, example: torch.Tensor) -> None:
+    _, clusters = tessiq.partition(capture(model, example))
+    claimed, _ = claimed_and_declined(model, example)
     assert clusters, "the backend claims nothing in this block"
-    assert counts[True], text
-    assert counts[False], "this block no longer exercises the fallback"
+    assert claimed, "the backend contributes nothing to this block"
+
+
+def test_the_encoder_block_has_nothing_left_to_decline() -> None:
+    # It used to be the hard case for the fallback. The last four operations it left on the host
+    # were the clones that pack an attention head's view of the scores, and those have a kernel
+    # now, so every operation the block is made of runs on the device.
+    _, declined = claimed_and_declined(EncoderBlock().eval(), torch.randn(2, 6, 32))
+    assert declined == 0
+
+
+def test_the_residual_block_still_exercises_the_fallback() -> None:
+    # Which matters, because a path nothing reaches is a path that rots. Convolution and batch
+    # norm are what is left, and phase 11 is where they get a kernel. Until then this is the block
+    # that keeps the fallback covered.
+    _, declined = claimed_and_declined(ResidualBlock().eval(), torch.randn(1, 16, 8, 8))
+    assert declined > 0
 
 
 def test_softmax_and_layer_norm_become_operations_the_backend_runs() -> None:

@@ -36,6 +36,7 @@ CATEGORIES = {
     "reduction": "kReduction",
     "movement": "kMovement",
     "matmul": "kMatmul",
+    "copy": "kCopy",
 }
 
 

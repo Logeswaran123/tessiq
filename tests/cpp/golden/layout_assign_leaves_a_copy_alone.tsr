@@ -1,0 +1,16 @@
+// RUN: mark-supported,layout-assign
+// A copy reads a strided input on purpose. Materialising one before it would be the copy it was
+// about to make, done twice, so layout-assign leaves it alone the way it leaves a movement
+// operation alone. What it still packs is a strided operand of something that walks memory in
+// order, which is the elementwise multiply here.
+graph @g(%a: f32[4,8:1,4], %b: f32[4,8]) -> f32[4,8] {
+  %c = aten.clone.default(%a) {memory_format = "torch.contiguous_format"} : f32[4,8]
+  %m = aten.mul.Tensor(%c, %b) : f32[4,8]
+  return %m
+}
+// ---
+graph @g(%a: f32[4,8:1,4], %b: f32[4,8]) -> f32[4,8] {
+  %c = aten.clone.default(%a) {memory_format = "torch.contiguous_format", tessiq.supported = true} : f32[4,8]
+  %m = aten.mul.Tensor(%c, %b) {tessiq.supported = true} : f32[4,8]
+  return %m
+}

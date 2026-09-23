@@ -22,6 +22,11 @@ enum class OpCategory {
   kMovement,
   /// Reads positions it is not writing. Runs on its own however many kernels it has.
   kMatmul,
+  /// Reads its input's layout and writes the same values packed. Computes nothing, which makes it
+  /// look like a movement operation, but a movement operation shares its input's storage and this
+  /// one does not: it costs a pass over the data. That distinction decides placement, because a
+  /// unit holding nothing but views is not worth putting on a device and a unit holding a copy is.
+  kCopy,
 };
 
 /// Everything known about one spelling of one operation.
