@@ -27,6 +27,12 @@ _EXTRA = [
     torch.ops.aten._softmax,
     torch.ops.aten._softmax_backward_data,
     torch.ops.aten.native_layer_norm,
+    # A batch norm in eval mode is arithmetic rather than a library call: the running mean and
+    # variance are fixed, so it is a subtract, a reciprocal square root, a scale and a shift. Core
+    # ATen leaves it whole because training needs the statistics computed, and inference does not.
+    torch.ops.aten._native_batch_norm_legit_no_training,
+    # The first rewrite lands on this one rather than on leaves, so both spellings are asked for.
+    torch.ops.aten._native_batch_norm_legit,
 ]
 
 
