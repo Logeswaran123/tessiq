@@ -4,14 +4,14 @@
 // it costs a pass over the data, and doing that pass on the card is the whole point. So the unit
 // is placed, and the permute goes with it rather than being paid for twice.
 graph @g(%a: f32[4,8]) -> f32[8,4] {
-  %m = aten.convolution.default(%a, %a) : f32[4,8]
+  %m = aten.hypot.default(%a, %a) : f32[4,8]
   %p = aten.permute.default(%m) {arg1 = [1,0]} : f32[8,4:1,8]
   %c = aten.clone.default(%p) {memory_format = "torch.contiguous_format"} : f32[8,4]
   return %c
 }
 // ---
 graph @g(%a: f32[4,8]) -> f32[8,4] {
-  %m = aten.convolution.default(%a, %a) {tessiq.supported = false} : f32[4,8]
+  %m = aten.hypot.default(%a, %a) {tessiq.supported = false} : f32[4,8]
   %p = aten.permute.default(%m) {arg1 = [1,0], tessiq.cluster = 0, tessiq.supported = true} : f32[8,4:1,8]
   %c = aten.clone.default(%p) {memory_format = "torch.contiguous_format", tessiq.cluster = 0, tessiq.supported = true} : f32[8,4]
   return %c

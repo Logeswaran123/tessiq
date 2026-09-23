@@ -233,7 +233,10 @@ TEST(ShapeRuleTest, EveryComputingOperationHasARule) {
   for (const std::string& name : op_names()) {
     const OpInfo* info = find_op(name);
     ASSERT_NE(info, nullptr) << name;
-    if (info->category == OpCategory::kMovement) {
+    if (info->category == OpCategory::kMovement || info->category == OpCategory::kConvolution) {
+      // A convolution's spatial extents come from stride, padding and dilation, and imported
+      // graphs carry the answer, so there is nothing to derive that ATen has not already worked
+      // out. The same reasoning as movement, for a different reason.
       continue;
     }
     EXPECT_TRUE(has_shape_rule(name)) << name << " is in the table with no shape rule";

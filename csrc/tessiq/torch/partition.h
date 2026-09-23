@@ -56,6 +56,9 @@ struct CompiledGraph {
   /// One per matrix multiply cuBLAS can run. No compiled code behind these: what they carry is
   /// the shape of the library call.
   std::vector<GemmKernel> gemms;
+
+  /// One per convolution cuDNN has a plan for.
+  std::vector<ConvKernel> convs;
 };
 
 /// Imports an FX graph, partitions it, fuses it, and lowers the result.

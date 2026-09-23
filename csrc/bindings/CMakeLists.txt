@@ -1,15 +1,8 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-# FindPython defaults to the highest version it can locate, not the active environment. In a conda
-# layout that means the base install rather than the env on PATH, so the extension gets built
-# against one interpreter's headers and imported into another. LOCATION takes the first on PATH,
-# and an explicit -DPython_EXECUTABLE still wins over both.
-# STANDARD, not the default FIRST: FIRST trusts CONDA_PREFIX, which points at the base
-# environment whenever a conda env is on PATH without having been activated in this shell. With
-# STANDARD the search follows PATH, so an activated venv still wins by being first.
-set(Python_FIND_VIRTUALENV STANDARD)
-set(Python_FIND_STRATEGY LOCATION)
+# How the interpreter is chosen is set once in the top-level CMakeLists.txt, because codegen asks
+# the same interpreter where cuDNN is installed and the two have to agree.
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 message(STATUS "tessiq: building the extension for ${Python_EXECUTABLE} (${Python_VERSION})")
 # torch and pybind11 ship their CMake config inside the Python packages, where CMake does not

@@ -54,7 +54,7 @@ class Recipe:
     output_spec: tuple[str | None, ...]
     arena_bytes: int
     naive_bytes: int
-    kernels: dict[str, _C.FusedKernel | _C.ReductionKernel | _C.GemmKernel]
+    kernels: dict[str, _C.FusedKernel | _C.ReductionKernel | _C.GemmKernel | _C.ConvKernel]
     fused_away: frozenset[str]
 
 
@@ -135,7 +135,7 @@ def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str
         if any(source != here for source in sources) or (not sources and here != host):
             needs_move.add(node.name)
 
-    kernels: dict[str, _C.FusedKernel | _C.ReductionKernel | _C.GemmKernel] = {
+    kernels: dict[str, _C.FusedKernel | _C.ReductionKernel | _C.GemmKernel | _C.ConvKernel] = {
         kernel.output: kernel for kernel in native.kernels
     }
     # A reduction writes one node's value like a fusion group does, so it goes in the same map.
@@ -144,6 +144,8 @@ def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str
     # A matmul writes one node's value too. It is not compiled code, but the executor asks the
     # same two things of it: what it reads, and run it.
     kernels.update({gemm.output: gemm for gemm in native.gemms})
+    # A convolution too: a library call rather than compiled code, asked the same two things.
+    kernels.update({conv.output: conv for conv in native.convs})
     fused_away = {
         name for kernel in native.kernels for name in kernel.members if name != kernel.output
     }

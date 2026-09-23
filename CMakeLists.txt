@@ -22,7 +22,7 @@ option(TESSIQ_ENABLE_CUDA "Build the CUDA backend" ${CUDAToolkit_FOUND})
 
 # Reserved for the MLIR export target. Declared now so the option name is fixed and documented
 # before anything depends on it; enabling it is a later phase.
-option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PHASES.md, phase 10)" OFF)
+option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PHASES.md, phase 13)" OFF)
 
 set(TESSIQ_SANITIZER "" CACHE STRING
     "Comma-separated sanitizers to enable, e.g. 'address,undefined'. Empty disables them.")
@@ -56,6 +56,19 @@ if(TESSIQ_ENABLE_MLIR)
 endif()
 
 # --- Subdirectories -----------------------------------------------------------------------------
+
+# Which interpreter to ask, decided once for every find_package(Python) below. More than one place
+# asks: the extension module needs its headers, and codegen asks it where the nvidia-cudnn package
+# is installed. Two answers would mean building against one environment and linking another's cuDNN.
+#
+# FindPython defaults to the highest version it can locate, not the active environment. In a conda
+# layout that means the base install rather than the env on PATH. LOCATION takes the first on PATH,
+# and an explicit -DPython_EXECUTABLE still wins over both.
+# STANDARD, not the default FIRST: FIRST trusts CONDA_PREFIX, which points at the base environment
+# whenever a conda env is on PATH without having been activated in this shell. With STANDARD the
+# search follows PATH, so an activated venv still wins by being first.
+set(Python_FIND_VIRTUALENV STANDARD)
+set(Python_FIND_STRATEGY LOCATION)
 
 add_subdirectory(csrc)
 

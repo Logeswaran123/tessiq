@@ -178,9 +178,16 @@ TEST(DefaultOpSupportTest, DoesNotClaimWhatIsNotInTheTable) {
   // The support set is seeded from ops.toml, so an operation nobody has added is declined by
   // having no row rather than by a rule here.
   const OpSupport& support = default_op_support();
-  EXPECT_FALSE(support.supports("aten.convolution.default"));
+  EXPECT_FALSE(support.supports("aten.hypot.default"));
   EXPECT_FALSE(support.supports("aten.native_layer_norm.default"));
   EXPECT_FALSE(support.supports("aten._softmax.default"));
+}
+
+TEST(DefaultOpSupportTest, ClaimsConvolution) {
+  // Through cuDNN rather than generated code, the way a matmul goes through cuBLAS. It was the
+  // standing example of an operation the backend declined for nine phases, which is why the
+  // tests that needed one of those now use hypot instead.
+  EXPECT_TRUE(default_op_support().supports("aten.convolution.default"));
 }
 
 TEST(DefaultOpSupportTest, ClaimsMatmuls) {

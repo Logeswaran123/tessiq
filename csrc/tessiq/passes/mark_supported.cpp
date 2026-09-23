@@ -48,10 +48,19 @@ bool any_extent_is_unknown(const ir::Node& node) {
 /// graph gets slower the more of it the compiler claims. Measured on the encoder block: claiming
 /// everything put 69 operations on that path and took 12.2 ms against 0.7 ms for eager.
 bool has_a_kernel_for_these_types(const ir::Node& node) {
+  const OpInfo* info = find_op(node.op());
+  if (info != nullptr && info->category == OpCategory::kConvolution) {
+    // Asked before anything else, because unlike the other categories a convolution can have no
+    // kernel even when every extent is known. cuDNN is given a two dimensional convolution, which
+    // is four dimensional tensors; a one or three dimensional one has no plan, and claiming it
+    // would put it on the device with nothing to run it. A shape that is not known until the call
+    // has no plan either, because the descriptors are built once when the graph is compiled.
+    return node.result_count() == 1 && node.result(0)->type().shape().rank() == 4 &&
+           !any_extent_is_unknown(node);
+  }
   if (!any_extent_is_unknown(node)) {
     return true;
   }
-  const OpInfo* info = find_op(node.op());
   if (info == nullptr) {
     return false;
   }

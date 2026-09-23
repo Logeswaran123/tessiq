@@ -71,6 +71,7 @@ TEST(OpTraitsTest, EverythingTheBackendSupportsHasAWayToRun) {
     case OpCategory::kMovement:    // the device's view registrations, so no code at all
     case OpCategory::kMatmul:      // cuBLAS
     case OpCategory::kCopy:        // the device's clone registration, over a generated kernel
+    case OpCategory::kConvolution: // cuDNN
       break;
     }
   }

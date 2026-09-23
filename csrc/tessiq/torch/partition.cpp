@@ -87,6 +87,7 @@ Result<CompiledGraph> build_recipe_fx(const pybind11::object& graph_module,
     TESSIQ_ASSIGN_OR_RETURN(compiled.kernels, compile_fused(*graph, ordinal));
     TESSIQ_ASSIGN_OR_RETURN(compiled.reductions, compile_reductions(*graph, ordinal));
     TESSIQ_ASSIGN_OR_RETURN(compiled.gemms, compile_gemms(*graph, ordinal));
+    TESSIQ_ASSIGN_OR_RETURN(compiled.convs, compile_convs(*graph, ordinal));
   }
 
   TESSIQ_LOG(kDebug, kLogModule) << "recipe with " << compiled.recipe.steps.size()

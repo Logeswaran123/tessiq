@@ -27,6 +27,10 @@ enum class OpCategory {
   /// one does not: it costs a pass over the data. That distinction decides placement, because a
   /// unit holding nothing but views is not worth putting on a device and a unit holding a copy is.
   kCopy,
+  /// Reads a window of its input for each output element. A library call rather than generated
+  /// code: cuDNN chooses among several algorithms by the shapes and the card, which is the reason
+  /// to call it rather than write one.
+  kConvolution,
 };
 
 /// Everything known about one spelling of one operation.

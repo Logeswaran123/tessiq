@@ -18,6 +18,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(tessiq_tests
   test_allocator.cpp
   test_codegen.cpp
+  test_conv.cpp
   test_device.cpp
   test_error.cpp
   test_ir.cpp
