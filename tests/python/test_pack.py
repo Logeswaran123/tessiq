@@ -141,3 +141,22 @@ def test_the_host_reference_device_still_works() -> None:
     packed = view.contiguous()
     assert packed.is_contiguous()
     torch.testing.assert_close(packed.cpu(), view.cpu().contiguous())
+
+
+def test_the_encoder_block_leaves_nothing_on_the_host() -> None:
+    # The phase milestone. Every operation the block is made of now runs on the device, and the
+    # last four to get there were the clones that packed an attention head's view of the scores.
+    from test_models import EncoderBlock
+
+    torch.manual_seed(0)
+    net = EncoderBlock().eval()
+    graph = tessiq.capture(net, torch.randn(4, 9, 32))
+    recipe = tessiq.build_recipe(graph, tessiq.gpu, use_cache=False)
+
+    on_host = [
+        node.name
+        for node in graph.graph.nodes
+        if node.op == "call_function"
+        and recipe.devices.get(node.name, tessiq.cpu).type != tessiq.DEVICE_NAME
+    ]
+    assert not on_host, f"still on the host: {on_host}"

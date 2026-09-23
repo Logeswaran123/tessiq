@@ -352,11 +352,14 @@ kernel = true
 # device registration, not a kernel, which is why the category exists rather than folding them in
 # with the elementwise rows.
 #
-# clone is absent from this table, which is not the same as being absent from the backend. A
-# tessiq tensor packs itself on the device: `aten::clone` is registered against the dispatch key
-# and backed by a generated kernel that steps through whatever layout it is handed. What the table
-# decides is something else, whether the compiler places the operation on the device rather than
-# leaving it on the host, and that is a placement question this row cannot answer on its own.
+# A copy is its own category. It computes nothing, which makes it look like a movement operation,
+# and it is not one: a movement operation hands back a different view of the same storage, while a
+# copy costs a pass over the data to produce storage of its own. Clustering turns on that
+# difference. A unit holding nothing but views is not worth moving to a device, because it would
+# arrive, take a different view, and go back. A unit holding a copy is, because the copy is work.
+#
+# `aten::clone` is registered against the dispatch key, over a kernel that steps through whatever
+# layout it is handed, so there is nothing to generate for the row below.
 
 [[op]]
 name = "view"
@@ -446,4 +449,11 @@ name = "bmm"
 aten = ["aten.bmm.default"]
 category = "matmul"
 arity = 2
+kernel = true
+
+[[op]]
+name = "clone"
+aten = ["aten.clone.default"]
+category = "copy"
+arity = 1
 kernel = true
