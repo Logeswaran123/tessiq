@@ -52,7 +52,8 @@ pybind11_add_module(_C MODULE
   ../tessiq/torch/fused.cpp
   ../tessiq/torch/importer.cpp
   ../tessiq/torch/partition.cpp
-  ../tessiq/torch/ops.cpp)
+  ../tessiq/torch/ops.cpp
+  ../tessiq/torch/pack.cpp)
 
 # WHOLE_ARCHIVE because passes register themselves at static initialisation, and a static
 # library only contributes objects something already references. Without it the module links but

@@ -12,6 +12,7 @@
 #include <ATen/native/CPUFallback.h>
 #include <ATen/ops/_reshape_alias_native.h>
 #include <ATen/ops/as_strided_native.h>
+#include <ATen/ops/clone_ops.h>
 #include <ATen/ops/empty.h>
 #include <ATen/ops/empty_strided.h>
 #include <ATen/ops/view_native.h>
@@ -26,6 +27,7 @@
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/torch/backend.h"
+#include "tessiq/torch/pack.h"
 
 namespace tessiq::torch_backend {
 
@@ -287,6 +289,32 @@ void cpu_fallback(const c10::OperatorHandle& op, torch::jit::Stack* stack) {
   at::native::cpu_fallback(op, stack);
 }
 
+/// `clone`, and with it `.contiguous()`, which torch routes through the same operation.
+///
+/// This is the one operation whose fallback is pure waste. Everything else that reaches the host
+/// does so because there is no kernel for the arithmetic. A clone has no arithmetic: it reads a
+/// view and writes it packed, which the device can do to itself. Sending it across costs the
+/// whole tensor each way to produce a rearrangement of bytes that never had to leave.
+///
+/// Only the packed result is handled here. `preserve_format` on a view asks for the layout torch
+/// would suggest, which is not always the packed one, and guessing wrong would return a tensor
+/// whose strides lie about its contents.
+at::Tensor clone(const at::Tensor& self, std::optional<at::MemoryFormat> memory_format) {
+  const at::MemoryFormat format = memory_format.value_or(at::MemoryFormat::Preserve);
+  const bool packed_result = format == at::MemoryFormat::Contiguous ||
+                             (format == at::MemoryFormat::Preserve && self.is_contiguous());
+  if (packed_result) {
+    at::Tensor out = at::empty(self.sizes(), self.options());
+    const auto packed = pack_on_device(self, out);
+    if (packed.has_value()) {
+      return out;
+    }
+    TESSIQ_LOG(kDebug, kLogModule)
+        << "no pack kernel for this clone, falling back: " << packed.error().message();
+  }
+  return at::native::call_fallback_fn<&cpu_fallback, at::_ops::clone>::call(self, memory_format);
+}
+
 TORCH_LIBRARY_IMPL(_, PrivateUse1, m) {
   m.fallback(torch::CppFunction::makeFromBoxedFunction<&cpu_fallback>());
 }
@@ -297,6 +325,7 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("_copy_from", &copy_from);
   m.impl("_copy_from_and_resize", &copy_from_and_resize);
   m.impl("resize_", &resize);
+  m.impl("clone", &clone);
 
   // A view operation returns a tensor sharing its input's storage. The fallback cannot do that:
   // it copies to the host, runs there, and copies back, so what comes back is a different buffer.

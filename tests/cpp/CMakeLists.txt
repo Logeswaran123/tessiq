@@ -27,6 +27,7 @@ add_executable(tessiq_tests
   test_op_support.cpp
   test_nvrtc.cpp
   test_op_traits.cpp
+  test_pack.cpp
   test_passes.cpp
   test_program.cpp
   test_recipe.cpp
