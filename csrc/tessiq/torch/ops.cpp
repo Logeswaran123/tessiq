@@ -13,6 +13,7 @@
 #include <ATen/ops/_reshape_alias_native.h>
 #include <ATen/ops/as_strided_native.h>
 #include <ATen/ops/clone_ops.h>
+#include <ATen/ops/convolution.h>
 #include <ATen/ops/empty.h>
 #include <ATen/ops/empty_strided.h>
 #include <ATen/ops/view_native.h>
@@ -315,6 +316,40 @@ at::Tensor clone(const at::Tensor& self, std::optional<at::MemoryFormat> memory_
   return at::native::call_fallback_fn<&cpu_fallback, at::_ops::clone>::call(self, memory_format);
 }
 
+/// The convolution every backend other than CPU and CUDA is routed to.
+///
+/// PyTorch sends `aten::convolution` on an unfamiliar device to this one rather than to the
+/// catch-all fallback, and the fallback cannot help anyway: it would move the tensors to the host
+/// and call this same operation there, where it does not exist either. So a convolution on a
+/// tessiq tensor raised, and nothing noticed until the compiler started placing convolutions on a
+/// device, including the host reference, which has no cuDNN to run them.
+///
+/// This is the reference implementation, not the fast one. It computes on the host through the
+/// ordinary CPU convolution and hands the result back. The fast one is the cuDNN plan the compiler
+/// builds; this is what runs when there is no plan, and it is correct.
+at::Tensor convolution_overrideable(const at::Tensor& input,
+                                    const at::Tensor& weight,
+                                    const std::optional<at::Tensor>& bias,
+                                    at::IntArrayRef stride,
+                                    at::IntArrayRef padding,
+                                    at::IntArrayRef dilation,
+                                    bool transposed,
+                                    at::IntArrayRef output_padding,
+                                    int64_t groups) {
+  const std::optional<at::Tensor> host_bias =
+      bias.has_value() && bias->defined() ? std::optional<at::Tensor>(bias->cpu()) : std::nullopt;
+  const at::Tensor host = at::convolution(input.cpu(),
+                                          weight.cpu(),
+                                          host_bias,
+                                          stride,
+                                          padding,
+                                          dilation,
+                                          transposed,
+                                          output_padding,
+                                          groups);
+  return host.to(input.device());
+}
+
 TORCH_LIBRARY_IMPL(_, PrivateUse1, m) {
   m.fallback(torch::CppFunction::makeFromBoxedFunction<&cpu_fallback>());
 }
@@ -326,6 +361,7 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("_copy_from_and_resize", &copy_from_and_resize);
   m.impl("resize_", &resize);
   m.impl("clone", &clone);
+  m.impl("convolution_overrideable", &convolution_overrideable);
 
   // A view operation returns a tensor sharing its input's storage. The fallback cannot do that:
   // it copies to the host, runs there, and copies back, so what comes back is a different buffer.
