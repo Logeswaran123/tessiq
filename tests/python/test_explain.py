@@ -140,17 +140,20 @@ def test_an_operation_on_the_host_is_not_reported_as_on_the_device() -> None:
     # A node returning more than one tensor has its first result renamed after the getitem that
     # reads it, so it is missing from the recipe's device map. The default for a missing entry has
     # to be the host. `tessiq.cpu` looks like the right default and is not: it is the reference
-    # device and its type is `tessiq`, so using it reported every such node as running on the
-    # device. A batch norm is the case, and it is on the host because it has no kernel.
-    from test_models import ResidualBlock
+    # device and its type is `tessiq`, so using it reported every such node as on the device.
+    #
+    # topk is the case because it returns values and indices and nothing runs it. This test used a
+    # residual block until phase 11 moved convolution to the device and decomposed batch norm, at
+    # which point it had no multi-result node left on the host and failed for the wrong reason.
+    class TopK(nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            values, _ = torch.topk(torch.relu(x), 3, dim=-1)
+            return values * 2.0
 
-    torch.manual_seed(0)
-    report = explain(
-        ResidualBlock().eval(), torch.randn(1, 16, 8, 8), sections=("summary", "schedule")
-    )
+    graph = tessiq.capture(TopK(), torch.randn(4, 8))
+    recipe = tessiq.build_recipe(graph, tessiq.cpu, use_cache=False)
+    assert "topk" not in recipe.devices, "the case this guards needs a node missing from the map"
 
-    for line in report.splitlines():
-        if "batch_norm" in line or "convolution" in line:
-            # "(moves its inputs)" may follow, which is about the transfer rather than the place.
-            assert "host" in line.split(".default")[-1], line
-    assert "on the device   3" in report, report
+    report = explain_graph(graph, sections=("schedule",))
+    line = next(line for line in report.splitlines() if "aten.topk" in line)
+    assert "host" in line.split("aten.topk.default")[-1], line
