@@ -457,3 +457,12 @@ aten = ["aten.clone.default"]
 category = "copy"
 arity = 1
 kernel = true
+
+# Convolution is a binding, the way a matrix multiply is. cuDNN chooses among several algorithms
+# by the shapes and the card, and that choice is the reason to call it rather than write one.
+[[op]]
+name = "convolution"
+aten = ["aten.convolution.default"]
+category = "convolution"
+arity = 3
+kernel = true

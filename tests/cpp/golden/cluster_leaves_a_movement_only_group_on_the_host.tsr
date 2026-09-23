@@ -4,13 +4,13 @@
 // different view of it, and move that back, which is two transfers for no work. So it is claimed
 // and not placed, and the difference between those is what tessiq.cluster records.
 graph @g(%a: f32[4,8]) -> f32[8,4:1,8] {
-  %m = aten.convolution.default(%a, %a) : f32[4,8]
+  %m = aten.hypot.default(%a, %a) : f32[4,8]
   %p = aten.permute.default(%m) {arg1 = [1,0]} : f32[8,4:1,8]
   return %p
 }
 // ---
 graph @g(%a: f32[4,8]) -> f32[8,4:1,8] {
-  %m = aten.convolution.default(%a, %a) {tessiq.supported = false} : f32[4,8]
+  %m = aten.hypot.default(%a, %a) {tessiq.supported = false} : f32[4,8]
   %p = aten.permute.default(%m) {arg1 = [1,0], tessiq.supported = true} : f32[8,4:1,8]
   return %p
 }

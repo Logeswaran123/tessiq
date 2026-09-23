@@ -37,6 +37,7 @@ CATEGORIES = {
     "movement": "kMovement",
     "matmul": "kMatmul",
     "copy": "kCopy",
+    "convolution": "kConvolution",
 }
 
 

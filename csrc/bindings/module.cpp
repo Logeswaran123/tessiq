@@ -185,6 +185,40 @@ void bind_kernels(py::module_& m) {
           "Runs the reduction. Asynchronous, like a fused kernel's launch.");
 
   // Same shape as the other two, so the executor runs all three through one path.
+  py::class_<tessiq::torch_backend::ConvKernel>(m, "ConvKernel")
+      .def_property_readonly("output", &tessiq::torch_backend::ConvKernel::output)
+      .def_property_readonly("inputs", &tessiq::torch_backend::ConvKernel::inputs)
+      // cuDNN reads packed NCHW and was told so when the plan was built, so the executor packs.
+      .def_property_readonly("packs_inputs",
+                             [](const tessiq::torch_backend::ConvKernel&) { return true; })
+      // A convolution whose shapes were not known has no plan, so every one here is fixed.
+      .def_property_readonly("has_dynamic_extent",
+                             [](const tessiq::torch_backend::ConvKernel&) { return false; })
+      .def_property_readonly("algorithm",
+                             [](const tessiq::torch_backend::ConvKernel& kernel) {
+                               return kernel.plan == nullptr ? -1 : kernel.plan->algorithm();
+                             })
+      .def_property_readonly("workspace_bytes",
+                             [](const tessiq::torch_backend::ConvKernel& kernel) {
+                               return kernel.plan == nullptr ? 0 : kernel.plan->workspace_bytes();
+                             })
+      .def("output_shape",
+           [](const tessiq::torch_backend::ConvKernel& kernel,
+              const std::vector<at::Tensor>& /*tensors*/) { return kernel.output_shape(); })
+      .def(
+          "launch",
+          [](const tessiq::torch_backend::ConvKernel& kernel,
+             const std::vector<at::Tensor>& inputs,
+             const at::Tensor& out) {
+            auto result = kernel.launch(inputs, out);
+            if (!result) {
+              raise_from_error(result.error());
+            }
+          },
+          py::arg("inputs"),
+          py::arg("out"),
+          "Runs the convolution through cuDNN. Asynchronous, like a kernel launch.");
+
   py::class_<tessiq::torch_backend::GemmKernel>(m, "GemmKernel")
       .def_property_readonly("output", &tessiq::torch_backend::GemmKernel::output)
       .def_property_readonly("inputs", &tessiq::torch_backend::GemmKernel::inputs)
@@ -344,7 +378,8 @@ PYBIND11_MODULE(_C, m) {
       .def_readonly("recipe", &tessiq::torch_backend::CompiledGraph::recipe)
       .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels)
       .def_readonly("reductions", &tessiq::torch_backend::CompiledGraph::reductions)
-      .def_readonly("gemms", &tessiq::torch_backend::CompiledGraph::gemms);
+      .def_readonly("gemms", &tessiq::torch_backend::CompiledGraph::gemms)
+      .def_readonly("convs", &tessiq::torch_backend::CompiledGraph::convs);
 
   m.def(
       "build_recipe_fx",

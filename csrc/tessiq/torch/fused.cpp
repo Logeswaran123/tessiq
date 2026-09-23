@@ -4,6 +4,7 @@
 #include "tessiq/torch/fused.h"
 
 #include <ATen/core/Tensor.h>
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -490,6 +491,64 @@ Result<std::vector<GemmKernel>> compile_gemms(const ir::Graph& graph, int ordina
 
   TESSIQ_LOG(kDebug, kLogModule) << "described " << compiled.size() << " of " << candidates.size()
                                  << " matmul(s)";
+  return compiled;
+}
+
+Result<void> ConvKernel::launch(const std::vector<at::Tensor>& tensors,
+                                const at::Tensor& out) const {
+  if (plan == nullptr) {
+    return internal_error("convolution " + description.output + " has no plan");
+  }
+  const std::size_t expected = description.bias.has_value() ? 3U : 2U;
+  if (tensors.size() != expected) {
+    return invalid_argument("convolution " + description.output + " takes " +
+                            std::to_string(expected) + " inputs, got " +
+                            std::to_string(tensors.size()));
+  }
+
+  // cuDNN was told every tensor is packed NCHW of exactly these extents, and it reads them that
+  // way whatever they actually are. A mismatch reads the right buffer in the wrong order.
+  const auto matches = [](const at::Tensor& tensor, const std::array<std::int64_t, 4>& shape) {
+    return tensor.is_contiguous() && tensor.dim() == 4 &&
+           std::equal(shape.begin(), shape.end(), tensor.sizes().begin());
+  };
+  if (!matches(tensors[0], description.input_shape) ||
+      !matches(tensors[1], description.weight_shape) || !matches(out, description.output_shape)) {
+    return invalid_argument("convolution " + description.output +
+                            " was handed tensors that do not match its plan");
+  }
+
+  const void* bias = description.bias.has_value() ? tensors[2].data_ptr() : nullptr;
+  return plan->launch(tensors[0].data_ptr(), tensors[1].data_ptr(), bias, out.data_ptr());
+}
+
+Result<std::vector<ConvKernel>> compile_convs(const ir::Graph& graph, int ordinal) {
+  std::vector<ConvKernel> compiled;
+  if (!codegen::cudnn_available()) {
+    return compiled;
+  }
+
+  const std::vector<const ir::Node*> candidates = codegen::conv_nodes(graph);
+  for (const ir::Node* node : candidates) {
+    TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_conv(*node));
+    if (!description.has_value()) {
+      TESSIQ_LOG(kDebug, kLogModule) << "no conv shape for " << node->op() << ", leaving it alone";
+      continue;
+    }
+    auto plan = codegen::make_conv_plan(*description, ordinal);
+    if (!plan.has_value()) {
+      TESSIQ_LOG(kDebug, kLogModule)
+          << "no cuDNN plan for " << description->output << ": " << plan.error().message();
+      continue;
+    }
+    compiled.push_back(ConvKernel{
+        .description = *description,
+        .plan = std::shared_ptr<const codegen::ConvPlan>(std::move(plan).value()),
+    });
+  }
+
+  TESSIQ_LOG(kDebug, kLogModule) << "planned " << compiled.size() << " of " << candidates.size()
+                                 << " convolution(s)";
   return compiled;
 }
 

@@ -5,7 +5,7 @@
 // %w stays separate.
 graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
   %x = aten.add.Tensor(%a, %b) : f32[4]
-  %y = aten.convolution.default(%x, %b) : f32[4]
+  %y = aten.hypot.default(%x, %b) : f32[4]
   %z = aten.mul.Tensor(%x, %a) : f32[4]
   %w = aten.sub.Tensor(%y, %z) : f32[4]
   return %w
@@ -13,7 +13,7 @@ graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
 // ---
 graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
   %x = aten.add.Tensor(%a, %b) {tessiq.cluster = 0, tessiq.supported = true} : f32[4]
-  %y = aten.convolution.default(%x, %b) {tessiq.supported = false} : f32[4]
+  %y = aten.hypot.default(%x, %b) {tessiq.supported = false} : f32[4]
   %z = aten.mul.Tensor(%x, %a) {tessiq.cluster = 0, tessiq.supported = true} : f32[4]
   %w = aten.sub.Tensor(%y, %z) {tessiq.cluster = 1, tessiq.supported = true} : f32[4]
   return %w

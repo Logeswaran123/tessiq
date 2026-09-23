@@ -104,11 +104,22 @@ class GemmKernel:
     def output_shape(self, inputs: list[Any]) -> list[int]: ...
     def launch(self, inputs: list[Any], out: Any) -> None: ...
 
+class ConvKernel:
+    output: str
+    inputs: list[str]
+    packs_inputs: bool
+    has_dynamic_extent: bool
+    algorithm: int
+    workspace_bytes: int
+    def output_shape(self, inputs: list[Any]) -> list[int]: ...
+    def launch(self, inputs: list[Any], out: Any) -> None: ...
+
 class CompiledGraph:
     recipe: Recipe
     kernels: list[FusedKernel]
     reductions: list[ReductionKernel]
     gemms: list[GemmKernel]
+    convs: list[ConvKernel]
 
 def build_recipe_fx(
     graph_module: object, name: str = ..., alignment: int = ..., ordinal: int = ...

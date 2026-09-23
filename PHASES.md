@@ -18,9 +18,9 @@ work it describes.
 | 6 | Fusion and CUDA codegen | done |
 | 7 | Op coverage and real models | done |
 | 8 | Training, dynamic shapes, tooling | done |
-| 9 | Every operation on the device | next |
+| 9 | Every operation on the device | done |
 | 10 | Where the time goes | done |
-| 11 | Convolution | optional, read the note |
+| 11 | Convolution | done |
 | 12 | Triton emitter | optional |
 | 13 | MLIR export target | optional |
 
@@ -123,7 +123,7 @@ all 28 kernels.
 support removed the recompiling it was for. Padding to a few fixed sizes now buys only whatever
 those sizes are worth to a kernel, needs masking first, and has no measurement asking for it.
 
-### Phase 9: Every operation on the device
+### Phase 9: Every operation on the device (done)
 A copy kernel, so that materialising a tensor does not mean sending it to the host and back.
 `clone` is the last operation the encoder block still runs there, and `layout-assign` needs the
 same kernel to materialise an operand a fused loop cannot read in place.
@@ -160,7 +160,7 @@ the device before stopping its clock, so it is an upper bound holding an unknown
 synchronisation. Every remaining decision in this project depends on which of those three numbers
 is real, and none of them can be trusted until the instrument stops contributing to them.
 
-### Phase 11: Convolution (optional)
+### Phase 11: Convolution (done)
 `aten.convolution` via cuDNN, and batch norm alongside it, which together take a ResNet-18 block
 from a third of its operations on the device to all of them.
 **Milestone:** the residual block in `tests/python/test_models.py` runs entirely on the device, and
@@ -175,6 +175,20 @@ call, and generated kernels that cost more than eager CUDA spends on the whole b
 convolution would take the residual block from 43% of its operations on the device to all of them
 and would not make it faster. It is worth doing for what a ResNet block demonstrates, and it is
 not the next thing to do for speed.
+**That note was wrong, and why is worth keeping.** It extrapolated from phase 10's measurement of
+the encoder block, which was already entirely on the device, to the residual block, which was
+not. There convolution sat on the host and forced a transfer each way around it, which is the
+cost that goes away when it moves. Measured on the residual block at batch 8, 32 by 32:
+
+| | per call |
+|---|---|
+| before, convolution and batch norm on the host | 1.45 ms |
+| batch norm decomposed, convolution still on the host | 1.74 ms |
+| both on the device | 0.59 ms |
+
+Two and a half times faster, and only with both: batch norm on its own made it slower, for the
+same reason every partial move in phases 7 and 8 did. The four operations left on the host are
+float32 to float32 casts the batch norm decomposition inserts on its running statistics.
 
 ### Phase 12: Triton emitter (optional)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;

@@ -79,7 +79,10 @@ def test_the_backend_claims_what_the_table_says() -> None:
     }
     # partition marks what the backend can run, so this is the table reaching a real graph.
     for name in sorted(claimed):
-        if not name.startswith("aten."):
+        if not name.startswith("aten.") or name == "aten.convolution.default":
+            # Convolution is the one row whose support depends on the shape as well as the name:
+            # cuDNN is given a two dimensional one, so a rank-one graph like this is correctly not
+            # claimed. It has its own test below with a shape it can run.
             continue
         graph = f"graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {{\n  %x = {name}(%a, %b) : f32[4]\n  return %x\n}}\n"
         marked = tessiq.run_passes(graph, "mark-supported")
@@ -91,13 +94,29 @@ def test_an_operation_the_table_has_never_heard_of_is_not_claimed() -> None:
     # still has teeth is the other direction: an operation with no row is declined by not being
     # there rather than by a list somewhere saying so.
     for name in (
-        "aten.convolution.default",
+        "aten.hypot.default",
         "aten.native_layer_norm.default",
         "aten.erfinv.default",
     ):
         graph = f"graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {{\n  %x = {name}(%a, %b) : f32[4]\n  return %x\n}}\n"
         marked = tessiq.run_passes(graph, "mark-supported")
         assert "tessiq.supported = false" in marked, f"{name} is not in the table and was claimed"
+
+
+def test_a_convolution_is_claimed_only_when_cudnn_would_have_a_plan() -> None:
+    # A two dimensional convolution has four dimensional tensors, and that is the one cuDNN is
+    # handed. A one dimensional convolution is in the table under the same name and has no plan,
+    # so claiming it would place it on the device with nothing to run it.
+    two_d = (
+        "graph @g(%a: f32[1,3,8,8], %w: f32[4,3,3,3]) -> f32[1,4,6,6] {\n"
+        "  %c = aten.convolution.default(%a, %w) : f32[1,4,6,6]\n  return %c\n}\n"
+    )
+    one_d = (
+        "graph @g(%a: f32[1,3,8], %w: f32[4,3,3]) -> f32[1,4,6] {\n"
+        "  %c = aten.convolution.default(%a, %w) : f32[1,4,6]\n  return %c\n}\n"
+    )
+    assert "tessiq.supported = true" in tessiq.run_passes(two_d, "mark-supported")
+    assert "tessiq.supported = false" in tessiq.run_passes(one_d, "mark-supported")
 
 
 def test_the_coverage_document_matches_the_source() -> None:
@@ -108,7 +127,9 @@ def test_the_coverage_document_matches_the_source() -> None:
         assert f"`{op['name']}`" in document, f"{op['name']} is missing from the document"
 
 
-@pytest.mark.parametrize("category", ["elementwise", "reduction", "movement", "matmul"])
+@pytest.mark.parametrize(
+    "category", ["elementwise", "reduction", "movement", "matmul", "copy", "convolution"]
+)
 def test_every_category_is_one_the_generator_knows(category: str) -> None:
     assert any(op["category"] == category for op in operations()), (
         f"no operation is {category}; the generator would still accept it, "

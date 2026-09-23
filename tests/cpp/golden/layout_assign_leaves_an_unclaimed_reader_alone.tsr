@@ -3,11 +3,11 @@
 // on the host through the fallback, which reads whatever layout it is given, so packing it here
 // would be a copy nobody asked for.
 graph @g(%a: f32[4,8:1,4]) -> f32[4,8] {
-  %m = aten.convolution.default(%a, %a) : f32[4,8]
+  %m = aten.hypot.default(%a, %a) : f32[4,8]
   return %m
 }
 // ---
 graph @g(%a: f32[4,8:1,4]) -> f32[4,8] {
-  %m = aten.convolution.default(%a, %a) {tessiq.supported = false} : f32[4,8]
+  %m = aten.hypot.default(%a, %a) {tessiq.supported = false} : f32[4,8]
   return %m
 }

@@ -6,9 +6,12 @@
 #include <ATen/core/Tensor.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "tessiq/codegen/conv.h"
+#include "tessiq/codegen/cudnn.h"
 #include "tessiq/codegen/gemm.h"
 #include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
@@ -167,5 +170,39 @@ struct GemmKernel {
 
 /// Describes every matrix multiply in `graph` that cuBLAS can run.
 Result<std::vector<GemmKernel>> compile_gemms(const ir::Graph& graph, int ordinal);
+
+/// One convolution, ready to run through cuDNN.
+///
+/// Like a matmul this has no generated code behind it. What it carries is a plan: the problem
+/// described to cuDNN and an algorithm chosen, both done once when the graph was compiled.
+struct ConvKernel {
+  codegen::ConvKernel description;
+
+  /// Shared rather than owned, because a compiled graph is copied into Python and every copy has
+  /// to reach the same cuDNN descriptors and workspace.
+  std::shared_ptr<const codegen::ConvPlan> plan;
+
+  /// The IR names of the values read, in the order `launch` expects them.
+  [[nodiscard]] std::vector<std::string> inputs() const { return description.inputs(); }
+
+  /// The IR name of the value written.
+  [[nodiscard]] const std::string& output() const { return description.output; }
+
+  /// The shape of the tensor this writes. Fixed at compile time, since a convolution whose shapes
+  /// were not known has no plan.
+  [[nodiscard]] std::vector<std::int64_t> output_shape() const {
+    return {description.output_shape.begin(), description.output_shape.end()};
+  }
+
+  /// Runs it. `tensors` matches `inputs()`, packed NCHW.
+  [[nodiscard]] Result<void> launch(const std::vector<at::Tensor>& tensors,
+                                    const at::Tensor& out) const;
+};
+
+/// Plans every convolution in `graph` that cuDNN can run.
+///
+/// A convolution with no plan is not a failure. It runs on the host, which is what every one did
+/// before this existed.
+Result<std::vector<ConvKernel>> compile_convs(const ir::Graph& graph, int ordinal);
 
 } // namespace tessiq::torch_backend
