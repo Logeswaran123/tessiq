@@ -83,3 +83,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `torch.compile(model, backend="tessiq")`, declared as a `torch_dynamo_backends` entry point
   so the name resolves without importing tessiq first. Forward and backward both go through
   the compiler. `options={"device": "tessiq:1"}` picks which device clusters run on.
+- Broad operation coverage: elementwise, reductions, movement and matmul, defined in `ops.toml`
+  and generated into the C++ table. Softmax and layer norm arrive as the operations they are
+  made of, through decompositions, rather than as kernels of their own.
+- Reduction kernels, described as `[outer, reduce, inner]` so one shape serves every rank. Which
+  of the two kernel forms runs depends on whether a kept axis follows the reduced one, because
+  that decides whether consecutive threads read consecutive addresses.
+- Matrix multiplies through cuBLAS, with the transpose flags read off the layout so a weight
+  stored the other way round costs a flag rather than a copy.
+- Layouts are part of a tensor type. `layout-assign` materialises an operand a kernel cannot
+  read in place, and a fused kernel works out where to read a broadcasting or permuted operand
+  from the shapes rather than needing it packed first.
+- Views on a tessiq tensor alias their storage instead of copying, so `x.view(n).fill_(v)` is
+  visible through `x`.
+- Inputs that have not changed stay on the device between calls, keyed on identity and version.
+- `tessiq.profile()`, which records kernels, interpreted operations and transfers with exclusive
+  time, and writes a Chrome trace. Kernels are drained before the clock stops, because a launch
+  returns before the work does.
+- Training. AOTAutograd's backward graph goes through the same importer, passes and kernels as
+  the forward one, so a model trains on the backend without the backend knowing training exists.
+- Shapes that are not known until the call. The IR records an unknown extent as `?`, and every
+  kernel takes the numbers it needs as arguments: the element count and a broadcast's divisor
+  for a fused loop, three extents for a reduction, and m, n and k for a matmul. Twenty distinct
+  sequence lengths through a transformer encoder block cause two compiles rather than twenty,
+  and get the same 28 kernels a fixed shape does.
+- `tessiq.explain(model, example)` and `tools/tessiq_explain.py`, which report one model's whole
+  compilation: the imported graph, what each pass changed, the kernels, and where every step
+  runs. `tessiq.capture()` and `tessiq.default_pipeline()` alongside it, so nothing reporting on
+  a compilation has to keep its own copy of how one is made.

@@ -17,8 +17,8 @@ work it describes.
 | 5 | Shape inference, memory planning, recipe cache | done |
 | 6 | Fusion and CUDA codegen | done |
 | 7 | Op coverage and real models | done |
-| 8 | Training, dynamic shapes, tooling | next |
-| 9 | Convolution | optional |
+| 8 | Training, dynamic shapes, tooling | done |
+| 9 | Convolution | optional, next |
 | 10 | Triton emitter | optional |
 | 11 | MLIR export target | optional |
 
@@ -110,11 +110,16 @@ backends. `docs/op_coverage.md` is generated and non-trivial.
 own measurements say the backend is held back by transfers and launches rather than by the
 operations it cannot run.
 
-### Phase 8: Training, dynamic shapes, tooling
-AOTAutograd backward graphs; symbolic shapes + bucketing; profiler with chrome-trace export;
+### Phase 8: Training, dynamic shapes, tooling (done)
+AOTAutograd backward graphs; symbolic shapes; profiler with chrome-trace export;
 `tessiq-explain`; a write-up.
 **Milestone:** a small model **trains** to convergence on the tessiq backend; sequence-length
-variation doesn't trigger recompilation every step.
+variation doesn't trigger recompilation every step. Twenty distinct sequence lengths through the
+encoder block cause two backend compiles, and a twenty-first the compiler never saw still launches
+all 28 kernels.
+**Dropped:** bucketing. It was listed as the way to avoid recompiling per shape, and real symbolic
+support removed the recompiling it was for. Padding to a few fixed sizes now buys only whatever
+those sizes are worth to a kernel, needs masking first, and has no measurement asking for it.
 
 ### Phase 9: Convolution (optional)
 `aten.convolution` via cuDNN, and batch norm alongside it, which together take a ResNet-18 block
