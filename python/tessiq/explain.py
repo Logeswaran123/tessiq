@@ -27,6 +27,12 @@ from tessiq.shapes import is_static
 #: Sections a report can hold, in the order they are printed.
 SECTIONS = ("summary", "graph", "passes", "kernels", "schedule")
 
+#: Where a step runs when the recipe does not say. Not `tessiq.cpu`, which is the reference
+#: device and whose type is `tessiq`: defaulting to that reported every unmapped node as running
+#: on the device. A node is missing from the map when its first result was renamed after the
+#: getitem that reads it, which is what happens to anything returning more than one tensor.
+_HOST = torch.device("cpu")
+
 
 @dataclass(frozen=True)
 class Report:
@@ -173,7 +179,7 @@ def explain_graph(
 def _summary(report: Report) -> str:
     recipe = report.recipe
     steps = [node for node in report.graph_module.graph.nodes if node.op == "call_function"]
-    on_device = [n for n in steps if recipe.devices.get(n.name, cpu).type == DEVICE_NAME]
+    on_device = [n for n in steps if recipe.devices.get(n.name, _HOST).type == DEVICE_NAME]
     covered = _covered_by_kernels(recipe)
     shapes = "known" if is_static(report.graph_module) else "known at the call"
     rows = [
@@ -279,7 +285,7 @@ def _schedule(report: Report) -> str:
     for node in report.graph_module.graph.nodes:
         if node.op != "call_function":
             continue
-        where = recipe.devices.get(node.name, cpu)
+        where = recipe.devices.get(node.name, _HOST)
         if node.name in covers:
             fate = f"kernel %{covers[node.name]}"
         elif where.type == DEVICE_NAME:
