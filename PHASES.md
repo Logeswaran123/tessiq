@@ -18,9 +18,11 @@ work it describes.
 | 6 | Fusion and CUDA codegen | done |
 | 7 | Op coverage and real models | done |
 | 8 | Training, dynamic shapes, tooling | done |
-| 9 | Convolution | optional, next |
-| 10 | Triton emitter | optional |
-| 11 | MLIR export target | optional |
+| 9 | Every operation on the device | next |
+| 10 | Where the time goes | |
+| 11 | Convolution | optional |
+| 12 | Triton emitter | optional |
+| 13 | MLIR export target | optional |
 
 ---
 
@@ -106,7 +108,7 @@ TOML op definitions + `gen_ops.py`; broad elementwise/reduction/movement coverag
 layernorm and softmax as decompositions rather than kernels; layout assignment.
 **Milestone:** a ResNet-18 block and a transformer encoder block compile and run correctly on both
 backends. `docs/op_coverage.md` is generated and non-trivial.
-**Moved out:** conv via cuDNN, to phase 9. It is a second vendor library binding, and the phase's
+**Moved out:** conv via cuDNN, to phase 11. It is a second vendor library binding, and the phase's
 own measurements say the backend is held back by transfers and launches rather than by the
 operations it cannot run.
 
@@ -121,23 +123,47 @@ all 28 kernels.
 support removed the recompiling it was for. Padding to a few fixed sizes now buys only whatever
 those sizes are worth to a kernel, needs masking first, and has no measurement asking for it.
 
-### Phase 9: Convolution (optional)
+### Phase 9: Every operation on the device
+A copy kernel, so that materialising a tensor does not mean sending it to the host and back.
+`clone` is the last operation the encoder block still runs there, and `layout-assign` needs the
+same kernel to materialise an operand a fused loop cannot read in place.
+**Milestone:** `tools/model_coverage.py` reports the encoder block at 80 of 80 operations on the
+device, and `tessiq-explain --sections schedule` shows nothing on the host.
+**Why it is first.** It is four operations and the whole of what is left on that block. Phase 10
+cannot say what the backend costs while part of the graph is still crossing the boundary for a
+reason we already understand.
+
+### Phase 10: Where the time goes
+Separating kernel time from the synchronisation the profiler adds to measure it, and a like for
+like comparison against eager CUDA with the data resident on both sides.
+**Milestone:** a measured breakdown of the gap between tessiq and eager CUDA on the encoder block
+with the profiler's own cost accounted for rather than folded in, and a statement of which of
+kernels, launches and transfers the remainder is.
+**Why it is a phase rather than an afternoon.** The current answer is 1.37 ms against 0.23 ms, and
+the profiled split reads kernel 0.88, transfer 0.54, interpreted 0.40. That kernel figure drains
+the device before stopping its clock, so it is an upper bound holding an unknown amount of
+synchronisation. Every remaining decision in this project depends on which of those three numbers
+is real, and none of them can be trusted until the instrument stops contributing to them.
+
+### Phase 11: Convolution (optional)
 `aten.convolution` via cuDNN, and batch norm alongside it, which together take a ResNet-18 block
 from a third of its operations on the device to all of them.
 **Milestone:** the residual block in `tests/python/test_models.py` runs entirely on the device, and
 `tools/model_coverage.py` reports it.
 **Why it is optional and why it is here.** It is a binding rather than a compiler: cuDNN picks the
-algorithm and tessiq passes descriptors. Phases 7.8 to 7.12 each raised coverage and found the time
-going elsewhere, so a phase whose only product is more coverage earns its place after the tooling
-that would show whether it helped, not before.
+algorithm and tessiq passes descriptors. Phases 7 and 8 each raised coverage and found the time
+going elsewhere, twice making the model slower, so a phase whose only product is more coverage
+comes after the measurement that would show whether it helped. Phase 10 is that measurement, and
+if it says the backend is held back by something conv does not touch, this phase should be read
+again before it is started.
 
-### Phase 10: Triton emitter (optional)
+### Phase 12: Triton emitter (optional)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;
 head-to-head benchmark against the NVRTC emitter on identical clusters.
 **Milestone:** `TESSIQ_EMITTER=triton` produces correct results on the full op test suite, and
 `bench/emitters/` publishes a per-pattern comparison table of the two emitters.
 
-### Phase 11: MLIR export target (optional)
+### Phase 13: MLIR export target (optional)
 `MlirTarget` implementing `LoweringTarget`; Tessiq IR → `linalg`-on-tensors converter; `gen_ops.py`
 extended to emit ODS from the same TOML; standard MLIR bufferization + lowering pipeline to LLVM.
 Gated behind `-DTESSIQ_ENABLE_MLIR=ON`, off by default.
@@ -151,7 +177,12 @@ additive and mostly under your own control. If time gets tight, a repo that stop
 Phase 6, with fusion working and measured, is a strong artifact. A repo that sprawls into Phase 8
 with a broken Phase 4 is not.
 
-### The seams that phases 10 and 11 depend on
+Phases 9 and 10 were added after 8 rather than planned with the rest. Phase 8 left the encoder
+block with four operations on the host and a profiler whose own cost sits inside the figure it
+reports, and both of those have to be settled before a phase that adds coverage can be judged on
+anything but coverage.
+
+### The seams that phases 12 and 13 depend on
 
 Both optional phases are additive only because three interfaces get built earlier. Retrofitting
 them later would mean a rewrite.
