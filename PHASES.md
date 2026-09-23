@@ -19,8 +19,8 @@ work it describes.
 | 7 | Op coverage and real models | done |
 | 8 | Training, dynamic shapes, tooling | done |
 | 9 | Every operation on the device | next |
-| 10 | Where the time goes | |
-| 11 | Convolution | optional |
+| 10 | Where the time goes | done |
+| 11 | Convolution | optional, read the note |
 | 12 | Triton emitter | optional |
 | 13 | MLIR export target | optional |
 
@@ -133,12 +133,27 @@ device, and `tessiq-explain --sections schedule` shows nothing on the host.
 cannot say what the backend costs while part of the graph is still crossing the boundary for a
 reason we already understand.
 
-### Phase 10: Where the time goes
+### Phase 10: Where the time goes (done)
 Separating kernel time from the synchronisation the profiler adds to measure it, and a like for
 like comparison against eager CUDA with the data resident on both sides.
 **Milestone:** a measured breakdown of the gap between tessiq and eager CUDA on the encoder block
 with the profiler's own cost accounted for rather than folded in, and a statement of which of
 kernels, launches and transfers the remainder is.
+**What it found.** None of the three. On the encoder block at batch 8, 128 steps:
+
+| | |
+|---|---|
+| the call | 840 us |
+| the device is busy | 310 us of it, across 28 kernels |
+| so the device idles | about two thirds of the call |
+| eager cuda, the same block | 230 us end to end |
+
+Two separate problems, and the second was not on the list. The kernels cost 310 us, which is more
+than eager CUDA spends on the entire block, so the generated code is not competitive on its own.
+And the host takes 840 us to issue 310 us of work, so the device spends most of the call waiting.
+Splitting that host time: about half is steps with no kernel going one at a time through PyTorch's
+dispatcher, a third is issuing the launches, and a sixth is transfers. The executor is a Python
+loop walking an FX graph, and that loop is the largest single cost in the call.
 **Why it is a phase rather than an afternoon.** The current answer is 1.37 ms against 0.23 ms, and
 the profiled split reads kernel 0.88, transfer 0.54, interpreted 0.40. That kernel figure drains
 the device before stopping its clock, so it is an upper bound holding an unknown amount of
@@ -153,9 +168,13 @@ from a third of its operations on the device to all of them.
 **Why it is optional and why it is here.** It is a binding rather than a compiler: cuDNN picks the
 algorithm and tessiq passes descriptors. Phases 7 and 8 each raised coverage and found the time
 going elsewhere, twice making the model slower, so a phase whose only product is more coverage
-comes after the measurement that would show whether it helped. Phase 10 is that measurement, and
-if it says the backend is held back by something conv does not touch, this phase should be read
-again before it is started.
+comes after the measurement that would show whether it helped.
+**Read this before starting it.** Phase 10 was that measurement, and it says the backend is held
+back by two things convolution does not touch: a Python executor that takes two thirds of the
+call, and generated kernels that cost more than eager CUDA spends on the whole block. Adding
+convolution would take the residual block from 43% of its operations on the device to all of them
+and would not make it faster. It is worth doing for what a ResNet block demonstrates, and it is
+not the next thing to do for speed.
 
 ### Phase 12: Triton emitter (optional)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;

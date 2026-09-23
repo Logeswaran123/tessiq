@@ -13,6 +13,10 @@ Report a distribution, not one timing, and drop the warmup.
 - `where_the_time_goes.py` splits a call into kernels, transfers and host work, and writes a
   chrome trace. It answers why a block is behind rather than by how much.
 
+- `where_the_gap_is.py` splits the distance to eager CUDA into what the generated code costs the
+  device and what everything around it costs the host. The kernels are replayed many times under
+  one pair of stream marks, so the cost of marking divides away.
+
 - `micro/` holds per-pattern comparisons, fused against unfused.
 - `models/` holds model-level runs, fusion on and off.
 - `emitters/` compares NVRTC against Triton on the same clusters. See

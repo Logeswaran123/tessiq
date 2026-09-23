@@ -16,6 +16,7 @@ import torch as _torch  # noqa: F401
 
 from tessiq import _C
 from tessiq.cache import CacheStats, cache_stats, clear_cache
+from tessiq.costs import KernelCost, kernel_costs
 from tessiq.device import (
     DEVICE_NAME,
     MemoryStats,
@@ -47,6 +48,7 @@ from tessiq.recipe import Recipe, build_recipe
 __all__ = [
     "DEVICE_NAME",
     "CacheStats",
+    "KernelCost",
     "MemoryStats",
     "Profile",
     "Recipe",
@@ -69,6 +71,7 @@ __all__ = [
     "gpu_at",
     "gpu_count",
     "import_graph",
+    "kernel_costs",
     "memory_allocated",
     "memory_reserved",
     "memory_stats",
