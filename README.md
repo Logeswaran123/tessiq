@@ -61,9 +61,9 @@ changes, which is its default rather than something a caller asks for. The IR re
 does not know as `?`, and every kernel takes the numbers it needs as arguments: the element count
 and a broadcast's divisor for a fused loop, three extents for a reduction, and m, n and k for a
 matmul. On the encoder block in [`tests/python/test_models.py`](tests/python/test_models.py) that
-is the same 28 kernels a fixed shape gets, crossing between host and device the same 29 times and
-moving the same 1.7 MB. The one form left out is stepping through a permuted operand axis by axis,
-which needs an extent per axis written into the source.
+is the same 28 kernels a fixed shape gets, and the only data to cross between host and device is
+the 128 KB result coming back. The one form left out is stepping through a permuted operand axis by
+axis, which needs an extent per axis written into the source.
 
 `(a*b + c).relu().sigmoid()` on 4M floats on an RTX 5080. The generated kernel is good and the
 path around it is not, so both are measured. From
