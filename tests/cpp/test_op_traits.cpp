@@ -70,6 +70,7 @@ TEST(OpTraitsTest, EverythingTheBackendSupportsHasAWayToRun) {
     case OpCategory::kReduction:   // a generated kernel of its own
     case OpCategory::kMovement:    // the device's view registrations, so no code at all
     case OpCategory::kMatmul:      // cuBLAS
+    case OpCategory::kCopy:        // the device's clone registration, over a generated kernel
       break;
     }
   }

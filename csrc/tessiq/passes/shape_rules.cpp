@@ -61,6 +61,11 @@ std::optional<RuleKind> find_rule(std::string_view op) {
     return std::nullopt;
   case OpCategory::kMatmul:
     return RuleKind::kMatmul;
+  case OpCategory::kCopy:
+    // Same shape in, same shape out, which the unary elementwise rule already says. What it does
+    // not say is that the result is packed however the input was laid out, and no rule here
+    // computes a layout. Imported graphs carry the answer, so this is the shape only.
+    return RuleKind::kUnaryElementwise;
   }
   TESSIQ_UNREACHABLE("unhandled OpCategory");
 }
