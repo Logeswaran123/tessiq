@@ -36,14 +36,22 @@ def _move(value: Any, device: torch.device, resident: ResidentInputs | None = No
         if value.device == device:
             return value
 
+        # Asked before anything is measured. A tensor already on the device from an earlier call
+        # does not cross, so it is not a transfer and is not recorded as one. Recording it counted
+        # a module's weights as moved on every call, which on an encoder block was twelve
+        # megabytes a call that never went anywhere.
+        if resident is not None:
+            kept = resident.lookup(value, device)
+            if kept is not None:
+                return kept
+
         collecting = profiler.current()
         if collecting is None:
-            return value.to(device) if resident is None else resident.move(value, device)
+            return value.to(device) if resident is None else resident.copy(value, device)
 
         with profiler.measure(collecting, f"{value.device} to {device}", "transfer", device) as n:
-            moved = value.to(device) if resident is None else resident.move(value, device)
-            if moved is not value:
-                n.append(value.numel() * value.element_size())
+            moved = value.to(device) if resident is None else resident.copy(value, device)
+            n.append(value.numel() * value.element_size())
             return moved
     if isinstance(value, (list, tuple)):
         return type(value)(_move(item, device, resident) for item in value)
@@ -74,6 +82,15 @@ class ResidentInputs:
 
     def move(self, value: torch.Tensor, device: torch.device) -> torch.Tensor:
         """The device copy of `value`, reusing the last one when nothing about it has changed."""
+        kept = self.lookup(value, device)
+        return kept if kept is not None else self.copy(value, device)
+
+    def lookup(self, value: torch.Tensor, device: torch.device) -> torch.Tensor | None:
+        """The device copy kept from an earlier call, or None when there is none still valid.
+
+        Separate from `move` so a caller can tell a reuse from a copy. The profiler needs exactly
+        that distinction: a reuse moves nothing and must not be reported as a transfer.
+        """
         key = (id(value), str(device))
         with self._lock:
             found = self._entries.get(key)
@@ -85,9 +102,13 @@ class ResidentInputs:
             ):
                 self._hits += 1
                 return found.moved
+        return None
 
+    def copy(self, value: torch.Tensor, device: torch.device) -> torch.Tensor:
+        """Copies `value` to `device` and keeps the copy for the next call."""
         moved = value.to(device)
         entry = _Entry(weakref.ref(value), value.data_ptr(), value._version, moved)
+        key = (id(value), str(device))
         with self._lock:
             self._misses += 1
             self._entries = {k: v for k, v in self._entries.items() if v.source() is not None}

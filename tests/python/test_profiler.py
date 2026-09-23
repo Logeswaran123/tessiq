@@ -223,3 +223,25 @@ def test_profiling_does_not_double_the_call() -> None:
     # Generous, because this is a wall clock on a shared machine. What it catches is a profiler
     # that serialises, which was a factor of two rather than a few percent.
     assert watched < bare * 4 + 0.05
+
+
+def test_an_input_already_on_the_device_is_not_reported_as_moved() -> None:
+    # A module's weights and an input passed again unchanged both stay on the device between
+    # calls. Nothing crosses for them, so nothing may be reported. The profiler used to count every
+    # one of them as a transfer on every call, which put twelve megabytes a call on an encoder
+    # block that only ever moved its two megabyte output.
+    torch.manual_seed(0)
+    layer = torch.nn.Linear(64, 64).eval()
+    example = torch.randn(8, 64)
+    run = torch.compile(layer, backend="tessiq", options={"device": str(tessiq.cpu)})
+
+    with torch.no_grad():
+        run(example)
+        with tessiq.profile() as collected:
+            result = run(example)
+
+    moves = [event for event in collected.events if event.category == "transfer"]
+    moved = sum(event.nbytes for event in moves)
+    assert moved == result.numel() * result.element_size(), (
+        f"only the output crosses; reported {moved} bytes over {len(moves)} transfers"
+    )
