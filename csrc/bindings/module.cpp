@@ -16,6 +16,7 @@
 
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
+#include "tessiq/codegen/timing.h"
 #include "tessiq/ir/recipe.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
@@ -391,6 +392,33 @@ PYBIND11_MODULE(_C, m) {
         py::arg("ir"),
         "CUDA source for every fusion group in a graph, which must have been through "
         "fuse-elementwise.");
+
+  py::class_<tessiq::codegen::DeviceTimer>(m, "DeviceTimer")
+      .def(py::init<int>(), py::arg("ordinal"))
+      .def_property_readonly("ready", &tessiq::codegen::DeviceTimer::ready)
+      .def("start",
+           [](tessiq::codegen::DeviceTimer& timer) {
+             if (auto started = timer.start(); !started) {
+               raise_from_error(started.error());
+             }
+           })
+      .def("stop",
+           [](tessiq::codegen::DeviceTimer& timer) {
+             if (auto stopped = timer.stop(); !stopped) {
+               raise_from_error(stopped.error());
+             }
+           })
+      .def("microseconds", [](const tessiq::codegen::DeviceTimer& timer) {
+        auto elapsed = timer.microseconds();
+        if (!elapsed) {
+          raise_from_error(elapsed.error());
+        }
+        return *elapsed;
+      });
+
+  m.def("device_timing_available",
+        &tessiq::codegen::device_timing_available,
+        "Whether this build can time device work with the device's own clock.");
 
   m.def(
       "default_pipeline",

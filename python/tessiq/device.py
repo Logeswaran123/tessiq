@@ -182,6 +182,21 @@ def backend_name(device: torch.device | str | int | None = None) -> str:
     return str(_C.backend_name(_resolve(device)))
 
 
+def cuda_ordinal(device: torch.device | str | int | None = None) -> int:
+    """Which CUDA device is behind this one, or -1 when none is.
+
+    Index 0 is the host reference, so only 1 and above map onto a GPU. Returning -1 rather than
+    raising is what lets one code path serve both, and it is the answer anything asking this wants
+    for the reference device: there is no CUDA here, carry on.
+    """
+    if not isinstance(device, torch.device):
+        device = torch.device(device) if device is not None else cpu
+    index = device.index or 0
+    if device.type != DEVICE_NAME or index < 1:
+        return -1
+    return index - 1 if backend_name(device) == "cuda" else -1
+
+
 def memory_stats(device: torch.device | str | int | None = None) -> MemoryStats:
     """Allocator counters for one device. Each device has its own; they are never pooled."""
     raw = _C.memory_stats(_resolve(device))

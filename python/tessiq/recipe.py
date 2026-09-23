@@ -16,7 +16,7 @@ import torch
 
 from tessiq import _C
 from tessiq.cache import lookup, signature, store
-from tessiq.device import DEVICE_NAME, backend_name, cpu
+from tessiq.device import cpu, cuda_ordinal
 
 #: The cluster of a step the backend does not claim, matching `tessiq::ir::kHost`.
 HOST = -1
@@ -114,21 +114,9 @@ def build_recipe(
     return recipe
 
 
-def _cuda_ordinal(target: torch.device) -> int:
-    """Which CUDA device to compile kernels for, or -1 for none.
-
-    Index 0 is the host reference, which has no kernels to compile, so only 1 and above map onto a
-    GPU. Returning -1 rather than raising is what lets the same code path serve both.
-    """
-    index = target.index or 0
-    if target.type != DEVICE_NAME or index < 1:
-        return -1
-    return index - 1 if backend_name(target) == "cuda" else -1
-
-
 def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str) -> Recipe:
     host = torch.device("cpu")
-    native = _C.build_recipe_fx(graph_module, name, 512, _cuda_ordinal(target))
+    native = _C.build_recipe_fx(graph_module, name, 512, cuda_ordinal(target))
 
     devices: dict[str, torch.device] = {}
     for step in native.recipe.steps:

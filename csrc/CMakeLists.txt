@@ -106,7 +106,8 @@ add_library(tessiq_codegen STATIC
   tessiq/codegen/nvrtc.cpp
   tessiq/codegen/pack.cpp
   tessiq/codegen/program.cpp
-  tessiq/codegen/reduction.cpp)
+  tessiq/codegen/reduction.cpp
+  tessiq/codegen/timing.cpp)
 
 target_link_libraries(tessiq_codegen PUBLIC tessiq::ir)
 
