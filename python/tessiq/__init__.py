@@ -14,7 +14,7 @@ from __future__ import annotations
 # carries an RPATH, but that only covers layouts where torch sits next to us.
 import torch as _torch  # noqa: F401
 
-from tessiq import _C
+from tessiq import _C, library
 from tessiq.cache import CacheStats, cache_stats, clear_cache
 from tessiq.costs import KernelCost, kernel_costs
 from tessiq.device import (
@@ -72,6 +72,7 @@ __all__ = [
     "gpu_count",
     "import_graph",
     "kernel_costs",
+    "library",
     "memory_allocated",
     "memory_reserved",
     "memory_stats",
