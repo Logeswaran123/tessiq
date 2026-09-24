@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "tessiq/codegen/nvrtc.h"
+#include "tessiq/codegen/stream.h"
 #include "tessiq/support/result.h"
 
 namespace tessiq::codegen {
@@ -37,27 +38,28 @@ class Program {
   Program(Program&&) = delete;
   Program& operator=(Program&&) = delete;
 
-  /// Launches the kernel with `blocks` blocks of `kBlockSize` threads.
+  /// Launches the kernel with `blocks` blocks of `kBlockSize` threads on `stream`.
   ///
   /// `buffers` are device pointers in the order the kernel takes them: every input, then the
   /// output. `scalars` follow them, which is how the kernel learns its extents. An elementwise
   /// kernel takes one, its element count; a reduction takes three.
   ///
   /// The launch is asynchronous. Nothing here synchronises, so the caller orders the result
-  /// against whatever reads it.
+  /// against whatever reads it, which is what choosing the stream is for.
   [[nodiscard]] virtual Result<void> launch(const std::vector<void*>& buffers,
                                             const std::vector<std::int64_t>& scalars,
-                                            std::int64_t blocks) const = 0;
+                                            std::int64_t blocks,
+                                            Stream stream) const = 0;
 
   /// Launches one thread per element, which is what every elementwise kernel wants.
   ///
   /// The grid is derived from the count rather than passed, because an elementwise kernel's grid
   /// is never anything else and making the caller compute it is one more thing to get wrong.
-  [[nodiscard]] Result<void> launch(const std::vector<void*>& buffers,
-                                    std::int64_t elements) const {
+  [[nodiscard]] Result<void>
+  launch(const std::vector<void*>& buffers, std::int64_t elements, Stream stream) const {
     const auto blocks = (elements + static_cast<std::int64_t>(kBlockSize) - 1) /
                         static_cast<std::int64_t>(kBlockSize);
-    return launch(buffers, {elements}, blocks);
+    return launch(buffers, {elements}, blocks, stream);
   }
 
  protected:

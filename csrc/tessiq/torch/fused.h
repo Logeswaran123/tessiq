@@ -16,6 +16,7 @@
 #include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
 #include "tessiq/codegen/reduction.h"
+#include "tessiq/codegen/stream.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/support/result.h"
 
@@ -49,12 +50,13 @@ struct FusedKernel {
   /// Loaded and owned by the codegen layer, which keeps it for the life of the process.
   const codegen::Program* program = nullptr;
 
-  /// Runs the kernel. `inputs` and `output` must be contiguous tensors on the device this was
-  /// compiled for, and `output` must already be the right size.
+  /// Runs the kernel on `stream`. `inputs` and `output` must be contiguous tensors on the device
+  /// this was compiled for, and `output` must already be the right size.
   ///
   /// Asynchronous, like any launch. The caller orders the result against whatever reads it.
   [[nodiscard]] Result<void> launch(const std::vector<at::Tensor>& tensors,
-                                    const at::Tensor& out) const;
+                                    const at::Tensor& out,
+                                    codegen::Stream stream) const;
 };
 
 /// Compiles every fusion group in `graph` for CUDA device `ordinal`.
@@ -120,7 +122,8 @@ struct ReductionKernel {
   [[nodiscard]] Result<std::vector<std::int64_t>>
   output_shape(const std::vector<at::Tensor>& tensors) const;
 
-  [[nodiscard]] Result<void> launch(const at::Tensor& in, const at::Tensor& out) const;
+  [[nodiscard]] Result<void>
+  launch(const at::Tensor& in, const at::Tensor& out, codegen::Stream stream) const;
 };
 
 /// Compiles every reduction in `graph` that the emitter can write.
@@ -163,9 +166,10 @@ struct GemmKernel {
   [[nodiscard]] Result<std::vector<std::int64_t>>
   output_shape(const std::vector<at::Tensor>& tensors) const;
 
-  /// Runs it. `tensors` matches `inputs()`.
+  /// Runs it on `stream`. `tensors` matches `inputs()`.
   [[nodiscard]] Result<void> launch(const std::vector<at::Tensor>& tensors,
-                                    const at::Tensor& out) const;
+                                    const at::Tensor& out,
+                                    codegen::Stream stream) const;
 };
 
 /// Describes every matrix multiply in `graph` that cuBLAS can run.
@@ -194,9 +198,10 @@ struct ConvKernel {
     return {description.output_shape.begin(), description.output_shape.end()};
   }
 
-  /// Runs it. `tensors` matches `inputs()`, packed NCHW.
+  /// Runs it on `stream`. `tensors` matches `inputs()`, packed NCHW.
   [[nodiscard]] Result<void> launch(const std::vector<at::Tensor>& tensors,
-                                    const at::Tensor& out) const;
+                                    const at::Tensor& out,
+                                    codegen::Stream stream) const;
 };
 
 /// Plans every convolution in `graph` that cuDNN can run.

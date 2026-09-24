@@ -9,6 +9,7 @@
 
 // Teaches pybind11 how to convert a Python torch.Tensor to an at::Tensor. Without it a
 // binding taking at::Tensor rejects every tensor it is given.
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 
@@ -16,6 +17,7 @@
 
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
+#include "tessiq/codegen/stream.h"
 #include "tessiq/codegen/timing.h"
 #include "tessiq/ir/recipe.h"
 #include "tessiq/ir/text.h"
@@ -31,6 +33,25 @@
 #include "tessiq/version.h"
 
 namespace py = pybind11;
+
+using tessiq::codegen::Stream;
+
+namespace {
+
+/// What Python passes for the legacy default stream, which is where every launch goes unless the
+/// caller names another. Zero because that is the stream's handle.
+constexpr std::uintptr_t kLegacyDefaultStream = 0;
+
+/// The stream whose handle Python holds as `address`, which is what `Stream.cuda_stream` gives.
+///
+/// The driver hands streams out as pointers and Python can only carry them as integers, so the
+/// conversion has to happen somewhere, and this is the boundary where every other one happens.
+Stream stream_at(std::uintptr_t address) {
+  // NOLINTNEXTLINE(performance-no-int-to-ptr)
+  return Stream{reinterpret_cast<void*>(address)};
+}
+
+} // namespace
 
 namespace {
 
@@ -127,14 +148,16 @@ void bind_kernels(py::module_& m) {
           "launch",
           [](const tessiq::torch_backend::FusedKernel& kernel,
              const std::vector<at::Tensor>& inputs,
-             const at::Tensor& out) {
-            auto result = kernel.launch(inputs, out);
+             const at::Tensor& out,
+             std::uintptr_t stream) {
+            auto result = kernel.launch(inputs, out, stream_at(stream));
             if (!result) {
               raise_from_error(result.error());
             }
           },
           py::arg("inputs"),
           py::arg("out"),
+          py::arg("stream") = kLegacyDefaultStream,
           "Runs the kernel. Asynchronous, so the caller orders the result against what reads it.");
 
   // Exposes `inputs` as a one-element list and takes `launch` the same way FusedKernel does, so
@@ -170,18 +193,20 @@ void bind_kernels(py::module_& m) {
           "launch",
           [](const tessiq::torch_backend::ReductionKernel& kernel,
              const std::vector<at::Tensor>& inputs,
-             const at::Tensor& out) {
+             const at::Tensor& out,
+             std::uintptr_t stream) {
             if (inputs.size() != 1) {
               raise_from_error(tessiq::invalid_argument("a reduction takes one input, got " +
                                                         std::to_string(inputs.size())));
             }
-            auto result = kernel.launch(inputs.front(), out);
+            auto result = kernel.launch(inputs.front(), out, stream_at(stream));
             if (!result) {
               raise_from_error(result.error());
             }
           },
           py::arg("inputs"),
           py::arg("out"),
+          py::arg("stream") = kLegacyDefaultStream,
           "Runs the reduction. Asynchronous, like a fused kernel's launch.");
 
   // Same shape as the other two, so the executor runs all three through one path.
@@ -209,14 +234,16 @@ void bind_kernels(py::module_& m) {
           "launch",
           [](const tessiq::torch_backend::ConvKernel& kernel,
              const std::vector<at::Tensor>& inputs,
-             const at::Tensor& out) {
-            auto result = kernel.launch(inputs, out);
+             const at::Tensor& out,
+             std::uintptr_t stream) {
+            auto result = kernel.launch(inputs, out, stream_at(stream));
             if (!result) {
               raise_from_error(result.error());
             }
           },
           py::arg("inputs"),
           py::arg("out"),
+          py::arg("stream") = kLegacyDefaultStream,
           "Runs the convolution through cuDNN. Asynchronous, like a kernel launch.");
 
   py::class_<tessiq::torch_backend::GemmKernel>(m, "GemmKernel")
@@ -254,14 +281,16 @@ void bind_kernels(py::module_& m) {
           "launch",
           [](const tessiq::torch_backend::GemmKernel& kernel,
              const std::vector<at::Tensor>& inputs,
-             const at::Tensor& out) {
-            auto result = kernel.launch(inputs, out);
+             const at::Tensor& out,
+             std::uintptr_t stream) {
+            auto result = kernel.launch(inputs, out, stream_at(stream));
             if (!result) {
               raise_from_error(result.error());
             }
           },
           py::arg("inputs"),
           py::arg("out"),
+          py::arg("stream") = kLegacyDefaultStream,
           "Runs the multiply. Asynchronous, like a kernel launch.");
 }
 

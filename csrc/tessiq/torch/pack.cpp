@@ -15,6 +15,7 @@
 #include "tessiq/codegen/cubin_cache.h"
 #include "tessiq/codegen/pack.h"
 #include "tessiq/codegen/program.h"
+#include "tessiq/codegen/stream.h"
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 
@@ -121,7 +122,9 @@ Result<void> pack_on_device(const at::Tensor& src, const at::Tensor& dst) {
   const std::vector<void*> buffers{src.data_ptr(), dst.data_ptr()};
   const auto blocks = (src.numel() + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
                       static_cast<std::int64_t>(codegen::kBlockSize);
-  return program->launch(buffers, scalars, blocks);
+  // An eager copy has no stream of its own to be handed, so it goes where every launch goes and
+  // is ordered against the kernels and transfers around it the same way.
+  return program->launch(buffers, scalars, blocks, codegen::kDefaultStream);
 }
 
 } // namespace tessiq::torch_backend

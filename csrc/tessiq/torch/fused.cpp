@@ -19,6 +19,7 @@
 #include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
 #include "tessiq/codegen/reduction.h"
+#include "tessiq/codegen/stream.h"
 #include "tessiq/ir/types.h"
 #include "tessiq/support/logging.h"
 
@@ -41,7 +42,8 @@ divisor_for(codegen::OperandRead::Kind kind, std::int64_t operand, std::int64_t 
 }
 
 Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
-                                 const at::Tensor& out) const {
+                                 const at::Tensor& out,
+                                 codegen::Stream stream) const {
   /// Whether operand `i` of this many elements can be read for a result of `count`.
   ///
   /// An operand read at `i` has to match exactly. One that broadcasts has to divide the result,
@@ -105,7 +107,7 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
   buffers.push_back(out.data_ptr());
 
   if (!dynamic) {
-    return program->launch(buffers, count);
+    return program->launch(buffers, count, stream);
   }
 
   // The element count, then one divisor per operand that needs one, in operand order. That is
@@ -118,7 +120,7 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
   }
   const auto blocks = (count + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
                       static_cast<std::int64_t>(codegen::kBlockSize);
-  return program->launch(buffers, scalars, blocks);
+  return program->launch(buffers, scalars, blocks, stream);
 }
 
 Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordinal) {
@@ -228,7 +230,8 @@ ReductionKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
   return kept;
 }
 
-Result<void> ReductionKernel::launch(const at::Tensor& in, const at::Tensor& out) const {
+Result<void>
+ReductionKernel::launch(const at::Tensor& in, const at::Tensor& out, codegen::Stream stream) const {
   if (program == nullptr) {
     return internal_error("reduction " + output + " has no compiled kernel");
   }
@@ -247,8 +250,10 @@ Result<void> ReductionKernel::launch(const at::Tensor& in, const at::Tensor& out
   }
 
   const std::vector<void*> buffers{in.data_ptr(), out.data_ptr()};
-  return program->launch(
-      buffers, {extents.outer, extents.reduce, extents.inner}, codegen::blocks_for(shape, extents));
+  return program->launch(buffers,
+                         {extents.outer, extents.reduce, extents.inner},
+                         codegen::blocks_for(shape, extents),
+                         stream);
 }
 
 /// Compiles one reduction, or nothing when it has no kernel shape or no code the emitter writes.
@@ -409,7 +414,8 @@ GemmKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
 }
 
 Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
-                                const at::Tensor& out) const {
+                                const at::Tensor& out,
+                                codegen::Stream stream) const {
   const std::vector<std::string> expected = inputs();
   if (tensors.size() != expected.size()) {
     return invalid_argument("gemm " + description.output + " takes " +
@@ -445,18 +451,20 @@ Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
         fill->launch(buffers,
                      {total, extents.n},
                      (total + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
-                         static_cast<std::int64_t>(codegen::kBlockSize)));
+                         static_cast<std::int64_t>(codegen::kBlockSize),
+                     stream));
   } else {
     TESSIQ_RETURN_IF_ERROR(codegen::zero_fill(out.data_ptr(),
                                               static_cast<std::size_t>(total) *
                                                   static_cast<std::size_t>(out.element_size()),
-                                              ordinal));
+                                              ordinal,
+                                              stream));
   }
 
   const codegen::GemmBuffers buffers{.lhs = tensors[0].const_data_ptr(),
                                      .rhs = tensors[1].const_data_ptr(),
                                      .output = out.data_ptr()};
-  return codegen::launch_gemm(description, extents, buffers, ordinal);
+  return codegen::launch_gemm(description, extents, buffers, ordinal, stream);
 }
 
 Result<std::vector<GemmKernel>> compile_gemms(const ir::Graph& graph, int ordinal) {
@@ -495,7 +503,8 @@ Result<std::vector<GemmKernel>> compile_gemms(const ir::Graph& graph, int ordina
 }
 
 Result<void> ConvKernel::launch(const std::vector<at::Tensor>& tensors,
-                                const at::Tensor& out) const {
+                                const at::Tensor& out,
+                                codegen::Stream stream) const {
   if (plan == nullptr) {
     return internal_error("convolution " + description.output + " has no plan");
   }
@@ -519,7 +528,7 @@ Result<void> ConvKernel::launch(const std::vector<at::Tensor>& tensors,
   }
 
   const void* bias = description.bias.has_value() ? tensors[2].data_ptr() : nullptr;
-  return plan->launch(tensors[0].data_ptr(), tensors[1].data_ptr(), bias, out.data_ptr());
+  return plan->launch(tensors[0].data_ptr(), tensors[1].data_ptr(), bias, out.data_ptr(), stream);
 }
 
 Result<std::vector<ConvKernel>> compile_convs(const ir::Graph& graph, int ordinal) {

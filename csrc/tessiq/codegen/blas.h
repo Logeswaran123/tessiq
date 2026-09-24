@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "tessiq/codegen/gemm.h"
+#include "tessiq/codegen/stream.h"
 #include "tessiq/support/result.h"
 
 namespace tessiq::codegen {
@@ -21,11 +22,12 @@ struct GemmBuffers {
   void* output = nullptr;
 };
 
-/// Writes `bytes` zero bytes at `data` on device `ordinal`.
+/// Writes `bytes` zero bytes at `data` on device `ordinal`, queued on `stream`.
 ///
 /// What a plain matmul accumulates into. A device memset rather than a tensor operation, because
-/// zeroing a tessiq tensor through torch reaches the fallback and costs a host round trip.
-Result<void> zero_fill(void* data, std::size_t bytes, int ordinal);
+/// zeroing a tessiq tensor through torch reaches the fallback and costs a host round trip. It goes
+/// on the same stream as the multiply that reads it, which is what orders the two.
+Result<void> zero_fill(void* data, std::size_t bytes, int ordinal, Stream stream);
 
 /// Runs `kernel` at `extents` on device `ordinal`, writing into `buffers.output`.
 ///
@@ -38,10 +40,11 @@ Result<void> zero_fill(void* data, std::size_t bytes, int ordinal);
 /// broadcast over every row for an addmm. BLAS scales the destination by beta and adds, which is
 /// the only way it takes an accumulator, so filling it is the caller's job.
 ///
-/// Asynchronous, like a kernel launch. Nothing here synchronises.
+/// Queued on `stream`, and asynchronous like a kernel launch. Nothing here synchronises.
 Result<void> launch_gemm(const GemmKernel& kernel,
                          const GemmExtents& extents,
                          const GemmBuffers& buffers,
-                         int ordinal);
+                         int ordinal,
+                         Stream stream);
 
 } // namespace tessiq::codegen

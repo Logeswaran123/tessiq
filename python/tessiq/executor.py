@@ -22,6 +22,14 @@ import torch
 from tessiq import profiler
 from tessiq.recipe import Recipe
 
+#: The stream every launch goes to: the legacy default stream, whose handle is zero.
+#:
+#: The transfers the runtime does go to the device's own stream, which is a blocking stream, and the
+#: legacy default stream orders itself against those. So a kernel queued here after the copy that
+#: fills its input waits for it, and a copy issued after the kernel waits for the kernel, without
+#: an explicit synchronise anywhere. A kernel given any other stream loses that ordering.
+LEGACY_DEFAULT_STREAM = 0
+
 
 def _move(value: Any, device: torch.device, resident: ResidentInputs | None = None) -> Any:
     """Move a tensor to ``device``, leaving anything else alone.
@@ -220,17 +228,13 @@ class RecipeExecutor(torch.fx.Interpreter):
 
         out = _output_for(kernel, node, inputs, device)
 
-        # The launch goes to the default stream and the transfers the runtime does go to the
-        # device's own, which is a blocking stream. The legacy default stream orders itself
-        # against those, so a copy issued after this waits for the kernel without an explicit
-        # synchronise here.
         collecting = profiler.current()
         if collecting is None:
-            kernel.launch(inputs, out)
+            kernel.launch(inputs, out, stream=LEGACY_DEFAULT_STREAM)
             return out
 
         with profiler.measure(collecting, node.name, "kernel", device):
-            kernel.launch(inputs, out)
+            kernel.launch(inputs, out, stream=LEGACY_DEFAULT_STREAM)
         return out
 
     def call_function(self, target: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
