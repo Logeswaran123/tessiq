@@ -9,9 +9,14 @@
 
 // Teaches pybind11 how to convert a Python torch.Tensor to an at::Tensor. Without it a
 // binding taking at::Tensor rejects every tensor it is given.
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include <torch/csrc/utils/pybind.h>
 
@@ -29,6 +34,7 @@
 #include "tessiq/torch/backend.h"
 #include "tessiq/torch/fused.h"
 #include "tessiq/torch/importer.h"
+#include "tessiq/torch/kernel.h"
 #include "tessiq/torch/partition.h"
 #include "tessiq/version.h"
 
@@ -117,181 +123,100 @@ std::string emit_cuda_source(const std::string& ir) {
 
 } // namespace
 
-/// Binds the three kinds of compiled work: a fused loop, a reduction and a matmul.
+/// Raises the Python exception for a failed result, or returns what it holds.
+template <typename T>
+T value_or_raise(tessiq::Result<T> result) {
+  if (!result) {
+    raise_from_error(result.error());
+  }
+  return std::move(result).value();
+}
+
+/// Raises the Python exception for a failed result that holds nothing.
+void value_or_raise(const tessiq::Result<void>& result) {
+  if (!result) {
+    raise_from_error(result.error());
+  }
+}
+
+/// Binds compiled work: the interface every kernel implements, and what each kind adds to it.
 ///
-/// Separate from the module body because that is one function, and the complexity
-/// budget for it is spent on the twenty other things it binds.
+/// The executor only uses the base class. The kinds are bound as subclasses so that a test or a
+/// report can still ask a matmul whether it reads an operand transposed, and pybind11 hands back
+/// the most derived type it knows, so `isinstance` works on what a compiled graph returns.
 void bind_kernels(py::module_& m) {
-  py::class_<tessiq::torch_backend::FusedKernel>(m, "FusedKernel")
-      .def_readonly("group", &tessiq::torch_backend::FusedKernel::group)
-      .def_readonly("inputs", &tessiq::torch_backend::FusedKernel::inputs)
-      .def_readonly("output", &tessiq::torch_backend::FusedKernel::output)
-      .def_readonly("members", &tessiq::torch_backend::FusedKernel::members)
-      .def_readonly("elements", &tessiq::torch_backend::FusedKernel::elements)
-      .def("output_shape",
-           [](const tessiq::torch_backend::FusedKernel& kernel,
-              const std::vector<at::Tensor>& tensors) {
-             // Every buffer in a group has the result's shape, which is what lets one index walk
-             // all of them, so the first input is the answer.
-             static_cast<void>(kernel);
-             return tensors.empty() ? std::vector<std::int64_t>{}
-                                    : std::vector<std::int64_t>(tensors.front().sizes().begin(),
-                                                                tensors.front().sizes().end());
-           })
-      .def_property_readonly("has_dynamic_extent",
-                             [](const tessiq::torch_backend::FusedKernel& kernel) {
-                               return kernel.elements == tessiq::ir::kDynamic;
-                             })
-      .def_property_readonly("packs_inputs",
-                             [](const tessiq::torch_backend::FusedKernel&) { return true; })
+  using tessiq::torch_backend::ConvKernel;
+  using tessiq::torch_backend::FusedKernel;
+  using tessiq::torch_backend::GemmKernel;
+  using tessiq::torch_backend::Kernel;
+  using tessiq::torch_backend::ReductionKernel;
+
+  py::class_<Kernel, std::shared_ptr<Kernel>>(m, "Kernel")
+      .def_property_readonly("kind",
+                             [](const Kernel& kernel) { return std::string(kernel.kind()); })
+      .def_property_readonly("inputs", &Kernel::inputs)
+      .def_property_readonly("output", &Kernel::output)
+      .def_property_readonly("members", &Kernel::members)
+      .def_property_readonly("packs_inputs", &Kernel::packs_inputs)
+      .def_property_readonly("has_dynamic_extent", &Kernel::has_dynamic_extent)
+      .def(
+          "output_shape",
+          [](const Kernel& kernel, const std::vector<at::Tensor>& tensors) {
+            return value_or_raise(kernel.output_shape(tensors));
+          },
+          py::arg("inputs"))
       .def(
           "launch",
-          [](const tessiq::torch_backend::FusedKernel& kernel,
+          [](const Kernel& kernel,
              const std::vector<at::Tensor>& inputs,
              const at::Tensor& out,
              std::uintptr_t stream) {
-            auto result = kernel.launch(inputs, out, stream_at(stream));
-            if (!result) {
-              raise_from_error(result.error());
-            }
+            value_or_raise(kernel.launch(inputs, out, stream_at(stream)));
           },
           py::arg("inputs"),
           py::arg("out"),
           py::arg("stream") = kLegacyDefaultStream,
-          "Runs the kernel. Asynchronous, so the caller orders the result against what reads it.");
+          "Runs the kernel on `stream`. Asynchronous, so the caller orders the result against "
+          "whatever reads it.");
 
-  // Exposes `inputs` as a one-element list and takes `launch` the same way FusedKernel does, so
-  // the executor runs both kinds through one path and does not branch on which it has.
-  py::class_<tessiq::torch_backend::ReductionKernel>(m, "ReductionKernel")
-      .def_readonly("output", &tessiq::torch_backend::ReductionKernel::output)
-      .def_property_readonly("inputs",
-                             [](const tessiq::torch_backend::ReductionKernel& kernel) {
-                               return std::vector<std::string>{kernel.input};
-                             })
-      .def_readonly("outer", &tessiq::torch_backend::ReductionKernel::outer)
-      .def_readonly("reduce", &tessiq::torch_backend::ReductionKernel::reduce)
-      .def_readonly("inner", &tessiq::torch_backend::ReductionKernel::inner)
-      .def_property_readonly("blocks",
-                             [](const tessiq::torch_backend::ReductionKernel& kernel) {
-                               return tessiq::codegen::blocks_for(kernel.shape, kernel.extents());
-                             })
-      .def_property_readonly("elements", &tessiq::torch_backend::ReductionKernel::inputs)
-      .def_property_readonly("has_dynamic_extent",
-                             &tessiq::torch_backend::ReductionKernel::has_dynamic_extent)
-      .def("output_shape",
-           [](const tessiq::torch_backend::ReductionKernel& kernel,
-              const std::vector<at::Tensor>& tensors) {
-             auto shape = kernel.output_shape(tensors);
-             if (!shape) {
-               raise_from_error(shape.error());
-             }
-             return std::move(shape).value();
-           })
-      .def_property_readonly("packs_inputs",
-                             [](const tessiq::torch_backend::ReductionKernel&) { return true; })
-      .def(
-          "launch",
-          [](const tessiq::torch_backend::ReductionKernel& kernel,
-             const std::vector<at::Tensor>& inputs,
-             const at::Tensor& out,
-             std::uintptr_t stream) {
-            if (inputs.size() != 1) {
-              raise_from_error(tessiq::invalid_argument("a reduction takes one input, got " +
-                                                        std::to_string(inputs.size())));
-            }
-            auto result = kernel.launch(inputs.front(), out, stream_at(stream));
-            if (!result) {
-              raise_from_error(result.error());
-            }
-          },
-          py::arg("inputs"),
-          py::arg("out"),
-          py::arg("stream") = kLegacyDefaultStream,
-          "Runs the reduction. Asynchronous, like a fused kernel's launch.");
+  py::class_<FusedKernel, Kernel, std::shared_ptr<FusedKernel>>(m, "FusedKernel")
+      .def_property_readonly("group",
+                             [](const FusedKernel& kernel) { return kernel.parts().group; })
+      .def_property_readonly("elements",
+                             [](const FusedKernel& kernel) { return kernel.parts().elements; });
 
-  // Same shape as the other two, so the executor runs all three through one path.
-  py::class_<tessiq::torch_backend::ConvKernel>(m, "ConvKernel")
-      .def_property_readonly("output", &tessiq::torch_backend::ConvKernel::output)
-      .def_property_readonly("inputs", &tessiq::torch_backend::ConvKernel::inputs)
-      // cuDNN reads packed NCHW and was told so when the plan was built, so the executor packs.
-      .def_property_readonly("packs_inputs",
-                             [](const tessiq::torch_backend::ConvKernel&) { return true; })
-      // A convolution whose shapes were not known has no plan, so every one here is fixed.
-      .def_property_readonly("has_dynamic_extent",
-                             [](const tessiq::torch_backend::ConvKernel&) { return false; })
-      .def_property_readonly("algorithm",
-                             [](const tessiq::torch_backend::ConvKernel& kernel) {
-                               return kernel.plan == nullptr ? -1 : kernel.plan->algorithm();
-                             })
-      .def_property_readonly("workspace_bytes",
-                             [](const tessiq::torch_backend::ConvKernel& kernel) {
-                               return kernel.plan == nullptr ? 0 : kernel.plan->workspace_bytes();
-                             })
-      .def("output_shape",
-           [](const tessiq::torch_backend::ConvKernel& kernel,
-              const std::vector<at::Tensor>& /*tensors*/) { return kernel.output_shape(); })
-      .def(
-          "launch",
-          [](const tessiq::torch_backend::ConvKernel& kernel,
-             const std::vector<at::Tensor>& inputs,
-             const at::Tensor& out,
-             std::uintptr_t stream) {
-            auto result = kernel.launch(inputs, out, stream_at(stream));
-            if (!result) {
-              raise_from_error(result.error());
-            }
-          },
-          py::arg("inputs"),
-          py::arg("out"),
-          py::arg("stream") = kLegacyDefaultStream,
-          "Runs the convolution through cuDNN. Asynchronous, like a kernel launch.");
+  py::class_<ReductionKernel, Kernel, std::shared_ptr<ReductionKernel>>(m, "ReductionKernel")
+      .def_property_readonly("outer",
+                             [](const ReductionKernel& kernel) { return kernel.parts().outer; })
+      .def_property_readonly("reduce",
+                             [](const ReductionKernel& kernel) { return kernel.parts().reduce; })
+      .def_property_readonly("inner",
+                             [](const ReductionKernel& kernel) { return kernel.parts().inner; })
+      .def_property_readonly("blocks", &ReductionKernel::blocks)
+      .def_property_readonly("elements", &ReductionKernel::input_elements);
 
-  py::class_<tessiq::torch_backend::GemmKernel>(m, "GemmKernel")
-      .def_property_readonly("output", &tessiq::torch_backend::GemmKernel::output)
-      .def_property_readonly("inputs", &tessiq::torch_backend::GemmKernel::inputs)
-      // The one kernel that reads a layout rather than requiring one. Packing a transposed
-      // operand before handing it over would move the data and leave the transpose flag
-      // describing a layout that is no longer there.
-      .def_property_readonly("packs_inputs",
-                             [](const tessiq::torch_backend::GemmKernel&) { return false; })
+  py::class_<GemmKernel, Kernel, std::shared_ptr<GemmKernel>>(m, "GemmKernel")
       .def_property_readonly("transposed",
-                             [](const tessiq::torch_backend::GemmKernel& kernel) {
-                               return std::make_pair(kernel.description.lhs.transposed,
-                                                     kernel.description.rhs.transposed);
+                             [](const GemmKernel& kernel) {
+                               const auto& description = kernel.parts().description;
+                               return std::make_pair(description.lhs.transposed,
+                                                     description.rhs.transposed);
                              })
-      .def_property_readonly("extents",
-                             [](const tessiq::torch_backend::GemmKernel& kernel) {
-                               return std::make_tuple(kernel.description.batch,
-                                                      kernel.description.m,
-                                                      kernel.description.n,
-                                                      kernel.description.k);
+      .def_property_readonly("extents", [](const GemmKernel& kernel) {
+        const auto& description = kernel.parts().description;
+        return std::make_tuple(description.batch, description.m, description.n, description.k);
+      });
+
+  py::class_<ConvKernel, Kernel, std::shared_ptr<ConvKernel>>(m, "ConvKernel")
+      .def_property_readonly("algorithm",
+                             [](const ConvKernel& kernel) {
+                               const auto& plan = kernel.parts().plan;
+                               return plan == nullptr ? -1 : plan->algorithm();
                              })
-      .def_property_readonly("has_dynamic_extent",
-                             &tessiq::torch_backend::GemmKernel::has_dynamic_extent)
-      .def("output_shape",
-           [](const tessiq::torch_backend::GemmKernel& kernel,
-              const std::vector<at::Tensor>& tensors) {
-             auto shape = kernel.output_shape(tensors);
-             if (!shape) {
-               raise_from_error(shape.error());
-             }
-             return std::move(shape).value();
-           })
-      .def(
-          "launch",
-          [](const tessiq::torch_backend::GemmKernel& kernel,
-             const std::vector<at::Tensor>& inputs,
-             const at::Tensor& out,
-             std::uintptr_t stream) {
-            auto result = kernel.launch(inputs, out, stream_at(stream));
-            if (!result) {
-              raise_from_error(result.error());
-            }
-          },
-          py::arg("inputs"),
-          py::arg("out"),
-          py::arg("stream") = kLegacyDefaultStream,
-          "Runs the multiply. Asynchronous, like a kernel launch.");
+      .def_property_readonly("workspace_bytes", [](const ConvKernel& kernel) {
+        const auto& plan = kernel.parts().plan;
+        return plan == nullptr ? std::size_t{0} : plan->workspace_bytes();
+      });
 }
 
 PYBIND11_MODULE(_C, m) {
@@ -405,10 +330,7 @@ PYBIND11_MODULE(_C, m) {
 
   py::class_<tessiq::torch_backend::CompiledGraph>(m, "CompiledGraph")
       .def_readonly("recipe", &tessiq::torch_backend::CompiledGraph::recipe)
-      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels)
-      .def_readonly("reductions", &tessiq::torch_backend::CompiledGraph::reductions)
-      .def_readonly("gemms", &tessiq::torch_backend::CompiledGraph::gemms)
-      .def_readonly("convs", &tessiq::torch_backend::CompiledGraph::convs);
+      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels);
 
   m.def(
       "build_recipe_fx",

@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <map>
+#include <memory>
 #include <pybind11/pybind11.h>
 #include <string>
 #include <string_view>
@@ -12,7 +13,7 @@
 
 #include "tessiq/ir/recipe.h"
 #include "tessiq/support/result.h"
-#include "tessiq/torch/fused.h"
+#include "tessiq/torch/kernel.h"
 
 namespace tessiq::torch_backend {
 
@@ -44,21 +45,10 @@ Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::
 struct CompiledGraph {
   ir::Recipe recipe;
 
-  /// One per fusion group the emitter could write code for. Empty on a build with no CUDA
-  /// toolkit, and short of the number of groups when the emitter declined one.
-  std::vector<FusedKernel> kernels;
-
-  /// One per reduction the emitter could write code for. Kept apart from `kernels` because a
-  /// reduction is one operation on its own rather than a group of fused ones, so it carries
-  /// different extents and launches on a different grid.
-  std::vector<ReductionKernel> reductions;
-
-  /// One per matrix multiply cuBLAS can run. No compiled code behind these: what they carry is
-  /// the shape of the library call.
-  std::vector<GemmKernel> gemms;
-
-  /// One per convolution cuDNN has a plan for.
-  std::vector<ConvKernel> convs;
+  /// Every kernel the graph can run on the device, of whatever kind. Empty on a build with no CUDA
+  /// toolkit, and short of what the graph could use wherever the compiler declined something,
+  /// which then runs one operation at a time.
+  std::vector<std::shared_ptr<Kernel>> kernels;
 };
 
 /// Imports an FX graph, partitions it, fuses it, and lowers the result.
