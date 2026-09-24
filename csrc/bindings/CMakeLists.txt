@@ -42,6 +42,7 @@ endif()
 pybind11_add_module(_C MODULE
   module.cpp
   ../tessiq/torch/backend.cpp
+  ../tessiq/torch/custom.cpp
   ../tessiq/torch/fused.cpp
   ../tessiq/torch/importer.cpp
   ../tessiq/torch/partition.cpp

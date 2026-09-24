@@ -99,6 +99,12 @@ class ConvKernel(Kernel):
     algorithm: int
     workspace_bytes: int
 
+def register_elementwise(
+    name: str, canonical: str, expression: str, arity: int, dtypes: list[str]
+) -> None: ...
+def registered_ops() -> list[str]: ...
+def compile_elementwise(name: str, arity: int, dtype: str, ordinal: int) -> Kernel: ...
+
 class CompiledGraph:
     recipe: Recipe
     kernels: list[Kernel]
