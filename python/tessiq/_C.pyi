@@ -99,6 +99,18 @@ class ConvKernel(Kernel):
     algorithm: int
     workspace_bytes: int
 
+class Program:
+    def launch(
+        self,
+        tensors: list[Any],
+        arguments: list[tuple[str, int | float]],
+        grid: tuple[int, int, int],
+        block: tuple[int, int, int],
+        shared: int = ...,
+        stream: int = ...,
+    ) -> None: ...
+
+def compile_program(source: str, entry: str, ordinal: int) -> Program: ...
 def register_elementwise(
     name: str, canonical: str, expression: str, arity: int, dtypes: list[str]
 ) -> None: ...

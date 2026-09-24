@@ -9,6 +9,7 @@
 
 // Teaches pybind11 how to convert a Python torch.Tensor to an at::Tensor. Without it a
 // binding taking at::Tensor rejects every tensor it is given.
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -22,6 +23,7 @@
 
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
+#include "tessiq/codegen/program.h"
 #include "tessiq/codegen/stream.h"
 #include "tessiq/codegen/timing.h"
 #include "tessiq/ir/recipe.h"
@@ -223,6 +225,81 @@ void bind_kernels(py::module_& m) {
       });
 }
 
+/// One `(kind, value)` pair from Python as the C type the kernel's parameter has.
+tessiq::codegen::KernelArgument argument_from(const std::string& kind, const py::object& value) {
+  if (kind == "i64") {
+    return value.cast<std::int64_t>();
+  }
+  if (kind == "i32") {
+    return value.cast<std::int32_t>();
+  }
+  if (kind == "f32") {
+    return value.cast<float>();
+  }
+  if (kind == "f64") {
+    return value.cast<double>();
+  }
+  raise_from_error(
+      tessiq::invalid_argument("'" + kind + "' is not an argument type; use i64, i32, f32 or f64"));
+}
+
+/// Binds a kernel compiled from source written by hand, and launching it over any shape.
+void bind_programs(py::module_& m) {
+  using tessiq::codegen::Program;
+
+  py::class_<Program, std::unique_ptr<Program, py::nodelete>>(m, "Program")
+      .def(
+          "launch",
+          [](const Program& program,
+             const std::vector<at::Tensor>& tensors,
+             const std::vector<std::pair<std::string, py::object>>& arguments,
+             const std::array<std::uint32_t, 3>& grid,
+             const std::array<std::uint32_t, 3>& block,
+             std::size_t shared,
+             std::uintptr_t stream) {
+            std::vector<void*> buffers;
+            buffers.reserve(tensors.size());
+            for (std::size_t i = 0; i < tensors.size(); ++i) {
+              // The kernel indexes each buffer from its first element, so a tensor laid out any
+              // other way would be read in the wrong order without an error.
+              if (!tensors[i].is_contiguous()) {
+                raise_from_error(tessiq::invalid_argument("tensor " + std::to_string(i) +
+                                                          " handed to a kernel is not packed"));
+              }
+              buffers.push_back(tensors[i].data_ptr());
+            }
+            std::vector<tessiq::codegen::KernelArgument> scalars;
+            scalars.reserve(arguments.size());
+            for (const auto& [kind, value] : arguments) {
+              scalars.push_back(argument_from(kind, value));
+            }
+            tessiq::codegen::LaunchShape shape;
+            shape.grid = grid;
+            shape.block = block;
+            shape.shared_bytes = shared;
+            value_or_raise(program.launch(buffers, scalars, shape, stream_at(stream)));
+          },
+          py::arg("tensors"),
+          py::arg("arguments"),
+          py::arg("grid"),
+          py::arg("block"),
+          py::arg("shared") = 0,
+          py::arg("stream") = kLegacyDefaultStream,
+          "Launches with the tensors' buffers first and the arguments after them, in the order "
+          "the kernel declares its parameters. Asynchronous, like any launch.");
+
+  m.def(
+      "compile_program",
+      [](const std::string& source, const std::string& entry, int ordinal) {
+        return value_or_raise(tessiq::codegen::compile_program(source, entry, ordinal));
+      },
+      py::arg("source"),
+      py::arg("entry"),
+      py::arg("ordinal"),
+      py::return_value_policy::reference,
+      "Compiles CUDA source for one device and loads its entry point. Kept for the process.");
+}
+
 /// Binds adding an operation from Python, and compiling it for the eager path.
 void bind_registry(py::module_& m) {
   m.def(
@@ -374,6 +451,7 @@ PYBIND11_MODULE(_C, m) {
 
   bind_kernels(m);
   bind_registry(m);
+  bind_programs(m);
 
   py::class_<tessiq::torch_backend::CompiledGraph>(m, "CompiledGraph")
       .def_readonly("recipe", &tessiq::torch_backend::CompiledGraph::recipe)
