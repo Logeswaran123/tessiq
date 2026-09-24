@@ -204,10 +204,44 @@ Result<std::uint32_t> check_dtypes(const OpDefinition& definition) {
   return mask;
 }
 
+/// A custom kernel brings its own code, so what is checked is that its call can be put together:
+/// at least one tensor, and parameter names that say where a keyword argument goes.
+Result<std::uint32_t> check_custom(const OpDefinition& definition) {
+  const std::string& name = definition.name;
+  if (!definition.expression.empty()) {
+    return invalid_argument(name +
+                            " is a custom kernel and brings its own code, not an expression");
+  }
+  if (definition.arity < 1) {
+    return invalid_argument(name + " takes no tensor, so it has nothing to launch over");
+  }
+  const std::vector<std::string>& parameters = definition.parameters;
+  if (!parameters.empty() && parameters.size() < static_cast<std::size_t>(definition.arity)) {
+    return invalid_argument(name + " names fewer parameters than it has tensor operands");
+  }
+  for (auto it = parameters.begin(); it != parameters.end(); ++it) {
+    if (it->empty() || std::find(parameters.begin(), it, *it) != it) {
+      return invalid_argument(name + " needs a distinct name for every parameter");
+    }
+  }
+  if (definition.dtypes.empty()) {
+    return invalid_argument(name + " names no element type to run on");
+  }
+  std::uint32_t mask = 0;
+  for (const ir::DType dtype : definition.dtypes) {
+    mask |= dtype_bit(dtype);
+  }
+  return mask;
+}
+
 Result<std::uint32_t> check(const OpDefinition& definition) {
   TESSIQ_RETURN_IF_ERROR(check_name(definition));
+  if (definition.category == OpCategory::kCustom) {
+    return check_custom(definition);
+  }
   if (definition.category != OpCategory::kElementwise) {
-    return unsupported(definition.name + ": only elementwise operations can be registered so far");
+    return unsupported(definition.name +
+                       ": an operation is registered as elementwise or as a custom kernel");
   }
   if (definition.arity < 1 || definition.arity > kMostOperands) {
     return invalid_argument(definition.name + " takes " + std::to_string(definition.arity) +
@@ -221,7 +255,8 @@ Result<std::uint32_t> check(const OpDefinition& definition) {
 
 bool same_definition(const OpDefinition& a, const OpDefinition& b) {
   return a.name == b.name && a.canonical == b.canonical && a.category == b.category &&
-         a.arity == b.arity && a.expression == b.expression && a.dtypes == b.dtypes;
+         a.arity == b.arity && a.parameters == b.parameters && a.expression == b.expression &&
+         a.dtypes == b.dtypes;
 }
 
 Result<const OpInfo*> register_op(const OpDefinition& definition) {
@@ -262,6 +297,13 @@ const OpInfo* find_registered_op(std::string_view name) {
   const auto& entries = registry();
   const auto found = entries.find(name);
   return found == entries.end() ? nullptr : &found->second->info;
+}
+
+const OpDefinition* find_registered_definition(std::string_view name) {
+  const std::scoped_lock guard(registry_mutex());
+  const auto& entries = registry();
+  const auto found = entries.find(name);
+  return found == entries.end() ? nullptr : &found->second->definition;
 }
 
 std::vector<std::string> registered_op_names() {

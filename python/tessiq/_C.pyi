@@ -114,12 +114,23 @@ def compile_program(source: str, entry: str, ordinal: int) -> Program: ...
 def register_elementwise(
     name: str, canonical: str, expression: str, arity: int, dtypes: list[str]
 ) -> None: ...
+def register_kernel(
+    name: str, canonical: str, arity: int, parameters: list[str], dtypes: list[str]
+) -> None: ...
 def registered_ops() -> list[str]: ...
 def compile_elementwise(name: str, arity: int, dtype: str, ordinal: int) -> Kernel: ...
+
+class CustomCall:
+    op: str
+    output: str
+    has_dynamic_extent: bool
+    inputs: list[str]
+    arguments: list[tuple[str, Any]]
 
 class CompiledGraph:
     recipe: Recipe
     kernels: list[Kernel]
+    calls: list[CustomCall]
 
 def build_recipe_fx(
     graph_module: object, name: str = ..., alignment: int = ..., ordinal: int = ...

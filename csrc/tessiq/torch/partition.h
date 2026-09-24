@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "tessiq/codegen/call.h"
 #include "tessiq/ir/recipe.h"
 #include "tessiq/support/result.h"
 #include "tessiq/torch/kernel.h"
@@ -49,6 +50,11 @@ struct CompiledGraph {
   /// toolkit, and short of what the graph could use wherever the compiler declined something,
   /// which then runs one operation at a time.
   std::vector<std::shared_ptr<Kernel>> kernels;
+
+  /// Every call to a kernel somebody registered, described for the caller to launch. They are not
+  /// in `kernels` because the compiler builds nothing for them: their code and how to lay out
+  /// their launch were registered from Python, and that is where they are put together.
+  std::vector<codegen::CustomCall> calls;
 };
 
 /// Imports an FX graph, partitions it, fuses it, and lowers the result.

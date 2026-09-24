@@ -16,11 +16,14 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <torch/csrc/utils/pybind.h>
 
+#include "tessiq/codegen/call.h"
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
@@ -300,6 +303,35 @@ void bind_programs(py::module_& m) {
       "Compiles CUDA source for one device and loads its entry point. Kept for the process.");
 }
 
+/// A call's arguments as Python sees them: `("tensor", name)` or `("scalar", value)`.
+py::list call_arguments(const tessiq::codegen::CustomCall& call) {
+  py::list arguments;
+  for (const tessiq::codegen::CallArgument& argument : call.arguments) {
+    std::visit(
+        [&arguments](const auto& held) {
+          using Held = std::decay_t<decltype(held)>;
+          if constexpr (std::is_same_v<Held, tessiq::codegen::CallOperand>) {
+            arguments.append(py::make_tuple("tensor", held.name));
+          } else {
+            arguments.append(py::make_tuple("scalar", held));
+          }
+        },
+        argument);
+  }
+  return arguments;
+}
+
+/// Binds the description of a call to a registered kernel, which Python turns into a kernel.
+void bind_calls(py::module_& m) {
+  using tessiq::codegen::CustomCall;
+  py::class_<CustomCall>(m, "CustomCall")
+      .def_readonly("op", &CustomCall::op)
+      .def_readonly("output", &CustomCall::output)
+      .def_readonly("has_dynamic_extent", &CustomCall::has_dynamic_extent)
+      .def_property_readonly("inputs", &CustomCall::inputs)
+      .def_property_readonly("arguments", &call_arguments);
+}
+
 /// Binds adding an operation from Python, and compiling it for the eager path.
 void bind_registry(py::module_& m) {
   m.def(
@@ -326,6 +358,30 @@ void bind_registry(py::module_& m) {
       py::arg("arity"),
       py::arg("dtypes"),
       "Adds an elementwise operation the compiler claims, fuses and emits like a built-in one.");
+  m.def(
+      "register_kernel",
+      [](const std::string& name,
+         const std::string& canonical,
+         int arity,
+         const std::vector<std::string>& parameters,
+         const std::vector<std::string>& dtypes) {
+        tessiq::passes::OpDefinition definition;
+        definition.name = name;
+        definition.canonical = canonical;
+        definition.category = tessiq::passes::OpCategory::kCustom;
+        definition.arity = arity;
+        definition.parameters = parameters;
+        for (const std::string& dtype : dtypes) {
+          definition.dtypes.push_back(value_or_raise(tessiq::ir::parse_dtype(dtype)));
+        }
+        value_or_raise(tessiq::passes::register_op(definition));
+      },
+      py::arg("name"),
+      py::arg("canonical"),
+      py::arg("arity"),
+      py::arg("parameters"),
+      py::arg("dtypes"),
+      "Adds an operation whose kernel somebody wrote. The compiler places it and never fuses it.");
   m.def("registered_ops",
         &tessiq::passes::registered_op_names,
         "Every operation added with register_elementwise, sorted.");
@@ -452,10 +508,12 @@ PYBIND11_MODULE(_C, m) {
   bind_kernels(m);
   bind_registry(m);
   bind_programs(m);
+  bind_calls(m);
 
   py::class_<tessiq::torch_backend::CompiledGraph>(m, "CompiledGraph")
       .def_readonly("recipe", &tessiq::torch_backend::CompiledGraph::recipe)
-      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels);
+      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels)
+      .def_readonly("calls", &tessiq::torch_backend::CompiledGraph::calls);
 
   m.def(
       "build_recipe_fx",

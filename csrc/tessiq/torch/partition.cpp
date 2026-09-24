@@ -11,6 +11,7 @@
 #include <utility>
 #include <variant>
 
+#include "tessiq/codegen/call.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/ir/recipe.h"
 #include "tessiq/ir/text.h"
@@ -85,6 +86,7 @@ Result<CompiledGraph> build_recipe_fx(const pybind11::object& graph_module,
   TESSIQ_ASSIGN_OR_RETURN(compiled.recipe, ir::build_recipe(*graph, alignment));
   if (ordinal >= 0) {
     TESSIQ_ASSIGN_OR_RETURN(compiled.kernels, compile_kernels(*graph, ordinal));
+    compiled.calls = codegen::custom_calls(*graph);
   }
 
   TESSIQ_LOG(kDebug, kLogModule) << "recipe with " << compiled.recipe.steps.size()

@@ -100,6 +100,7 @@ add_library(tessiq::ir ALIAS tessiq_ir)
 
 add_library(tessiq_codegen STATIC
   tessiq/codegen/blas.cpp
+  tessiq/codegen/call.cpp
   tessiq/codegen/conv.cpp
   tessiq/codegen/cubin_cache.cpp
   tessiq/codegen/cudnn.cpp
