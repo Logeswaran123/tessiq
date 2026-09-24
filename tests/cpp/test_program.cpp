@@ -17,6 +17,7 @@
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
+#include "tessiq/codegen/stream.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
 #include "tessiq/runtime/device.h"
@@ -92,7 +93,8 @@ run(const std::string& ir, const std::string& name, const std::vector<std::vecto
   EXPECT_TRUE(out.has_value());
   buffers.push_back(*out);
 
-  EXPECT_TRUE((*program)->launch(buffers, static_cast<std::int64_t>(kCount)).has_value());
+  EXPECT_TRUE(
+      (*program)->launch(buffers, static_cast<std::int64_t>(kCount), kDefaultStream).has_value());
   EXPECT_TRUE(gpu.synchronize().has_value());
 
   std::vector<float> result(kCount);
@@ -169,7 +171,9 @@ TEST(ProgramTest, ElementsThatDoNotFillTheLastBlockAreStillWritten) {
   ASSERT_TRUE(output.has_value());
   ASSERT_TRUE(gpu.copy_host_to_device(*input, a.data(), kCount * sizeof(float)).has_value());
 
-  ASSERT_TRUE((*program)->launch({*input, *output}, static_cast<std::int64_t>(kOdd)).has_value());
+  ASSERT_TRUE((*program)
+                  ->launch({*input, *output}, static_cast<std::int64_t>(kOdd), kDefaultStream)
+                  .has_value());
   ASSERT_TRUE(gpu.synchronize().has_value());
 
   std::vector<float> got(kCount);

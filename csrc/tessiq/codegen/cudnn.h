@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "tessiq/codegen/conv.h"
+#include "tessiq/codegen/stream.h"
 #include "tessiq/support/result.h"
 
 namespace tessiq::codegen {
@@ -28,9 +29,13 @@ class ConvPlan {
   ConvPlan(ConvPlan&&) = delete;
   ConvPlan& operator=(ConvPlan&&) = delete;
 
-  /// Runs it. `bias` is null when the convolution has none. Asynchronous, like a kernel launch.
-  [[nodiscard]] virtual Result<void>
-  launch(const void* input, const void* weight, const void* bias, void* output) const = 0;
+  /// Runs it on `stream`. `bias` is null when the convolution has none. Asynchronous, like a
+  /// kernel launch.
+  [[nodiscard]] virtual Result<void> launch(const void* input,
+                                            const void* weight,
+                                            const void* bias,
+                                            void* output,
+                                            Stream stream) const = 0;
 
   /// The algorithm cuDNN chose, for reports and tests. Its own enumeration, as an integer.
   [[nodiscard]] virtual int algorithm() const = 0;

@@ -76,7 +76,8 @@ class CudaProgram final : public Program {
 
   [[nodiscard]] Result<void> launch(const std::vector<void*>& buffers,
                                     const std::vector<std::int64_t>& scalars,
-                                    std::int64_t blocks) const override {
+                                    std::int64_t blocks,
+                                    Stream stream) const override {
     if (blocks <= 0) {
       return invalid_argument("cuLaunchKernel with " + std::to_string(blocks) + " blocks");
     }
@@ -104,7 +105,7 @@ class CudaProgram final : public Program {
                                                1,
                                                1,
                                                0,
-                                               nullptr,
+                                               static_cast<CUstream>(stream.handle),
                                                arguments.data(),
                                                nullptr);
         status != CUDA_SUCCESS) {

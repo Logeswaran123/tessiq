@@ -31,11 +31,17 @@ std::string cudnn_message(cudnnStatus_t status, const char* what) {
   return std::string(what) + ": " + cudnnGetErrorString(status);
 }
 
+/// Held from choosing a handle's stream until the calls on it are queued.
+std::mutex& launch_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
 /// One handle per device, created on first use and kept.
 ///
 /// A handle carries a context and is not free to create, and every plan on a device can share
-/// one. Bound to stream 0, which is where every other launch here goes, so a convolution is
-/// ordered against the kernels either side of it without anyone synchronising.
+/// one. Its stream is set on every launch to the one the caller names, which is what orders a
+/// convolution against the kernels either side of it without anyone synchronising.
 Result<cudnnHandle_t> handle_for(int ordinal) {
   static std::mutex mutex;
   static std::map<int, cudnnHandle_t> handles;
@@ -49,10 +55,6 @@ Result<cudnnHandle_t> handle_for(int ordinal) {
   cudnnHandle_t handle = nullptr;
   if (const cudnnStatus_t status = cudnnCreate(&handle); status != CUDNN_STATUS_SUCCESS) {
     return external_error(cudnn_message(status, "cudnnCreate"));
-  }
-  if (const cudnnStatus_t status = cudnnSetStream(handle, nullptr);
-      status != CUDNN_STATUS_SUCCESS) {
-    return external_error(cudnn_message(status, "cudnnSetStream"));
   }
   handles.emplace(ordinal, handle);
   return handle;
@@ -125,10 +127,21 @@ class CudnnConvPlan final : public ConvPlan {
     return plan;
   }
 
-  [[nodiscard]] Result<void>
-  launch(const void* input, const void* weight, const void* bias, void* output) const override {
+  [[nodiscard]] Result<void> launch(const void* input,
+                                    const void* weight,
+                                    const void* bias,
+                                    void* output,
+                                    Stream stream) const override {
     if (cudaSetDevice(ordinal_) != cudaSuccess) {
       return external_error("cudaSetDevice(" + std::to_string(ordinal_) + ") failed");
+    }
+    // The handle is shared by every plan on the device and carries one stream at a time, so the
+    // stream and the calls queued on it are kept together. Queuing does not wait for the device.
+    const std::scoped_lock guard(launch_mutex());
+    if (const cudnnStatus_t status =
+            cudnnSetStream(handle_, static_cast<cudaStream_t>(stream.handle));
+        status != CUDNN_STATUS_SUCCESS) {
+      return external_error(cudnn_message(status, "cudnnSetStream"));
     }
     const float one = 1.0F;
     const float zero = 0.0F;

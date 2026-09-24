@@ -70,56 +70,38 @@ class Recipe:
     naive_bytes: int
     def __str__(self) -> str: ...
 
-class FusedKernel:
-    group: int
+class Kernel:
+    kind: str
     inputs: list[str]
     output: str
     members: list[str]
-    elements: int
-    has_dynamic_extent: bool
     packs_inputs: bool
+    has_dynamic_extent: bool
     def output_shape(self, inputs: list[Any]) -> list[int]: ...
-    def launch(self, inputs: list[Any], out: Any) -> None: ...
+    def launch(self, inputs: list[Any], out: Any, stream: int = ...) -> None: ...
 
-class ReductionKernel:
-    output: str
-    inputs: list[str]
+class FusedKernel(Kernel):
+    group: int
+    elements: int
+
+class ReductionKernel(Kernel):
     outer: int
     reduce: int
     inner: int
     blocks: int
     elements: int
-    has_dynamic_extent: bool
-    packs_inputs: bool
-    def output_shape(self, inputs: list[Any]) -> list[int]: ...
-    def launch(self, inputs: list[Any], out: Any) -> None: ...
 
-class GemmKernel:
-    output: str
-    inputs: list[str]
-    packs_inputs: bool
+class GemmKernel(Kernel):
     transposed: tuple[bool, bool]
     extents: tuple[int, int, int, int]
-    has_dynamic_extent: bool
-    def output_shape(self, inputs: list[Any]) -> list[int]: ...
-    def launch(self, inputs: list[Any], out: Any) -> None: ...
 
-class ConvKernel:
-    output: str
-    inputs: list[str]
-    packs_inputs: bool
-    has_dynamic_extent: bool
+class ConvKernel(Kernel):
     algorithm: int
     workspace_bytes: int
-    def output_shape(self, inputs: list[Any]) -> list[int]: ...
-    def launch(self, inputs: list[Any], out: Any) -> None: ...
 
 class CompiledGraph:
     recipe: Recipe
-    kernels: list[FusedKernel]
-    reductions: list[ReductionKernel]
-    gemms: list[GemmKernel]
-    convs: list[ConvKernel]
+    kernels: list[Kernel]
 
 def build_recipe_fx(
     graph_module: object, name: str = ..., alignment: int = ..., ordinal: int = ...

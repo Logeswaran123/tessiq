@@ -36,6 +36,16 @@ std::mutex& handles_mutex() {
   return mutex;
 }
 
+/// Held from choosing a handle's stream until the call on it is queued.
+///
+/// A handle is shared by every launch on its device and carries one stream at a time, so two
+/// threads launching on different streams could each set the stream and then queue on the other
+/// one's. Queuing does not wait for the device, so this is held for microseconds.
+std::mutex& launch_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
 /// One cuBLAS handle per device, created on first use and kept.
 ///
 /// Creating a handle allocates workspace and is far more expensive than the multiplies a model
@@ -65,14 +75,16 @@ Result<cublasHandle_t> handle_for(int ordinal) {
 
 bool blas_available() { return true; }
 
-Result<void> zero_fill(void* data, std::size_t bytes, int ordinal) {
+Result<void> zero_fill(void* data, std::size_t bytes, int ordinal, Stream stream) {
   if (data == nullptr) {
     return invalid_argument("zero_fill was given a null buffer");
   }
   if (const cudaError_t status = cudaSetDevice(ordinal); status != cudaSuccess) {
     return external_error(std::string("cudaSetDevice: ") + cudaGetErrorName(status));
   }
-  if (const cudaError_t status = cudaMemsetAsync(data, 0, bytes); status != cudaSuccess) {
+  if (const cudaError_t status =
+          cudaMemsetAsync(data, 0, bytes, static_cast<cudaStream_t>(stream.handle));
+      status != cudaSuccess) {
     return external_error(std::string("cudaMemsetAsync: ") + cudaGetErrorName(status));
   }
   return ok();
@@ -81,7 +93,8 @@ Result<void> zero_fill(void* data, std::size_t bytes, int ordinal) {
 Result<void> launch_gemm(const GemmKernel& kernel,
                          const GemmExtents& extents,
                          const GemmBuffers& buffers,
-                         int ordinal) {
+                         int ordinal,
+                         Stream stream) {
   if (kernel.dtype != ir::DType::kF32) {
     return unsupported("cublas gemm is float32 only for now");
   }
@@ -123,6 +136,13 @@ Result<void> launch_gemm(const GemmKernel& kernel,
   const auto* second = static_cast<const float*>(buffers.lhs);
   const int first_ld = ldb;
   const int second_ld = lda;
+
+  const std::scoped_lock guard(launch_mutex());
+  if (const cublasStatus_t status =
+          cublasSetStream(handle, static_cast<cudaStream_t>(stream.handle));
+      status != CUBLAS_STATUS_SUCCESS) {
+    return blas_error(status, "cublasSetStream");
+  }
 
   if (extents.batch == 1) {
     if (const cublasStatus_t status = cublasSgemm(handle,
@@ -181,14 +201,15 @@ namespace tessiq::codegen {
 
 bool blas_available() { return false; }
 
-Result<void> zero_fill(void* /*data*/, std::size_t /*bytes*/, int /*ordinal*/) {
+Result<void> zero_fill(void* /*data*/, std::size_t /*bytes*/, int /*ordinal*/, Stream /*stream*/) {
   return unsupported("this build has no CUDA toolkit");
 }
 
 Result<void> launch_gemm(const GemmKernel& /*kernel*/,
                          const GemmExtents& /*extents*/,
                          const GemmBuffers& /*buffers*/,
-                         int /*ordinal*/) {
+                         int /*ordinal*/,
+                         Stream /*stream*/) {
   return unsupported("this build has no CUDA toolkit, so there is no BLAS to call");
 }
 

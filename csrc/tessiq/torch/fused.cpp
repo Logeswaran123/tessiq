@@ -8,27 +8,34 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "tessiq/codegen/blas.h"
+#include "tessiq/codegen/conv.h"
 #include "tessiq/codegen/cubin_cache.h"
+#include "tessiq/codegen/cudnn.h"
 #include "tessiq/codegen/emitter.h"
+#include "tessiq/codegen/gemm.h"
 #include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
 #include "tessiq/codegen/reduction.h"
+#include "tessiq/codegen/stream.h"
+#include "tessiq/ir/graph.h"
 #include "tessiq/ir/types.h"
 #include "tessiq/support/logging.h"
+#include "tessiq/support/result.h"
+#include "tessiq/torch/kernel.h"
 
 namespace tessiq::torch_backend {
 
 namespace {
 
 constexpr std::string_view kLogModule = "fused";
-
-} // namespace
 
 /// The number a broadcast's index expression divides or wraps by, worked out from the buffers.
 ///
@@ -40,26 +47,43 @@ divisor_for(codegen::OperandRead::Kind kind, std::int64_t operand, std::int64_t 
   return kind == codegen::OperandRead::Kind::kRepeated ? count / operand : operand;
 }
 
+} // namespace
+
+bool FusedKernel::has_dynamic_extent() const { return parts_.elements == ir::kDynamic; }
+
+Result<std::vector<std::int64_t>>
+FusedKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
+  if (tensors.empty()) {
+    return invalid_argument("fusion group " + std::to_string(parts_.group) +
+                            " cannot size a result from no inputs");
+  }
+  return std::vector<std::int64_t>(tensors.front().sizes().begin(), tensors.front().sizes().end());
+}
+
 Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
-                                 const at::Tensor& out) const {
+                                 const at::Tensor& out,
+                                 codegen::Stream stream) const {
+  const std::vector<codegen::OperandRead>& reads = parts_.reads;
+  const std::string group = std::to_string(parts_.group);
+
   /// Whether operand `i` of this many elements can be read for a result of `count`.
   ///
   /// An operand read at `i` has to match exactly. One that broadcasts has to divide the result,
   /// because the index expression steps through it in whole runs or whole cycles and a remainder
   /// would send the last of them past the end.
-  const auto reaches = [this](std::size_t i, std::int64_t operand, std::int64_t count) {
+  const auto reaches = [&reads](std::size_t i, std::int64_t operand, std::int64_t count) {
     if (i >= reads.size() || reads[i].kind == codegen::OperandRead::Kind::kSameShape) {
       return operand == count;
     }
     return operand > 0 && count % operand == 0;
   };
 
-  if (program == nullptr) {
-    return internal_error("fusion group " + std::to_string(group) + " has no compiled kernel");
+  if (parts_.program == nullptr) {
+    return internal_error("fusion group " + group + " has no compiled kernel");
   }
-  if (tensors.size() != inputs.size()) {
-    return invalid_argument("fusion group " + std::to_string(group) + " takes " +
-                            std::to_string(inputs.size()) + " inputs, got " +
+  if (tensors.size() != parts_.inputs.size()) {
+    return invalid_argument("fusion group " + group + " takes " +
+                            std::to_string(parts_.inputs.size()) + " inputs, got " +
                             std::to_string(tensors.size()));
   }
 
@@ -68,8 +92,8 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
   // reading past a buffer, because the IR records every unknown extent as the same `?` and cannot
   // tell two of them apart. Every input has to match exactly: a broadcast operand reads a
   // position worked out from the extents, which is why those groups are not compiled at all.
-  const bool dynamic = elements == ir::kDynamic;
-  const std::int64_t count = dynamic ? out.numel() : elements;
+  const bool dynamic = has_dynamic_extent();
+  const std::int64_t count = dynamic ? out.numel() : parts_.elements;
   if (count == 0) {
     // An extent that turned out to be zero, which only a dynamic kernel meets: a group of no
     // elements is never compiled in the first place. There is nothing to launch.
@@ -83,29 +107,28 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
     // The kernel walks one index across every buffer, which is only the same elements when the
     // layouts agree, so a non-contiguous input would be read in the wrong order silently.
     if (!tensor.is_contiguous()) {
-      return invalid_argument("fusion group " + std::to_string(group) + " input " +
-                              std::to_string(i) + " is not contiguous");
+      return invalid_argument("fusion group " + group + " input " + std::to_string(i) +
+                              " is not contiguous");
     }
     // Not every input has as many elements as the result. One that broadcasts, such as the
     // per-row mean a layer norm subtracts, has fewer, and the kernel was written knowing where to
     // read it. More than the result is always wrong.
     const bool fits = dynamic ? reaches(i, tensor.numel(), count) : tensor.numel() <= count;
     if (!fits || tensor.numel() <= 0) {
-      return invalid_argument("fusion group " + std::to_string(group) + " was given an input of " +
+      return invalid_argument("fusion group " + group + " was given an input of " +
                               std::to_string(tensor.numel()) + " elements for a result of " +
                               std::to_string(count));
     }
     buffers.push_back(tensor.data_ptr());
   }
   if (!out.is_contiguous() || out.numel() != count) {
-    return invalid_argument("fusion group " + std::to_string(group) +
-                            " was given an output that is not " + std::to_string(count) +
-                            " contiguous elements");
+    return invalid_argument("fusion group " + group + " was given an output that is not " +
+                            std::to_string(count) + " contiguous elements");
   }
   buffers.push_back(out.data_ptr());
 
   if (!dynamic) {
-    return program->launch(buffers, count);
+    return parts_.program->launch(buffers, count, stream);
   }
 
   // The element count, then one divisor per operand that needs one, in operand order. That is
@@ -118,65 +141,19 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
   }
   const auto blocks = (count + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
                       static_cast<std::int64_t>(codegen::kBlockSize);
-  return program->launch(buffers, scalars, blocks);
+  return parts_.program->launch(buffers, scalars, blocks, stream);
 }
 
-Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordinal) {
-  std::vector<FusedKernel> compiled;
-  if (!codegen::launcher_available()) {
-    return compiled;
-  }
+codegen::ReductionExtents ReductionKernel::extents() const {
+  codegen::ReductionExtents known;
+  known.outer = parts_.outer;
+  known.reduce = parts_.reduce;
+  known.inner = parts_.inner;
+  return known;
+}
 
-  const auto groups = codegen::fusion_groups(graph);
-  if (groups.empty()) {
-    return compiled;
-  }
-
-  TESSIQ_ASSIGN_OR_RETURN(const auto capability, codegen::device_capability(ordinal));
-
-  for (const std::int64_t group : groups) {
-    TESSIQ_ASSIGN_OR_RETURN(const codegen::FusedKernel description,
-                            codegen::extract_kernel(graph, group));
-
-    const codegen::Emitter& emitter = codegen::cuda_emitter();
-    if (!emitter.supports(description)) {
-      // Not a failure. The operations run one at a time, which always works, and a group the
-      // emitter declines is the reason `supports` exists.
-      TESSIQ_LOG(kDebug, kLogModule) << "no cuda code for group " << group << ", leaving it alone";
-      continue;
-    }
-
-    TESSIQ_ASSIGN_OR_RETURN(const std::string source, emitter.emit(description));
-    TESSIQ_ASSIGN_OR_RETURN(
-        const codegen::Cubin cubin,
-        codegen::compile_cached(source, description.name, capability.first, capability.second));
-    TESSIQ_ASSIGN_OR_RETURN(const codegen::Program* program,
-                            codegen::load_program(cubin, description.name, ordinal));
-
-    std::vector<std::string> members;
-    members.reserve(description.body.size());
-    for (const codegen::Step& step : description.body) {
-      members.push_back(step.result);
-    }
-
-    std::vector<codegen::OperandRead> reads;
-    reads.reserve(description.inputs.size());
-    for (const codegen::KernelInput& input : description.inputs) {
-      reads.push_back(input.read);
-    }
-
-    compiled.push_back({.group = group,
-                        .inputs = description.input_names(),
-                        .output = description.output,
-                        .members = std::move(members),
-                        .elements = description.elements,
-                        .reads = std::move(reads),
-                        .program = program});
-  }
-
-  TESSIQ_LOG(kDebug, kLogModule) << "compiled " << compiled.size() << " of " << groups.size()
-                                 << " group(s)";
-  return compiled;
+std::int64_t ReductionKernel::blocks() const {
+  return codegen::blocks_for(parts_.shape, extents());
 }
 
 /// The three extents this launch walks, taken from the tensor it was handed.
@@ -184,24 +161,26 @@ Result<std::vector<FusedKernel>> compile_fused(const ir::Graph& graph, int ordin
 /// The axes folded are the same on every call; only how many elements they hold changes. So the
 /// split is redone here rather than carried, and checked against what the description knew.
 Result<codegen::ReductionExtents> ReductionKernel::extents_for(const at::Tensor& in) const {
-  if (std::cmp_not_equal(in.dim(), rank)) {
-    return invalid_argument("reduction " + output + " was compiled for rank " +
-                            std::to_string(rank) + " and handed rank " + std::to_string(in.dim()));
+  if (std::cmp_not_equal(in.dim(), parts_.rank)) {
+    return invalid_argument("reduction " + parts_.output + " was compiled for rank " +
+                            std::to_string(parts_.rank) + " and handed rank " +
+                            std::to_string(in.dim()));
   }
   const std::vector<std::int64_t> sizes(in.sizes().begin(), in.sizes().end());
-  const codegen::ReductionExtents found = codegen::split_axes(sizes, first_axis, last_axis);
+  const codegen::ReductionExtents found =
+      codegen::split_axes(sizes, parts_.first_axis, parts_.last_axis);
   if (!found.are_usable()) {
-    return invalid_argument("reduction " + output + " was handed a shape it cannot walk");
+    return invalid_argument("reduction " + parts_.output + " was handed a shape it cannot walk");
   }
 
   // Known extents are still checked. A description that disagrees with the tensor means the
   // compiler decided something about a shape that the tensor does not have, and the kernel would
   // read past the buffer rather than say so.
   const std::array<std::pair<std::int64_t, std::int64_t>, 3> pairs{
-      {{outer, found.outer}, {reduce, found.reduce}, {inner, found.inner}}};
+      {{parts_.outer, found.outer}, {parts_.reduce, found.reduce}, {parts_.inner, found.inner}}};
   for (const auto& [described, actual] : pairs) {
     if (described != ir::kDynamic && described != actual) {
-      return invalid_argument("reduction " + output + " was compiled for " +
+      return invalid_argument("reduction " + parts_.output + " was compiled for " +
                               std::to_string(described) + " and handed " + std::to_string(actual));
     }
   }
@@ -211,107 +190,53 @@ Result<codegen::ReductionExtents> ReductionKernel::extents_for(const at::Tensor&
 Result<std::vector<std::int64_t>>
 ReductionKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
   if (tensors.size() != 1) {
-    return invalid_argument("reduction " + output + " reads one tensor");
+    return invalid_argument("reduction " + parts_.output + " reads one tensor");
   }
   // The kept axes in order, which is what the reduction writes. Whether the folded axes stay as
   // ones is the graph's business: the node's own type says so, and a keepdim reshape follows.
   std::vector<std::int64_t> kept;
   const at::Tensor& in = tensors.front();
-  for (std::size_t axis = 0; axis < rank; ++axis) {
-    const bool folded = axis >= first_axis && axis <= last_axis;
+  for (std::size_t axis = 0; axis < parts_.rank; ++axis) {
+    const bool folded = axis >= parts_.first_axis && axis <= parts_.last_axis;
     if (!folded) {
       kept.push_back(in.size(static_cast<std::int64_t>(axis)));
-    } else if (keeps_dims) {
+    } else if (parts_.keeps_dims) {
       kept.push_back(1);
     }
   }
   return kept;
 }
 
-Result<void> ReductionKernel::launch(const at::Tensor& in, const at::Tensor& out) const {
-  if (program == nullptr) {
-    return internal_error("reduction " + output + " has no compiled kernel");
+Result<void> ReductionKernel::launch(const std::vector<at::Tensor>& tensors,
+                                     const at::Tensor& out,
+                                     codegen::Stream stream) const {
+  if (parts_.program == nullptr) {
+    return internal_error("reduction " + parts_.output + " has no compiled kernel");
   }
+  if (tensors.size() != 1) {
+    return invalid_argument("reduction " + parts_.output + " takes one input, got " +
+                            std::to_string(tensors.size()));
+  }
+  const at::Tensor& in = tensors.front();
   TESSIQ_ASSIGN_OR_RETURN(const codegen::ReductionExtents extents, extents_for(in));
   const std::int64_t reads = extents.elements();
   const std::int64_t writes = extents.outputs();
   // The kernel indexes both buffers arithmetically from their first element, so a layout other
   // than contiguous would have it read and write the wrong positions without failing.
   if (!in.is_contiguous() || in.numel() != reads) {
-    return invalid_argument("reduction " + output + " expects " + std::to_string(reads) +
+    return invalid_argument("reduction " + parts_.output + " expects " + std::to_string(reads) +
                             " contiguous input elements, got " + std::to_string(in.numel()));
   }
   if (!out.is_contiguous() || out.numel() != writes) {
-    return invalid_argument("reduction " + output + " expects " + std::to_string(writes) +
+    return invalid_argument("reduction " + parts_.output + " expects " + std::to_string(writes) +
                             " contiguous output elements, got " + std::to_string(out.numel()));
   }
 
   const std::vector<void*> buffers{in.data_ptr(), out.data_ptr()};
-  return program->launch(
-      buffers, {extents.outer, extents.reduce, extents.inner}, codegen::blocks_for(shape, extents));
-}
-
-/// Compiles one reduction, or nothing when it has no kernel shape or no code the emitter writes.
-///
-/// Its own function because `compile_reductions` is otherwise a loop with four ways to decline
-/// and three ways to fail, which is more branching than one function should carry.
-Result<std::optional<ReductionKernel>>
-compile_one(const ir::Node& node, std::pair<int, int> capability, int ordinal) {
-  TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_reduction(node));
-  if (!description.has_value()) {
-    TESSIQ_LOG(kDebug, kLogModule) << "no kernel shape for " << node.op() << ", leaving it alone";
-    return std::optional<ReductionKernel>{};
-  }
-
-  const codegen::Emitter& emitter = codegen::cuda_emitter();
-  if (!emitter.supports(*description)) {
-    TESSIQ_LOG(kDebug, kLogModule) << "no cuda code for " << description->name;
-    return std::optional<ReductionKernel>{};
-  }
-
-  TESSIQ_ASSIGN_OR_RETURN(const std::string source, emitter.emit(*description));
-  TESSIQ_ASSIGN_OR_RETURN(
-      const codegen::Cubin cubin,
-      codegen::compile_cached(source, description->name, capability.first, capability.second));
-  TESSIQ_ASSIGN_OR_RETURN(const codegen::Program* program,
-                          codegen::load_program(cubin, description->name, ordinal));
-
-  return std::optional<ReductionKernel>{ReductionKernel{.output = description->output,
-                                                        .input = description->input,
-                                                        .outer = description->outer,
-                                                        .reduce = description->reduce,
-                                                        .inner = description->inner,
-                                                        .first_axis = description->first_axis,
-                                                        .last_axis = description->last_axis,
-                                                        .rank = description->rank,
-                                                        .keeps_dims = description->keeps_dims,
-                                                        .shape = description->shape,
-                                                        .program = program}};
-}
-
-Result<std::vector<ReductionKernel>> compile_reductions(const ir::Graph& graph, int ordinal) {
-  std::vector<ReductionKernel> compiled;
-  if (!codegen::launcher_available()) {
-    return compiled;
-  }
-
-  const std::vector<const ir::Node*> candidates = codegen::reduction_nodes(graph);
-  if (candidates.empty()) {
-    return compiled;
-  }
-
-  TESSIQ_ASSIGN_OR_RETURN(const auto capability, codegen::device_capability(ordinal));
-
-  for (const ir::Node* node : candidates) {
-    TESSIQ_ASSIGN_OR_RETURN(auto kernel, compile_one(*node, capability, ordinal));
-    if (kernel.has_value()) {
-      compiled.push_back(std::move(*kernel));
-    }
-  }
-
-  TESSIQ_LOG(kDebug, kLogModule) << "compiled " << compiled.size() << " of " << candidates.size()
-                                 << " reduction(s)";
-  return compiled;
+  return parts_.program->launch(buffers,
+                                {extents.outer, extents.reduce, extents.inner},
+                                codegen::blocks_for(parts_.shape, extents),
+                                stream);
 }
 
 /// The step between rows of `tensor` as stored, which BLAS calls the leading dimension.
@@ -387,6 +312,7 @@ Result<codegen::GemmExtents> extents_for(const codegen::GemmKernel& description,
 }
 
 std::vector<std::string> GemmKernel::inputs() const {
+  const codegen::GemmKernel& description = parts_.description;
   std::vector<std::string> names{description.lhs.name, description.rhs.name};
   if (description.bias.has_value()) {
     names.push_back(*description.bias);
@@ -397,8 +323,7 @@ std::vector<std::string> GemmKernel::inputs() const {
 Result<std::vector<std::int64_t>>
 GemmKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
   if (tensors.size() < 2 || tensors[0].dim() < 2 || tensors[1].dim() < 2) {
-    return invalid_argument("gemm " + description.output +
-                            " cannot size a result from what it was given");
+    return invalid_argument("gemm " + output() + " cannot size a result from what it was given");
   }
   const at::Tensor& lhs = tensors[0];
   const at::Tensor& rhs = tensors[1];
@@ -409,7 +334,9 @@ GemmKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
 }
 
 Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
-                                const at::Tensor& out) const {
+                                const at::Tensor& out,
+                                codegen::Stream stream) const {
+  const codegen::GemmKernel& description = parts_.description;
   const std::vector<std::string> expected = inputs();
   if (tensors.size() != expected.size()) {
     return invalid_argument("gemm " + description.output + " takes " +
@@ -435,68 +362,44 @@ Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
       return invalid_argument("gemm " + description.output + " expects a bias of " +
                               std::to_string(extents.n) + ", got " + std::to_string(bias.numel()));
     }
-    if (fill == nullptr) {
+    if (parts_.fill == nullptr) {
       return internal_error("gemm " + description.output +
                             " has a bias and no kernel to lay it "
                             "down");
     }
     const std::vector<void*> buffers{bias.data_ptr(), out.data_ptr()};
     TESSIQ_RETURN_IF_ERROR(
-        fill->launch(buffers,
-                     {total, extents.n},
-                     (total + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
-                         static_cast<std::int64_t>(codegen::kBlockSize)));
+        parts_.fill->launch(buffers,
+                            {total, extents.n},
+                            (total + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
+                                static_cast<std::int64_t>(codegen::kBlockSize),
+                            stream));
   } else {
     TESSIQ_RETURN_IF_ERROR(codegen::zero_fill(out.data_ptr(),
                                               static_cast<std::size_t>(total) *
                                                   static_cast<std::size_t>(out.element_size()),
-                                              ordinal));
+                                              parts_.ordinal,
+                                              stream));
   }
 
   const codegen::GemmBuffers buffers{.lhs = tensors[0].const_data_ptr(),
                                      .rhs = tensors[1].const_data_ptr(),
                                      .output = out.data_ptr()};
-  return codegen::launch_gemm(description, extents, buffers, ordinal);
+  return codegen::launch_gemm(description, extents, buffers, parts_.ordinal, stream);
 }
 
-Result<std::vector<GemmKernel>> compile_gemms(const ir::Graph& graph, int ordinal) {
-  std::vector<GemmKernel> compiled;
-  if (!codegen::blas_available()) {
-    return compiled;
-  }
-
-  const std::vector<const ir::Node*> candidates = codegen::gemm_nodes(graph);
-  if (candidates.empty()) {
-    return compiled;
-  }
-  TESSIQ_ASSIGN_OR_RETURN(const auto capability, codegen::device_capability(ordinal));
-
-  for (const ir::Node* node : candidates) {
-    TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_gemm(*node));
-    if (!description.has_value()) {
-      TESSIQ_LOG(kDebug, kLogModule) << "no gemm shape for " << node->op() << ", leaving it alone";
-      continue;
-    }
-    const codegen::Program* fill = nullptr;
-    if (description->bias.has_value()) {
-      const std::string name = "tessiq_bias_" + description->output;
-      const std::string source = codegen::broadcast_row_source(description->dtype, name);
-      TESSIQ_ASSIGN_OR_RETURN(
-          const codegen::Cubin cubin,
-          codegen::compile_cached(source, name, capability.first, capability.second));
-      TESSIQ_ASSIGN_OR_RETURN(fill, codegen::load_program(cubin, name, ordinal));
-    }
-    compiled.push_back(GemmKernel{.description = *description, .ordinal = ordinal, .fill = fill});
-  }
-
-  TESSIQ_LOG(kDebug, kLogModule) << "described " << compiled.size() << " of " << candidates.size()
-                                 << " matmul(s)";
-  return compiled;
+Result<std::vector<std::int64_t>>
+ConvKernel::output_shape(const std::vector<at::Tensor>& /*tensors*/) const {
+  // Fixed at compile time, since a convolution whose shapes were not known has no plan.
+  const auto& shape = parts_.description.output_shape;
+  return std::vector<std::int64_t>(shape.begin(), shape.end());
 }
 
 Result<void> ConvKernel::launch(const std::vector<at::Tensor>& tensors,
-                                const at::Tensor& out) const {
-  if (plan == nullptr) {
+                                const at::Tensor& out,
+                                codegen::Stream stream) const {
+  const codegen::ConvKernel& description = parts_.description;
+  if (parts_.plan == nullptr) {
     return internal_error("convolution " + description.output + " has no plan");
   }
   const std::size_t expected = description.bias.has_value() ? 3U : 2U;
@@ -519,16 +422,180 @@ Result<void> ConvKernel::launch(const std::vector<at::Tensor>& tensors,
   }
 
   const void* bias = description.bias.has_value() ? tensors[2].data_ptr() : nullptr;
-  return plan->launch(tensors[0].data_ptr(), tensors[1].data_ptr(), bias, out.data_ptr());
+  return parts_.plan->launch(
+      tensors[0].data_ptr(), tensors[1].data_ptr(), bias, out.data_ptr(), stream);
 }
 
-Result<std::vector<ConvKernel>> compile_convs(const ir::Graph& graph, int ordinal) {
-  std::vector<ConvKernel> compiled;
+namespace {
+
+using Kernels = std::vector<std::shared_ptr<Kernel>>;
+
+Result<void> compile_fused(const ir::Graph& graph, int ordinal, Kernels& compiled) {
+  if (!codegen::launcher_available()) {
+    return ok();
+  }
+  const auto groups = codegen::fusion_groups(graph);
+  if (groups.empty()) {
+    return ok();
+  }
+
+  TESSIQ_ASSIGN_OR_RETURN(const auto capability, codegen::device_capability(ordinal));
+
+  std::size_t count = 0;
+  for (const std::int64_t group : groups) {
+    TESSIQ_ASSIGN_OR_RETURN(const codegen::FusedKernel description,
+                            codegen::extract_kernel(graph, group));
+
+    const codegen::Emitter& emitter = codegen::cuda_emitter();
+    if (!emitter.supports(description)) {
+      // Not a failure. The operations run one at a time, which always works, and a group the
+      // emitter declines is the reason `supports` exists.
+      TESSIQ_LOG(kDebug, kLogModule) << "no cuda code for group " << group << ", leaving it alone";
+      continue;
+    }
+
+    TESSIQ_ASSIGN_OR_RETURN(const std::string source, emitter.emit(description));
+    TESSIQ_ASSIGN_OR_RETURN(
+        const codegen::Cubin cubin,
+        codegen::compile_cached(source, description.name, capability.first, capability.second));
+    TESSIQ_ASSIGN_OR_RETURN(const codegen::Program* program,
+                            codegen::load_program(cubin, description.name, ordinal));
+
+    std::vector<std::string> members;
+    members.reserve(description.body.size());
+    for (const codegen::Step& step : description.body) {
+      members.push_back(step.result);
+    }
+
+    std::vector<codegen::OperandRead> reads;
+    reads.reserve(description.inputs.size());
+    for (const codegen::KernelInput& input : description.inputs) {
+      reads.push_back(input.read);
+    }
+
+    compiled.push_back(std::make_shared<FusedKernel>(FusedKernel::Parts{
+        .group = group,
+        .inputs = description.input_names(),
+        .output = description.output,
+        .members = std::move(members),
+        .elements = description.elements,
+        .reads = std::move(reads),
+        .program = program,
+    }));
+    ++count;
+  }
+
+  TESSIQ_LOG(kDebug, kLogModule) << "compiled " << count << " of " << groups.size() << " group(s)";
+  return ok();
+}
+
+/// Compiles one reduction, or nothing when it has no kernel shape or no code the emitter writes.
+///
+/// Its own function because `compile_reductions` is otherwise a loop with four ways to decline
+/// and three ways to fail, which is more branching than one function should carry.
+Result<std::shared_ptr<Kernel>>
+compile_one(const ir::Node& node, std::pair<int, int> capability, int ordinal) {
+  TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_reduction(node));
+  if (!description.has_value()) {
+    TESSIQ_LOG(kDebug, kLogModule) << "no kernel shape for " << node.op() << ", leaving it alone";
+    return std::shared_ptr<Kernel>{};
+  }
+
+  const codegen::Emitter& emitter = codegen::cuda_emitter();
+  if (!emitter.supports(*description)) {
+    TESSIQ_LOG(kDebug, kLogModule) << "no cuda code for " << description->name;
+    return std::shared_ptr<Kernel>{};
+  }
+
+  TESSIQ_ASSIGN_OR_RETURN(const std::string source, emitter.emit(*description));
+  TESSIQ_ASSIGN_OR_RETURN(
+      const codegen::Cubin cubin,
+      codegen::compile_cached(source, description->name, capability.first, capability.second));
+  TESSIQ_ASSIGN_OR_RETURN(const codegen::Program* program,
+                          codegen::load_program(cubin, description->name, ordinal));
+
+  return std::shared_ptr<Kernel>(std::make_shared<ReductionKernel>(
+      ReductionKernel::Parts{.output = description->output,
+                             .input = description->input,
+                             .outer = description->outer,
+                             .reduce = description->reduce,
+                             .inner = description->inner,
+                             .first_axis = description->first_axis,
+                             .last_axis = description->last_axis,
+                             .rank = description->rank,
+                             .keeps_dims = description->keeps_dims,
+                             .shape = description->shape,
+                             .program = program}));
+}
+
+Result<void> compile_reductions(const ir::Graph& graph, int ordinal, Kernels& compiled) {
+  if (!codegen::launcher_available()) {
+    return ok();
+  }
+  const std::vector<const ir::Node*> candidates = codegen::reduction_nodes(graph);
+  if (candidates.empty()) {
+    return ok();
+  }
+
+  TESSIQ_ASSIGN_OR_RETURN(const auto capability, codegen::device_capability(ordinal));
+
+  std::size_t count = 0;
+  for (const ir::Node* node : candidates) {
+    TESSIQ_ASSIGN_OR_RETURN(auto kernel, compile_one(*node, capability, ordinal));
+    if (kernel != nullptr) {
+      compiled.push_back(std::move(kernel));
+      ++count;
+    }
+  }
+
+  TESSIQ_LOG(kDebug, kLogModule) << "compiled " << count << " of " << candidates.size()
+                                 << " reduction(s)";
+  return ok();
+}
+
+Result<void> compile_gemms(const ir::Graph& graph, int ordinal, Kernels& compiled) {
+  if (!codegen::blas_available()) {
+    return ok();
+  }
+  const std::vector<const ir::Node*> candidates = codegen::gemm_nodes(graph);
+  if (candidates.empty()) {
+    return ok();
+  }
+  TESSIQ_ASSIGN_OR_RETURN(const auto capability, codegen::device_capability(ordinal));
+
+  std::size_t count = 0;
+  for (const ir::Node* node : candidates) {
+    TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_gemm(*node));
+    if (!description.has_value()) {
+      TESSIQ_LOG(kDebug, kLogModule) << "no gemm shape for " << node->op() << ", leaving it alone";
+      continue;
+    }
+    const codegen::Program* fill = nullptr;
+    if (description->bias.has_value()) {
+      const std::string name = "tessiq_bias_" + description->output;
+      const std::string source = codegen::broadcast_row_source(description->dtype, name);
+      TESSIQ_ASSIGN_OR_RETURN(
+          const codegen::Cubin cubin,
+          codegen::compile_cached(source, name, capability.first, capability.second));
+      TESSIQ_ASSIGN_OR_RETURN(fill, codegen::load_program(cubin, name, ordinal));
+    }
+    compiled.push_back(std::make_shared<GemmKernel>(
+        GemmKernel::Parts{.description = *description, .ordinal = ordinal, .fill = fill}));
+    ++count;
+  }
+
+  TESSIQ_LOG(kDebug, kLogModule) << "described " << count << " of " << candidates.size()
+                                 << " matmul(s)";
+  return ok();
+}
+
+Result<void> compile_convs(const ir::Graph& graph, int ordinal, Kernels& compiled) {
   if (!codegen::cudnn_available()) {
-    return compiled;
+    return ok();
   }
 
   const std::vector<const ir::Node*> candidates = codegen::conv_nodes(graph);
+  std::size_t count = 0;
   for (const ir::Node* node : candidates) {
     TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_conv(*node));
     if (!description.has_value()) {
@@ -541,14 +608,26 @@ Result<std::vector<ConvKernel>> compile_convs(const ir::Graph& graph, int ordina
           << "no cuDNN plan for " << description->output << ": " << plan.error().message();
       continue;
     }
-    compiled.push_back(ConvKernel{
+    compiled.push_back(std::make_shared<ConvKernel>(ConvKernel::Parts{
         .description = *description,
         .plan = std::shared_ptr<const codegen::ConvPlan>(std::move(plan).value()),
-    });
+    }));
+    ++count;
   }
 
-  TESSIQ_LOG(kDebug, kLogModule) << "planned " << compiled.size() << " of " << candidates.size()
+  TESSIQ_LOG(kDebug, kLogModule) << "planned " << count << " of " << candidates.size()
                                  << " convolution(s)";
+  return ok();
+}
+
+} // namespace
+
+Result<std::vector<std::shared_ptr<Kernel>>> compile_kernels(const ir::Graph& graph, int ordinal) {
+  Kernels compiled;
+  TESSIQ_RETURN_IF_ERROR(compile_fused(graph, ordinal, compiled));
+  TESSIQ_RETURN_IF_ERROR(compile_reductions(graph, ordinal, compiled));
+  TESSIQ_RETURN_IF_ERROR(compile_gemms(graph, ordinal, compiled));
+  TESSIQ_RETURN_IF_ERROR(compile_convs(graph, ordinal, compiled));
   return compiled;
 }
 

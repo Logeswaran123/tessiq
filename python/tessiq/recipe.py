@@ -40,10 +40,10 @@ class Recipe:
             than something the caller can work out.
         arena_bytes: What one allocation holding every intermediate would need.
         naive_bytes: What the same intermediates would cost with no reuse.
-        kernels: Compiled kernels, keyed by the node whose value the kernel writes. Fusion groups
-            and reductions share the mapping, because the executor runs both the same way: hand it
-            the inputs and an output tensor and it launches. Empty unless the target is a GPU and
-            the toolkit is present.
+        kernels: Compiled kernels, keyed by the node whose value the kernel writes. Every kind
+            shares the mapping, because the executor runs them all the same way: hand one its
+            inputs, an output tensor and a stream, and it launches. Empty unless the target is a GPU
+            and the toolkit is present.
         fused_away: Nodes a kernel computes on the way to its output. Running them separately
             would compute the same values twice, so the executor skips them.
     """
@@ -54,7 +54,7 @@ class Recipe:
     output_spec: tuple[str | None, ...]
     arena_bytes: int
     naive_bytes: int
-    kernels: dict[str, _C.FusedKernel | _C.ReductionKernel | _C.GemmKernel | _C.ConvKernel]
+    kernels: dict[str, _C.Kernel]
     fused_away: frozenset[str]
 
 
@@ -135,17 +135,12 @@ def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str
         if any(source != here for source in sources) or (not sources and here != host):
             needs_move.add(node.name)
 
-    kernels: dict[str, _C.FusedKernel | _C.ReductionKernel | _C.GemmKernel | _C.ConvKernel] = {
-        kernel.output: kernel for kernel in native.kernels
-    }
-    # A reduction writes one node's value like a fusion group does, so it goes in the same map.
-    # The two cannot collide: a reduction is never inside a group, because it cannot be fused.
-    kernels.update({reduction.output: reduction for reduction in native.reductions})
-    # A matmul writes one node's value too. It is not compiled code, but the executor asks the
-    # same two things of it: what it reads, and run it.
-    kernels.update({gemm.output: gemm for gemm in native.gemms})
-    # A convolution too: a library call rather than compiled code, asked the same two things.
-    kernels.update({conv.output: conv for conv in native.convs})
+    # Keyed on the node each kernel writes, which is the node the executor runs it in place of. Two
+    # kernels cannot write the same node: fusion never takes a reduction, a matmul or a convolution
+    # into a group, so each node belongs to at most one kernel.
+    kernels: dict[str, _C.Kernel] = {kernel.output: kernel for kernel in native.kernels}
+    # A kernel that computes more than its output, as a fused loop does, computes the rest on its
+    # way, so the executor must not run those nodes as well.
     fused_away = {
         name for kernel in native.kernels for name in kernel.members if name != kernel.output
     }
