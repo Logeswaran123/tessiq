@@ -25,6 +25,7 @@ add_executable(tessiq_tests
   test_logging.cpp
   test_liveness.cpp
   test_memory_plan.cpp
+  test_op_registry.cpp
   test_op_support.cpp
   test_nvrtc.cpp
   test_op_traits.cpp

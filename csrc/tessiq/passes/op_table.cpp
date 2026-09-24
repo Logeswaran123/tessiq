@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include "tessiq/passes/op_registry.h"
+
 namespace tessiq::passes {
 
 namespace {
@@ -32,10 +34,15 @@ std::vector<std::string> names_where(bool (*keep)(const OpInfo&)) {
 
 } // namespace
 
-const OpInfo* find_op(std::string_view name) {
+const OpInfo* find_builtin_op(std::string_view name) {
   const auto* const it =
       std::find_if(kOps.begin(), kOps.end(), [name](const OpInfo& op) { return op.name == name; });
   return it == kOps.end() ? nullptr : it;
+}
+
+const OpInfo* find_op(std::string_view name) {
+  const OpInfo* builtin = find_builtin_op(name);
+  return builtin != nullptr ? builtin : find_registered_op(name);
 }
 
 std::vector<std::string> op_names() {

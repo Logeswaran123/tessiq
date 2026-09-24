@@ -34,6 +34,26 @@ bool any_extent_is_unknown(const ir::Node& node) {
   return false;
 }
 
+/// Whether every value the node reads and writes has an element type `info` has a kernel for.
+///
+/// Always true for an operation from ops.toml, which accepts every type and leaves the question to
+/// the emitter. A registered operation names the types its expression was written for, and a node
+/// of any other type stays on the host rather than reaching a kernel nobody wrote for it.
+bool accepts_the_types(const OpInfo& info, const ir::Node& node) {
+  for (std::size_t i = 0; i < node.result_count(); ++i) {
+    if (!info.accepts(node.result(i)->type().dtype())) {
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < node.operand_count(); ++i) {
+    const ir::Value* operand = node.operand(i);
+    if (operand != nullptr && !info.accepts(operand->type().dtype())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Whether there can be a kernel for this node given the types it actually has.
 ///
 /// Support is a property of the operation for every shape the compiler knows, and this is the one
@@ -49,6 +69,9 @@ bool any_extent_is_unknown(const ir::Node& node) {
 /// everything put 69 operations on that path and took 12.2 ms against 0.7 ms for eager.
 bool has_a_kernel_for_these_types(const ir::Node& node) {
   const OpInfo* info = find_op(node.op());
+  if (info != nullptr && !accepts_the_types(*info, node)) {
+    return false;
+  }
   if (info != nullptr && info->category == OpCategory::kConvolution) {
     // Asked before anything else, because unlike the other categories a convolution can have no
     // kernel even when every extent is known. cuDNN is given a two dimensional convolution, which

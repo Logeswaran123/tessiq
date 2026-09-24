@@ -25,7 +25,8 @@ namespace {
 enum class RuleKind {
   /// One tensor in, same type out: abs, relu, tanh.
   kUnaryElementwise,
-  /// Two tensors in, broadcast shape and matching dtype out: add, mul.
+  /// Two or more tensors in, broadcast shape and matching dtype out: add, mul, and a registered
+  /// operation of any arity above one.
   ///
   /// Also covers the one-operand form, which is what the importer produces when the second
   /// argument was a Python scalar and became an attribute instead.
@@ -98,22 +99,22 @@ Result<std::vector<ir::TensorType>> infer_binary(std::string_view op,
   if (operands.size() == 1) {
     return std::vector<ir::TensorType>{operands.front()};
   }
-  if (operands.size() != 2) {
-    return invalid_argument(std::string(op) + " takes one or two tensor operands, got " +
-                            std::to_string(operands.size()));
+  if (operands.empty()) {
+    return invalid_argument(std::string(op) + " takes at least one tensor operand");
   }
 
-  if (operands[0].dtype() != operands[1].dtype()) {
-    // Type promotion is torch's own set of rules, and a second copy of them here would be a second
-    // copy to keep in agreement. A graph out of AOTAutograd has already been promoted, so mixed
-    // dtypes mean something upstream is not what this pass expects.
-    return unsupported(std::string(op) + " on mixed dtypes " + operands[0].to_string() + " and " +
-                       operands[1].to_string() + "; promotion happens before import");
+  ir::Shape shape = operands.front().shape();
+  for (std::size_t i = 1; i < operands.size(); ++i) {
+    if (operands[i].dtype() != operands.front().dtype()) {
+      // Type promotion is torch's own set of rules, and a second copy of them here would be a
+      // second copy to keep in agreement. A graph out of AOTAutograd has already been promoted, so
+      // mixed dtypes mean something upstream is not what this pass expects.
+      return unsupported(std::string(op) + " on mixed dtypes " + operands.front().to_string() +
+                         " and " + operands[i].to_string() + "; promotion happens before import");
+    }
+    TESSIQ_ASSIGN_OR_RETURN(shape, broadcast_shapes(shape, operands[i].shape()));
   }
-
-  TESSIQ_ASSIGN_OR_RETURN(ir::Shape shape,
-                          broadcast_shapes(operands[0].shape(), operands[1].shape()));
-  return std::vector<ir::TensorType>{ir::TensorType(operands[0].dtype(), std::move(shape))};
+  return std::vector<ir::TensorType>{ir::TensorType(operands.front().dtype(), std::move(shape))};
 }
 
 /// The attribute named `name`, or null if the node has none.
