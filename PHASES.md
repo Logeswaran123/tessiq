@@ -21,8 +21,9 @@ work it describes.
 | 9 | Every operation on the device | done |
 | 10 | Where the time goes | done |
 | 11 | Convolution | done |
-| 12 | Triton emitter | optional |
-| 13 | MLIR export target | optional |
+| 12 | Custom operations and rewrite passes | planned |
+| 13 | Triton emitter | optional |
+| 14 | MLIR export target | optional |
 
 ---
 
@@ -193,18 +194,92 @@ half times faster. That was one run of the old code while the machine was busy, 
 that convolve on the host are the ones that vary. The four operations left on the host are
 float32 to float32 casts the batch norm decomposition inserts on its running statistics.
 
-### Phase 12: Triton emitter (optional)
+### Phase 12: Custom operations and rewrite passes (planned)
+Adding an operation with its own device kernel from Python, without editing tessiq's C++ or
+rebuilding it, and a pattern rewriter that finds the subgraph a custom operation replaces. Each
+rewrite is its own named pass.
+**What happens today.** An operation declared with `torch.library.custom_op` compiles and gives
+the right answer, but the compiler has never heard of it, so it runs on the host between two device
+kernels and the data crosses the bus both ways:
+
+```
+  mul         aten.mul.Tensor           kernel %mul (moves its inputs)
+  fast_gelu   demo.fast_gelu.default    host (moves its inputs)
+  add         aten.add.Tensor           kernel %relu (moves its inputs)
+```
+
+Giving it a GPU kernel means a row in `ops.toml`, a category the passes understand, an extraction,
+a kernel struct, a `compile_*` function, a slot in `CompiledGraph`, a binding, an entry in the
+recipe's kernel map, and a rebuild. The four kernel kinds that exist were each wired in that way.
+**What it adds.**
+- A kernel protocol. Fused loops, reductions, matmuls and convolutions already answer the same two
+  questions for the executor, what they read and how to run. That becomes an interface, a custom
+  kernel is a fifth implementation of it, and nothing downstream counts how many kinds exist.
+- A registry of operations added at run time, consulted after the generated table. A registered
+  operation carries its schema, the dtypes and ranks it has a kernel for, since support depends on
+  the types (phase 8), and a reference implementation that is both the CPU backend's path and the
+  oracle its kernel is tested against.
+- Two ways to supply the kernel. An elementwise operation gives an expression and joins fusion
+  groups like a built-in one. Anything else gives CUDA source, an entry point and a launch shape.
+  It compiles through the existing NVRTC path and cubin cache and takes its extents at the launch,
+  so it works on symbolic shapes. The source is tagged with its language, so phase 13 can add
+  Triton as a second one.
+- The PyTorch side, done by the registration: a `torch.library` operation with a fake
+  implementation for tracing, an implementation for the tessiq dispatch key so eager tensors on
+  the device run the same kernel, and the reference for the CPU.
+- A pattern rewriter. A pattern is a small IR graph, either written in the textual form or traced
+  from a Python function through the backend's own decompositions, so that it matches what
+  AOTAutograd emits rather than what the user typed. Each rewrite registers as its own pass,
+  `rewrite-<name>`, which can be named in a pipeline, is listed by `tessiq-opt --list`, and is
+  tested with golden files. A match needs every interior value of the pattern to have no user
+  outside it, which is the rule fusion already uses.
+- No new execution machinery. The node that replaces a match keeps the root's value name and
+  records the nodes it absorbed, which is how a fused kernel already relates to the FX graph the
+  executor walks.
+
+**Rules it keeps.**
+- A rewrite runs only when a compile names it or its author declares it exact. A kernel that
+  approximates changes the numbers, and phase 5 settled that the compiler does not do that
+  silently.
+- The backward graph is not rewritten. AOTAutograd derived it from the original operations, and a
+  forward value it saved is a graph output, so a pattern covering that value does not match and
+  training stays correct. A model that calls a custom operation directly needs an autograd
+  registration for it, which is PyTorch's mechanism rather than ours.
+- A custom operation has no `linalg` form, which cuts against the op-set seam phase 14 relies on.
+  It exports through its reference implementation's decomposition, or as a call to an external
+  function.
+
+**Milestone:**
+1. `demo::fast_gelu`, given as an expression, and `demo::rms_norm`, given as CUDA source that does
+   the reduction and the elementwise pass in one kernel, are each defined in one Python file in
+   the test suite with no C++ change and no rebuild. Each runs on a tessiq tensor in eager mode and
+   under `torch.compile`, and matches its reference within its declared tolerance on both backends.
+2. `rewrite-fast-gelu` and `rewrite-rms-norm` are separate passes with golden files, including
+   inputs they must leave alone: an interior value used elsewhere, and a dtype the kernel does not
+   support.
+3. A model with RMSNorm and the GELU approximation written out in plain PyTorch compiles with both
+   rewrites named, `tessiq-explain` shows each matched subgraph as one custom launch, the result
+   matches eager, the model still trains, and the time with and without the rewrites is measured
+   and reported whichever way it goes.
+
+**Why here, before Triton.** The Triton emitter needs the same kernel protocol, and the Triton
+kernel people most often write is a hand-written custom operation rather than a generated fused
+cluster. Building the seam first makes a Triton-sourced custom operation a new source language
+rather than a sixth path wired in by hand.
+
+### Phase 13: Triton emitter (optional)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;
 head-to-head benchmark against the NVRTC emitter on identical clusters.
 **Milestone:** `TESSIQ_EMITTER=triton` produces correct results on the full op test suite, and
 `bench/emitters/` publishes a per-pattern comparison table of the two emitters.
 
-### Phase 13: MLIR export target (optional)
+### Phase 14: MLIR export target (optional)
 `MlirTarget` implementing `LoweringTarget`; Tessiq IR → `linalg`-on-tensors converter; `gen_ops.py`
 extended to emit ODS from the same TOML; standard MLIR bufferization + lowering pipeline to LLVM.
 Gated behind `-DTESSIQ_ENABLE_MLIR=ON`, off by default.
 **Milestone:** a subset of ops exports to valid MLIR, round-trips through `mlir-opt`, and executes
-end-to-end on one model with results matching the CPU reference.
+end-to-end on one model with results matching the CPU reference. A phase 12 custom operation
+exports through its reference decomposition.
 
 ### Sequencing note
 
@@ -218,9 +293,13 @@ block with four operations on the host and a profiler whose own cost sits inside
 reports, and both of those have to be settled before a phase that adds coverage can be judged on
 anything but coverage.
 
-### The seams that phases 12 and 13 depend on
+Phase 12 was added after 11. A custom operation compiled correctly and ran on the host, and adding
+a kernel for one took edits in eight places and a rebuild, which is the wrong cost for the thing a
+backend's users most often want to do.
 
-Both optional phases are additive only because three interfaces get built earlier. Retrofitting
+### The seams that phases 13 and 14 depend on
+
+Both optional phases are additive only because four interfaces get built earlier. Retrofitting
 them later would mean a rewrite.
 
 | Seam | Built in | What it buys |
@@ -228,6 +307,7 @@ them later would mean a rewrite.
 | `KernelEmitter` interface | Phase 6 | A Triton emitter becomes one new class and nothing else changes |
 | `LoweringTarget` abstraction | Phase 5 | `Recipe` is one target; an MLIR module can be another |
 | A small, orthogonal, target-neutral IR op set | Phase 3 onward | Ad-hoc fused ops have no `linalg` equivalent later |
+| The kernel protocol and the operation registry | Phase 12 | A Triton kernel is a new source language, not a new path through the executor |
 
 **Phases 9 to 11 are explicitly optional**, and framing them that way is deliberate. For the two
 alternative backends the value is mostly realized in phases 5 and 6, when the seams get built: a
