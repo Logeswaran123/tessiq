@@ -22,7 +22,7 @@ option(TESSIQ_ENABLE_CUDA "Build the CUDA backend" ${CUDAToolkit_FOUND})
 
 # Reserved for the MLIR export target. Declared now so the option name is fixed and documented
 # before anything depends on it; enabling it is a later phase.
-option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PHASES.md, phase 13)" OFF)
+option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PHASES.md, phase 15)" OFF)
 
 set(TESSIQ_SANITIZER "" CACHE STRING
     "Comma-separated sanitizers to enable, e.g. 'address,undefined'. Empty disables them.")

@@ -21,8 +21,10 @@ work it describes.
 | 9 | Every operation on the device | done |
 | 10 | Where the time goes | done |
 | 11 | Convolution | done |
-| 12 | Triton emitter | optional |
-| 13 | MLIR export target | optional |
+| 12 | Custom operations and rewrite passes | planned |
+| 13 | Precompiled kernels | planned |
+| 14 | Triton emitter | optional |
+| 15 | MLIR export target | optional |
 
 ---
 
@@ -193,18 +195,142 @@ half times faster. That was one run of the old code while the machine was busy, 
 that convolve on the host are the ones that vary. The four operations left on the host are
 float32 to float32 casts the batch norm decomposition inserts on its running statistics.
 
-### Phase 12: Triton emitter (optional)
+### Phase 12: Custom operations and rewrite passes (planned)
+Adding an operation with its own device kernel from Python, without editing tessiq's C++ or
+rebuilding it, and a pattern rewriter that finds the subgraph a custom operation replaces. Each
+rewrite is its own named pass.
+**What happens today.** An operation declared with `torch.library.custom_op` compiles and gives
+the right answer, but the compiler has never heard of it, so it runs on the host between two device
+kernels and the data crosses the bus both ways:
+
+```
+  mul         aten.mul.Tensor           kernel %mul (moves its inputs)
+  fast_gelu   demo.fast_gelu.default    host (moves its inputs)
+  add         aten.add.Tensor           kernel %relu (moves its inputs)
+```
+
+Giving it a GPU kernel means a row in `ops.toml`, a category the passes understand, an extraction,
+a kernel struct, a `compile_*` function, a slot in `CompiledGraph`, a binding, an entry in the
+recipe's kernel map, and a rebuild. The four kernel kinds that exist were each wired in that way.
+**What it adds.**
+- A kernel protocol. Fused loops, reductions, matmuls and convolutions already answer the same two
+  questions for the executor, what they read and how to run. That becomes an interface, a custom
+  kernel is a fifth implementation of it, and nothing downstream counts how many kinds exist. The
+  interface is "launch these inputs into these outputs on this stream", with the stream passed
+  explicitly, and not the argument list of `cuLaunchKernel`. A kernel tessiq did not compile has to
+  fit it too, which is what phase 13 adds.
+- A registry of operations added at run time, consulted after the generated table. A registered
+  operation carries its schema, the dtypes and ranks it has a kernel for, since support depends on
+  the types (phase 8), and a reference implementation that is both the CPU backend's path and the
+  oracle its kernel is tested against.
+- Two ways to supply the kernel. An elementwise operation gives an expression and joins fusion
+  groups like a built-in one. Anything else gives CUDA source, an entry point and a launch shape.
+  It compiles through the existing NVRTC path and cubin cache and takes its extents at the launch,
+  so it works on symbolic shapes. The source is tagged with its language, so phase 14 can add
+  Triton as a second one.
+- The PyTorch side, done by the registration: a `torch.library` operation with a fake
+  implementation for tracing, an implementation for the tessiq dispatch key so eager tensors on
+  the device run the same kernel, and the reference for the CPU.
+- A pattern rewriter. A pattern is a small IR graph, either written in the textual form or traced
+  from a Python function through the backend's own decompositions, so that it matches what
+  AOTAutograd emits rather than what the user typed. Each rewrite registers as its own pass,
+  `rewrite-<name>`, which can be named in a pipeline, is listed by `tessiq-opt --list`, and is
+  tested with golden files. A match needs every interior value of the pattern to have no user
+  outside it, which is the rule fusion already uses.
+- No new execution machinery. The node that replaces a match keeps the root's value name and
+  records the nodes it absorbed, which is how a fused kernel already relates to the FX graph the
+  executor walks.
+
+**Rules it keeps.**
+- A rewrite runs only when a compile names it or its author declares it exact. A kernel that
+  approximates changes the numbers, and phase 5 settled that the compiler does not do that
+  silently.
+- The backward graph is not rewritten. AOTAutograd derived it from the original operations, and a
+  forward value it saved is a graph output, so a pattern covering that value does not match and
+  training stays correct. A model that calls a custom operation directly needs an autograd
+  registration for it, which is PyTorch's mechanism rather than ours.
+- A custom operation has no `linalg` form, which cuts against the op-set seam phase 15 relies on.
+  It exports through its reference implementation's decomposition, or as a call to an external
+  function.
+
+**Milestone:**
+1. `demo::fast_gelu`, given as an expression, and `demo::rms_norm`, given as CUDA source that does
+   the reduction and the elementwise pass in one kernel, are each defined in one Python file in
+   the test suite with no C++ change and no rebuild. Each runs on a tessiq tensor in eager mode and
+   under `torch.compile`, and matches its reference within its declared tolerance on both backends.
+2. `rewrite-fast-gelu` and `rewrite-rms-norm` are separate passes with golden files, including
+   inputs they must leave alone: an interior value used elsewhere, and a dtype the kernel does not
+   support.
+3. A model with RMSNorm and the GELU approximation written out in plain PyTorch compiles with both
+   rewrites named, `tessiq-explain` shows each matched subgraph as one custom launch, the result
+   matches eager, the model still trains, and the time with and without the rewrites is measured
+   and reported whichever way it goes.
+
+**Why here, before Triton.** The Triton emitter needs the same kernel protocol, and the Triton
+kernel people most often write is a hand-written custom operation rather than a generated fused
+cluster. Building the seam first makes a Triton-sourced custom operation a new source language
+rather than a sixth path wired in by hand.
+
+### Phase 13: Precompiled kernels (planned)
+Registering a custom operation whose kernel was built ahead of time, so that it can use CUTLASS,
+cuBLAS or anything else that needs host code, which phase 12's run-time compiled source cannot do.
+**Why phase 12 is not enough.** NVRTC compiles device code only. A cuBLAS call is host code with a
+handle. A CUTLASS GEMM does its setup on the host and takes long enough to compile that it is built
+with nvcc ahead of time, for the architecture of the card it will run on.
+**What it adds.**
+- A launcher: one C function per operation, in a shared library the user builds. tessiq loads it
+  and calls it with the operation's tensors, the stream to launch on, and a way to ask tessiq's
+  allocator for workspace. It implements phase 12's kernel interface, so the executor, the registry
+  and the rewriter do not change.
+- Tensors handed over as DLPack rather than `at::Tensor`. A tessiq tensor is a PrivateUse1 tensor,
+  and extension code written for CUDA checks `is_cuda()` and rejects it. DLPack is the standard for
+  passing tensors between frameworks, and it carries the pointer, shape, strides, dtype and device
+  ordinal.
+- A build helper that compiles a launcher for the architecture the driver reports and records that
+  architecture in the library, so a library built for the wrong card is refused at load with a
+  message rather than failing at the first launch, which is how the `sm_80` cubin failed in
+  phase 6.
+- A version number on the launcher interface, checked at load, so an old library and a newer
+  tessiq fail loudly instead of passing arguments one of them does not expect.
+- CUTLASS only in the tests and examples that use it. It is header-only and fetched for those
+  builds, and the backend itself does not depend on it.
+
+**Rules it keeps.**
+- A launcher uses the stream it is handed and sets any library handle to that stream. Every tessiq
+  launch and the cuDNN handle use stream 0 today, and a kernel queued on another stream can run
+  before its inputs exist.
+- Workspace comes from tessiq's allocator, so the memory statistics include it and running out goes
+  through the allocator's release-and-retry.
+- A precompiled operation still registers a reference implementation, which is the CPU backend's
+  path and the oracle its kernel is tested against.
+
+**Milestone:**
+1. A CUTLASS GEMM whose epilogue, the stage that runs on each output element before it is written,
+   adds the bias and applies GELU. It is built ahead of time and registered from Python.
+2. `rewrite-gemm-bias-gelu` maps `addmm` followed by GELU onto it. `tessiq-explain` shows one launch
+   where there were two, the result matches eager within the operation's tolerance, and it is timed
+   against the current path of a cuBLAS matmul followed by a fused GELU kernel, reported whichever
+   way it goes.
+3. A second operation calls cuBLAS directly, to show that a library call registers the same way as
+   a kernel.
+
+**Why here.** It needs phase 12's kernel interface, registry and rewriter, and without the rewriter
+a GEMM with a fused epilogue only helps models that call it by name. It comes before Triton because
+a Triton kernel compiled ahead of time is one more precompiled launcher.
+
+### Phase 14: Triton emitter (optional)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;
 head-to-head benchmark against the NVRTC emitter on identical clusters.
 **Milestone:** `TESSIQ_EMITTER=triton` produces correct results on the full op test suite, and
 `bench/emitters/` publishes a per-pattern comparison table of the two emitters.
 
-### Phase 13: MLIR export target (optional)
+### Phase 15: MLIR export target (optional)
 `MlirTarget` implementing `LoweringTarget`; Tessiq IR → `linalg`-on-tensors converter; `gen_ops.py`
 extended to emit ODS from the same TOML; standard MLIR bufferization + lowering pipeline to LLVM.
 Gated behind `-DTESSIQ_ENABLE_MLIR=ON`, off by default.
 **Milestone:** a subset of ops exports to valid MLIR, round-trips through `mlir-opt`, and executes
-end-to-end on one model with results matching the CPU reference.
+end-to-end on one model with results matching the CPU reference. A custom operation from phase 12
+or 13 exports through its reference decomposition.
 
 ### Sequencing note
 
@@ -218,9 +344,14 @@ block with four operations on the host and a profiler whose own cost sits inside
 reports, and both of those have to be settled before a phase that adds coverage can be judged on
 anything but coverage.
 
-### The seams that phases 12 and 13 depend on
+Phase 12 was added after 11. A custom operation compiled correctly and ran on the host, and adding
+a kernel for one took edits in eight places and a rebuild, which is the wrong cost for the thing a
+backend's users most often want to do. Phase 13 follows it for kernels that phase 12's run-time
+compiler cannot build, such as CUTLASS templates and calls into cuBLAS.
 
-Both optional phases are additive only because three interfaces get built earlier. Retrofitting
+### The seams that phases 14 and 15 depend on
+
+Both optional phases are additive only because four interfaces get built earlier. Retrofitting
 them later would mean a rewrite.
 
 | Seam | Built in | What it buys |
@@ -228,6 +359,7 @@ them later would mean a rewrite.
 | `KernelEmitter` interface | Phase 6 | A Triton emitter becomes one new class and nothing else changes |
 | `LoweringTarget` abstraction | Phase 5 | `Recipe` is one target; an MLIR module can be another |
 | A small, orthogonal, target-neutral IR op set | Phase 3 onward | Ad-hoc fused ops have no `linalg` equivalent later |
+| The kernel protocol and the operation registry | Phase 12 | A Triton kernel is a new source language, not a new path through the executor |
 
 **Phases 9 to 11 are explicitly optional**, and framing them that way is deliberate. For the two
 alternative backends the value is mostly realized in phases 5 and 6, when the seams get built: a
