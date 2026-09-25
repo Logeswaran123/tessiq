@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Running a recipe.
 
-Every test checks the result against eager. That is the only property that matters here: the
-compiler may route an operation wherever it likes, but the number it produces has to be the number
-PyTorch would have produced.
+Every test checks the result against eager: wherever an operation runs, it has to produce the
+number PyTorch would.
 """
 
 from __future__ import annotations
@@ -97,8 +96,8 @@ def test_results_come_back_to_the_host() -> None:
 
 
 def test_clustered_nodes_really_run_on_the_tessiq_device() -> None:
-    # Without this the tests above would pass just as well if the executor ignored the partition
-    # and ran everything on the host.
+    # The tests above would also pass if the executor ignored the partition and ran everything on
+    # the host.
     inputs = (torch.randn(64), torch.randn(64))
     run = compiled(lambda a, b: torch.relu(a + b), *inputs)
 
@@ -131,8 +130,8 @@ def test_clusters_can_run_on_the_gpu() -> None:
 
 
 def test_an_unchanged_input_is_moved_once() -> None:
-    # AOTAutograd lifts a module's parameters to graph inputs, so they arrive as ordinary
-    # arguments and used to cross on every call. They are the same tensors each time.
+    # AOTAutograd lifts a module's parameters to graph inputs, and they are the same tensors on
+    # every call.
     table = ResidentInputs()
     host = torch.randn(64)
 
@@ -144,8 +143,7 @@ def test_an_unchanged_input_is_moved_once() -> None:
 
 
 def test_writing_to_an_input_copies_it_again() -> None:
-    # A parameter an optimizer step writes to has to cross again. The version counter is what
-    # notices, and reading the stale copy would train against the wrong weights.
+    # A parameter an optimizer step writes to has to cross again; the version counter notices.
     table = ResidentInputs()
     host = torch.zeros(64)
 
@@ -158,8 +156,8 @@ def test_writing_to_an_input_copies_it_again() -> None:
 
 
 def test_a_different_tensor_at_the_same_address_is_not_reused() -> None:
-    # Identity alone is not enough: a freed tensor's address can be handed to the next allocation.
-    # The weak reference is what makes a dead entry miss rather than match the wrong tensor.
+    # A freed tensor's id can be reused, so the weak reference makes a dead entry miss rather than
+    # match the wrong tensor.
     table = ResidentInputs()
     for _ in range(64):
         table.move(torch.randn(16), tessiq.cpu)

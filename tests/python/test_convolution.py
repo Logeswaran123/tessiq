@@ -3,8 +3,7 @@
 """Convolution through cuDNN, and the paths that have to stay correct without it.
 
 cuDNN reads every tensor the way its descriptors say, so a misread stride or padding is a wrong
-answer rather than an error. Each case below is compared against eager on the host, which is the
-only reference that cannot share a mistake with the code under test.
+answer rather than an error. Each case is compared against eager on the host.
 """
 
 from __future__ import annotations
@@ -17,8 +16,7 @@ import tessiq
 from tessiq import _C
 from test_models import ResidualBlock
 
-# Tight, because the plan asks for plain fp32 rather than TF32 tensor cores precisely so that the
-# answer agrees with the host.
+# Tight, because the plan uses fp32 math rather than TF32 so the answer agrees with the host.
 RTOL = 1e-5
 ATOL = 1e-5
 
@@ -74,8 +72,7 @@ def test_a_convolution_matches_eager(config: dict[str, object], bias: bool) -> N
 
 @pytest.mark.cuda
 def test_a_float64_convolution_runs_on_the_host_and_matches_eager() -> None:
-    # cuDNN here is float32 only, so a float64 convolution is left to the host rather than claimed
-    # and then refused when it is called.
+    # cuDNN is float32 only here, so a float64 convolution is left on the host.
     _gpu()
     torch.manual_seed(0)
     layer = nn.Conv2d(4, 8, kernel_size=3, padding=1).double().eval()
@@ -87,8 +84,8 @@ def test_a_float64_convolution_runs_on_the_host_and_matches_eager() -> None:
 
 @pytest.mark.cuda
 def test_a_convolution_is_planned_rather_than_interpreted() -> None:
-    # Matching eager proves nothing on its own: the fallback matches too. What this checks is that
-    # cuDNN is actually the thing running it.
+    # Matching eager proves nothing on its own, since the fallback matches too. This checks that
+    # cuDNN ran it.
     _gpu()
     torch.manual_seed(0)
     graph = tessiq.capture(ResidualBlock().eval(), torch.randn(1, 16, 8, 8))
@@ -100,8 +97,8 @@ def test_a_convolution_is_planned_rather_than_interpreted() -> None:
 
 @pytest.mark.cuda
 def test_the_residual_block_runs_on_the_device() -> None:
-    # The phase milestone, less the four casts the batch norm decomposition inserts on its running
-    # statistics, which are float32 to float32 and cost three percent of the call.
+    # Everything but the four float32-to-float32 casts the batch norm decomposition inserts on its
+    # running statistics.
     _gpu()
     torch.manual_seed(0)
     block = ResidualBlock().eval()
@@ -119,10 +116,8 @@ def test_the_residual_block_runs_on_the_device() -> None:
 
 
 def test_a_convolution_on_the_reference_device_is_still_correct() -> None:
-    # The reference device has no cuDNN. A convolution placed there is interpreted, and PyTorch
-    # routes a convolution on an unfamiliar device to convolution_overrideable, which the generic
-    # fallback cannot help with: it would call the same operation on the host, where it does not
-    # exist either. This raised before the registration existed.
+    # The reference device has no cuDNN. PyTorch routes a convolution on an unfamiliar device to
+    # convolution_overrideable, which the generic fallback cannot run, so tessiq registers its own.
     torch.manual_seed(0)
     block = ResidualBlock().eval()
     example = torch.randn(1, 16, 8, 8)
@@ -133,7 +128,7 @@ def test_a_convolution_on_the_reference_device_is_still_correct() -> None:
 
 @pytest.mark.parametrize("device", ["cpu", "gpu"])
 def test_a_convolution_on_a_tessiq_tensor_works_eagerly(device: str) -> None:
-    # Outside the compiler altogether. The same registration is what makes this work.
+    # Eager, outside the compiler, through the same registration.
     if device == "gpu":
         _gpu()
     target = str(tessiq.cpu if device == "cpu" else tessiq.gpu)

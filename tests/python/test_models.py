@@ -1,13 +1,10 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""The two blocks phase 7 is measured against.
+"""Blocks from real architectures, checked against eager.
 
-`test_end_to_end.py` takes small models built from operations the backend already claims. These
-take blocks out of real architectures, most of whose operations it does not claim, and check that
-the answer is still the one eager gives. That is the claim a graph compiler has to make first:
-whatever it can run itself, the parts it cannot must still be right.
-
-Both blocks run on the reference backend and, where there is a GPU, on that too.
+`test_end_to_end.py` uses small models. These use a transformer encoder block and a ResNet
+residual block, and check coverage as well as answers. Both run on the reference backend and, where
+there is a GPU, on that too.
 """
 
 from __future__ import annotations
@@ -115,8 +112,7 @@ def block_cases() -> list[object]:
 
 
 def capture(model: nn.Module, example: torch.Tensor) -> torch.fx.GraphModule:
-    # The package's own, so that what these tests compile is what the backend compiles. A second
-    # copy here would drift, and the way it drifts is a test passing on a graph nobody produces.
+    # The package's own, so these tests compile what the backend compiles.
     return tessiq.capture(model, example)
 
 
@@ -127,9 +123,8 @@ def _fresh_dynamo() -> None:
 
 @pytest.mark.parametrize(("model", "example"), block_cases())
 def test_a_block_imports(model: nn.Module, example: torch.Tensor) -> None:
-    # Importing is the first thing that has to work, and until recently neither block could. A
-    # convolution with no bias carries a None, and both blocks contain a normalisation that
-    # returns three tensors rather than one.
+    # A convolution with no bias carries a None, and both blocks have a normalisation that returns
+    # three tensors.
     text = tessiq.import_graph(capture(model, example))
     assert text.startswith("graph @forward("), text
     # A getitem is not an operation here. Its name survives as the name of the result it selected,
@@ -161,9 +156,8 @@ def test_a_block_matches_eager_on_a_gpu(model: nn.Module, example: torch.Tensor)
 
 @pytest.mark.parametrize(("model", "example"), block_cases())
 def test_what_a_block_claims_matches_the_table(model: nn.Module, example: torch.Tensor) -> None:
-    # Coverage checked on a real graph rather than on the table. What the backend claims here has
-    # to be exactly what ops.toml says it has a kernel for, or a custom operation in
-    # csrc/custom_ops, so a block cannot quietly claim something the emitter would then decline.
+    # What the backend claims here has to be what ops.toml says has a kernel, or a custom
+    # operation, so a block cannot claim something the emitter would then decline.
     with_kernels = {
         str(spelling)
         for op in load_operations()
@@ -201,30 +195,26 @@ def test_a_block_has_something_to_run(model: nn.Module, example: torch.Tensor) -
 
 
 def test_the_encoder_block_has_nothing_left_to_decline() -> None:
-    # It used to be the hard case for the fallback. The last four operations it left on the host
-    # were the clones that pack an attention head's view of the scores, and those have a kernel
-    # now, so every operation the block is made of runs on the device.
+    # Every operation in the block runs on the device.
     _, declined = claimed_and_declined(EncoderBlock().eval(), torch.randn(2, 6, 32))
     assert declined == 0
 
 
 def test_the_residual_block_still_exercises_the_fallback() -> None:
-    # Which matters, because a path nothing reaches is a path that rots. Convolution and batch
-    # norm are what is left, and phase 11 is where they get a kernel. Until then this is the block
-    # that keeps the fallback covered.
+    # Keeps the fallback covered: the block still has an operation the backend declines
+    # (`aten._to_copy`).
     _, declined = claimed_and_declined(ResidualBlock().eval(), torch.randn(1, 16, 8, 8))
     assert declined > 0
 
 
 def test_layer_norm_is_broken_up_and_softmax_is_kept_for_its_kernel() -> None:
-    # Layer norm has no kernel here and needs none. core ATen leaves it whole; tessiq breaks it up,
-    # and every piece it breaks into is something it already runs.
+    # core ATen leaves layer norm whole; tessiq decomposes it into operations it runs.
     text = tessiq.import_graph(capture(EncoderBlock().eval(), torch.randn(2, 6, 32)))
     assert "aten.native_layer_norm" not in text, text
     assert "prims." not in text, "decomposing further than ATen is a different operation set"
     assert "aten.rsqrt.default" in text, text
-    # Softmax went the same way until csrc/custom_ops/softmax replaced it. For float32, which the
-    # replacement has a kernel for, it is kept whole so the replacement can find it.
+    # Softmax is kept whole for float32, so csrc/custom_ops/softmax can replace it, and decomposed
+    # otherwise.
     assert "aten._softmax.default" in text, text
 
     double = EncoderBlock().double().eval()

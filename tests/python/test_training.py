@@ -2,12 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Training through the backend.
 
-Everything until now compiled a forward pass. `torch.compile` on a model that requires gradients
-produces two graphs, and AOTAutograd hands the backward one to the same compiler, so the backward
-pass is compiled the same way the forward is and has to be as right.
-
-The claim these make is the one that matters: a model trained through tessiq reaches the same
-parameters as the same model trained eagerly, step for step.
+`torch.compile` on a model that requires gradients produces a forward and a backward graph, and
+AOTAutograd hands both to the same compiler. These check that a model trained through tessiq
+reaches the same parameters as the same model trained eagerly.
 """
 
 from __future__ import annotations
@@ -84,8 +81,8 @@ def test_a_model_trains_to_convergence_on_a_gpu() -> None:
 
 @pytest.mark.cuda
 def test_training_reaches_the_same_parameters_as_eager() -> None:
-    # The strongest claim available: two hundred steps of gradient descent, and every weight ends
-    # where eager put it. A backward pass that is slightly wrong still converges, to somewhere else.
+    # Two hundred steps, and every weight ends where eager put it. A slightly wrong backward pass
+    # still converges, to somewhere else.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -114,10 +111,9 @@ class WithItsLoss(nn.Module):
 
 @pytest.mark.cuda
 def test_a_module_that_computes_its_own_loss_trains_the_same_as_eager() -> None:
-    # The backward graph then begins by broadcasting the scalar gradient to every element, a value
-    # whose strides are all zero, which layout-assign copies before a kernel reads it. That copy
-    # used to reach the kernel under a name that was neither a C identifier nor a value the
-    # executor holds, so the kernel did not compile.
+    # The backward graph begins by broadcasting the scalar gradient to every element, a value with
+    # all-zero strides, which layout-assign records a copy of. The kernel has to name the original
+    # value, since the copy's name is not a C identifier and the executor does not hold it.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
     inputs, targets = dataset()
@@ -145,9 +141,8 @@ def test_a_module_that_computes_its_own_loss_trains_the_same_as_eager() -> None:
 
 @pytest.mark.cuda
 def test_the_backward_graph_is_compiled_too() -> None:
-    # AOTAutograd produces two graphs and hands both to the same compiler. The backward one is the
-    # larger here, so a backend that only compiled forwards would leave most of training on the
-    # host without failing any correctness test.
+    # The backward graph is the larger one here, so a backend that compiled only forwards would
+    # leave most of training on the host without failing any correctness test.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 

@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Running a model with generated kernels.
 
-The point of these is not that a kernel runs. It is that running one gives the same numbers as not
-running one, which is the only claim that matters and the one a code generator is most able to
-break quietly.
+Each test checks that running a kernel gives the same numbers as not running one.
 """
 
 from __future__ import annotations
@@ -72,8 +70,8 @@ def test_the_kernel_agrees_with_eager() -> None:
 
 
 def test_the_kernel_agrees_with_the_same_graph_unfused() -> None:
-    # The sharper comparison. Same recipe, same device, same everything, with the kernels removed,
-    # so the only difference is whether the chain ran as one kernel or four operations.
+    # The same recipe with the kernels removed, so the only difference is one kernel against four
+    # operations.
     inputs = (torch.randn(4096), torch.randn(4096), torch.randn(4096))
     fused = build_recipe(captured(chain, *inputs), tessiq.gpu, use_cache=False)
     unfused = replace(fused, kernels={}, fused_away=frozenset())
@@ -84,8 +82,7 @@ def test_the_kernel_agrees_with_the_same_graph_unfused() -> None:
 
 
 def test_the_kernel_agrees_with_the_host_reference() -> None:
-    # The CPU backend is written to be obviously correct rather than fast, which is what makes it
-    # worth comparing against. This is the check the phase milestone asks for.
+    # The CPU backend is written to be obviously correct rather than fast.
     inputs = (torch.randn(8192), torch.randn(8192), torch.randn(8192))
     graph = captured(chain, *inputs)
 
@@ -96,16 +93,16 @@ def test_the_kernel_agrees_with_the_host_reference() -> None:
 
 @pytest.mark.parametrize("size", [1, 255, 256, 257, 4095, 4096])
 def test_sizes_around_the_block_boundary(size: int) -> None:
-    # The block is 256 threads. A missing bounds check shows up only where the count does not
-    # divide it, so the sizes that do are here as controls rather than as the interesting case.
+    # The block is 256 threads. A missing bounds check shows only where the count does not divide
+    # it; the sizes that do are controls.
     inputs = (torch.randn(size), torch.randn(size), torch.randn(size))
     recipe = build_recipe(captured(chain, *inputs), tessiq.gpu, use_cache=False)
     assert torch.allclose(tessiq.execute(recipe)(*inputs)[0], chain(*inputs), atol=1e-5)
 
 
 def test_a_matmul_runs_between_two_fused_chains() -> None:
-    # A matmul used to split the chain and go to the host. cuBLAS runs it now, so the whole thing
-    # is three kernels on the device: the chain before it, the multiply, and the chain after.
+    # Three kernels on the device: the chain before the matmul, the matmul in cuBLAS, and the chain
+    # after.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(torch.tanh(torch.relu(a + b) @ b))
 
@@ -117,8 +114,8 @@ def test_a_matmul_runs_between_two_fused_chains() -> None:
 
 
 def test_repeated_calls_give_the_same_answer() -> None:
-    # A launch is asynchronous and the transfers that read it are on another stream. If the
-    # ordering between them were wrong, this is where it would show up.
+    # A launch is asynchronous and the transfers that read it are on another stream, so a missing
+    # ordering between them would show here.
     inputs = (torch.randn(65536), torch.randn(65536), torch.randn(65536))
     run = tessiq.execute(build_recipe(captured(chain, *inputs), tessiq.gpu, use_cache=False))
 
@@ -153,8 +150,7 @@ def test_the_host_reference_compiles_no_kernels() -> None:
 
 # --- the operations added for coverage -------------------------------------------------------
 
-# Every operation needs inputs it is defined on, and there are only a few shapes of answer to that
-# question. Anything not named here is fine with a plain normal sample.
+# The input domain an operation needs. Anything not named here takes a plain normal sample.
 POSITIVE = "positive"
 ABOVE_MINUS_ONE = "above -1"
 UNIT = "unit interval"
@@ -173,8 +169,7 @@ DOMAINS = {
     "reciprocal": NONZERO,
 }
 
-# Applied with a trailing multiply, because a single operation is a group of one and a group of one
-# is not fused. Two operations is the shortest thing that produces a kernel.
+# Operations whose call takes more than the sampled tensors.
 CALLS: dict[str, Callable[..., torch.Tensor]] = {
     "pow": lambda x: torch.pow(x, 1.7),
 }
@@ -214,9 +209,8 @@ def second_operand(count: int = 4096) -> torch.Tensor:
 
 @pytest.mark.parametrize("name", elementwise_with_kernels())
 def test_an_elementwise_kernel_agrees_with_eager(name: str) -> None:
-    # Driven by the table, so an operation cannot be added to ops.toml without its numbers being
-    # checked here. What it checks is narrow and the only thing worth checking: the value the
-    # generated kernel writes is the value PyTorch would have written.
+    # Driven by ops.toml, so every elementwise operation with a kernel is checked against PyTorch.
+    # The trailing multiply makes a group of two, so the operation is tested fused.
     call: Callable[..., torch.Tensor] = CALLS.get(name, getattr(torch, name))
 
     def model(*args: torch.Tensor) -> torch.Tensor:
@@ -232,9 +226,8 @@ def test_an_elementwise_kernel_agrees_with_eager(name: str) -> None:
     compiled = torch.compile(
         model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
     )
-    # One tolerance for every operation, and a tight one. These are the CUDA math library's own
-    # functions compared against PyTorch's CPU implementations, so anything looser would be hiding
-    # a wrong expression rather than accommodating float32.
+    # One tight tolerance for every operation: CUDA's math library against PyTorch's CPU kernels, so
+    # anything looser would hide a wrong expression.
     torch.testing.assert_close(compiled(*inputs), model(*inputs), rtol=1e-6, atol=1e-5)
 
 
@@ -256,9 +249,8 @@ def test_an_elementwise_kernel_agrees_with_eager(name: str) -> None:
 def test_a_reduction_after_a_kernel_agrees_with_eager(
     name: str, call: Callable[[torch.Tensor], torch.Tensor]
 ) -> None:
-    # The seam: a fused kernel writes an intermediate, a reduction kernel reads it, and the
-    # answer is the one eager gives. The reduction sums in a different order than a sequential
-    # host loop does, so the last digits differ and the tolerance is relative.
+    # A fused kernel writes an intermediate and a reduction kernel reads it. The reduction sums in
+    # a different order than the host does, so the tolerance is relative.
     def model(x: torch.Tensor) -> torch.Tensor:
         return call(torch.relu(x * 2.0))
 
@@ -352,8 +344,7 @@ def test_every_reduction_kernel_agrees_with_eager(
 def test_max_and_min_propagate_a_nan_the_way_torch_does(
     reduce_op: Callable[..., torch.Tensor],
 ) -> None:
-    # fmax and a plain `a > b ? a : b` both return the other operand when one is a NaN, and torch
-    # returns the NaN. The kernel tests for it explicitly, and this is why.
+    # torch.amax propagates a NaN, which fmax does not, so the kernel tests for it explicitly.
     x = torch.randn(4, 300)
     x[2, 17] = float("nan")
 
@@ -370,8 +361,7 @@ def test_max_and_min_propagate_a_nan_the_way_torch_does(
 
 def test_an_axis_set_the_kernel_cannot_express_falls_back() -> None:
     # Reducing the first and last axes of a rank-3 tensor leaves the kept axis in the middle, which
-    # [outer, reduce, inner] cannot describe. There is no kernel for it and the answer still has to
-    # be right, which is what the fallback is for.
+    # [outer, reduce, inner] cannot describe, so the reduction has no kernel and runs on the host.
     def model(x: torch.Tensor) -> torch.Tensor:
         return torch.sum(torch.relu(x * 2.0), dim=(0, 2))
 
@@ -415,8 +405,7 @@ def test_a_matmul_agrees_with_eager(
 
 
 def test_a_float64_linear_layer_runs_on_the_host_and_agrees_with_eager() -> None:
-    # cuBLAS here is float32 only. The matmul used to be claimed anyway and fail when it was
-    # called, so a float64 model compiled for the GPU did not run at all.
+    # cuBLAS is float32 only here, so a float64 matmul runs on the host.
     layer = torch.nn.Linear(32, 16).double().eval()
     x = torch.randn(8, 32, dtype=torch.float64)
     graph = captured(layer, x)
@@ -433,9 +422,8 @@ def test_a_float64_linear_layer_runs_on_the_host_and_agrees_with_eager() -> None
 
 
 def test_a_linear_layer_uses_a_transposed_weight_without_copying_it() -> None:
-    # nn.Linear stores its weight as [out, in] and computes with [in, out], so every one of them
-    # produces a transposed operand. BLAS takes that as a flag, which is the whole reason layouts
-    # are part of the type.
+    # nn.Linear stores its weight as [out, in] and multiplies by its transpose, so every weight is a
+    # transposed operand, which BLAS takes as a flag.
     layer = torch.nn.Linear(32, 16).eval()
     example = torch.randn(12, 32)
 
@@ -452,9 +440,8 @@ def test_a_linear_layer_uses_a_transposed_weight_without_copying_it() -> None:
 
 
 def test_a_matmul_reads_its_operands_where_they_are() -> None:
-    # Every other kernel walks one index across every buffer, so the executor packs its inputs
-    # first. Packing a transposed operand would move the data and leave the transpose flag
-    # describing a layout that is no longer there, which is a wrong answer rather than a slow one.
+    # Packing a transposed operand would leave the transpose flag describing data that moved, which
+    # gives a wrong answer.
     layer = torch.nn.Linear(8, 4).eval()
     with torch.no_grad():
         recipe = build_recipe(captured(layer, torch.randn(3, 8)), tessiq.gpu, use_cache=False)
@@ -463,8 +450,7 @@ def test_a_matmul_reads_its_operands_where_they_are() -> None:
 
 
 def test_a_broadcasting_chain_agrees_with_eager() -> None:
-    # This crashed before the fusion guard: the group was built and the launch was handed an
-    # operand of the wrong size. It runs one operation at a time now, which is slower and right.
+    # `b` has fewer elements than the result, so the kernel has to read it as a cycle.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.relu(a - b) * 2.0
 
@@ -494,8 +480,8 @@ def transposed_sum(x: torch.Tensor) -> torch.Tensor:
 def test_a_kernel_reading_a_strided_value_agrees_with_eager(
     model: Callable[[torch.Tensor], torch.Tensor], shape: tuple[int, ...]
 ) -> None:
-    # Each reads a value laid out other than packed, which layout-assign copies first. None of
-    # these compiled before: the copy reached the kernel under a name with a dot in it.
+    # Each reads a strided value, which layout-assign records a copy of. The kernel has to name the
+    # original value, since the copy's name has a dot in it.
     x = torch.randn(*shape)
     recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
     assert recipe.kernels
@@ -532,7 +518,7 @@ def test_a_transformer_block_agrees_with_eager() -> None:
 def test_a_broadcasting_chain_agrees_with_eager_and_is_one_kernel(
     name: str, shapes: tuple[tuple[int, ...], ...]
 ) -> None:
-    # Each of these used to end the group, which is what a softmax and a layer norm are made of.
+    # Broadcasts of the kinds softmax and layer norm are made of, each staying in one group.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.relu(a - b) * 2.0
 

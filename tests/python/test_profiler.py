@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Measuring where a compiled call spends its time.
 
-Phase 7 ended with a recipe reporting twenty-eight transfers per call and no way to weigh them
-against the kernels. These check that the answer is collected, that it adds up, and that it costs
-nothing when nobody is asking.
+These check that the profile is collected, that it adds up, and that it costs nothing when no
+profile is active.
 """
 
 from __future__ import annotations
@@ -66,11 +65,9 @@ def test_the_profile_stops_collecting_after_the_block() -> None:
 
 
 def test_time_is_exclusive() -> None:
-    # A host operation wraps the transfers that feed it. Counting those twice makes the operation
-    # look expensive when moving its operands was what cost, and the shares stop adding up.
+    # A host operation wraps the transfers that feed it, which must not be counted twice.
     collected = Profile()
-    # Written nested on purpose, because the nesting is the thing under test. Combining them into
-    # one `with` means the same thing and stops it reading as one region inside another.
+    # Nested on purpose, so it reads as one region inside another.
     with tessiq.profiler.measure(collected, "outer", "interpreted", tessiq.cpu):  # noqa: SIM117
         with tessiq.profiler.measure(collected, "inner", "transfer", tessiq.cpu) as nbytes:
             nbytes.append(4096)
@@ -136,9 +133,8 @@ def test_a_gpu_call_reports_kernels_and_transfers() -> None:
 
 
 def test_the_running_total_matches_the_events() -> None:
-    # The total is kept rather than summed, because every measured region reads it twice to work
-    # out how much of itself belongs to regions inside it. Summing made the profiler quadratic in
-    # the number of steps and doubled the call it was measuring.
+    # The total is kept rather than summed, because every measured region reads it twice and
+    # summing each time would be quadratic in the number of steps.
     collected = Profile()
     for i in range(500):
         collected.record(Event(f"e{i}", "kernel", "cpu", float(i)))
@@ -147,17 +143,15 @@ def test_the_running_total_matches_the_events() -> None:
 
 
 def test_only_a_kernel_asks_the_device_clock() -> None:
-    # A launch is the one region whose work outlives it, so the host clock around it measures the
-    # asking rather than the doing. A transfer and an interpreted step have finished by the time
-    # their region ends, and marking the stream for them would measure nothing new.
+    # Only a launch's work outlives its region. A transfer or an interpreted step has finished by
+    # the time its region ends.
     from tessiq.profiler import _TIMED_ON_THE_DEVICE
 
     assert {"kernel"} == _TIMED_ON_THE_DEVICE
 
 
 def test_a_region_with_no_device_clock_records_none() -> None:
-    # Most regions cannot ask, and the difference between "did not ask" and "took no time" has to
-    # survive into the event. A zero would read as a kernel that ran instantly.
+    # "Not measured" has to stay distinct from "took no time", or it reads as an instant kernel.
     collected = Profile()
     with measure(collected, "n", "interpreted", torch.device("cpu")):
         pass
@@ -184,8 +178,7 @@ def test_a_kernel_records_what_the_device_spent() -> None:
 
 @pytest.mark.cuda
 def test_the_device_clock_is_not_read_unless_it_is_asked_for() -> None:
-    # Marking the stream costs about what a small kernel costs on this card, so a profile that
-    # only wants to know where the host time went must not pay for it.
+    # A stream mark costs about as much as a small kernel, so it is off unless asked for.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -198,9 +191,8 @@ def test_the_device_clock_is_not_read_unless_it_is_asked_for() -> None:
 
 @pytest.mark.cuda
 def test_profiling_does_not_double_the_call() -> None:
-    # The old profiler drained after every kernel, which turned a pipeline the device overlaps
-    # into a serial one and more than doubled a transformer block. Marking the stream costs the
-    # host a command in a queue, so the shape of the call survives being measured.
+    # Profiling must not serialise the call. Marking the stream costs the host a queued command,
+    # and the marks are read once at the end.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -220,16 +212,14 @@ def test_profiling_does_not_double_the_call() -> None:
         work()
     watched = time.perf_counter() - watched
 
-    # Generous, because this is a wall clock on a shared machine. What it catches is a profiler
-    # that serialises, which was a factor of two rather than a few percent.
+    # Generous, because this is a wall clock on a shared machine. A profiler that serialises costs
+    # a factor of two, not a few percent.
     assert watched < bare * 4 + 0.05
 
 
 def test_an_input_already_on_the_device_is_not_reported_as_moved() -> None:
-    # A module's weights and an input passed again unchanged both stay on the device between
-    # calls. Nothing crosses for them, so nothing may be reported. The profiler used to count every
-    # one of them as a transfer on every call, which put twelve megabytes a call on an encoder
-    # block that only ever moved its two megabyte output.
+    # A module's weights and an unchanged input stay on the device between calls, so no transfer
+    # may be reported for them.
     torch.manual_seed(0)
     layer = torch.nn.Linear(64, 64).eval()
     example = torch.randn(8, 64)

@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Converting FX graphs into tessiq IR.
 
-Each test compiles a real function, captures what a ``torch.compile`` backend would receive, and
-compares the imported IR against the text it should produce. Comparing text rather than poking at
-a structure means a failure is a readable diff.
+Each test captures what a ``torch.compile`` backend would receive for a real function and
+compares the imported IR against the expected text, so a failure is a readable diff.
 """
 
 from __future__ import annotations
@@ -114,8 +113,7 @@ def test_an_unsupported_dtype_says_which_one() -> None:
 
 
 def test_a_node_without_shape_information_is_refused() -> None:
-    # Importing a graph that never went through shape propagation would put guessed types on
-    # values the passes then trust.
+    # Without shape propagation there are no types to import, and guessing them is refused.
     graph_module = capture(lambda a: a + a, torch.randn(4))
     for node in graph_module.graph.nodes:
         node.meta.pop("val", None)
@@ -157,8 +155,8 @@ def test_the_result_is_valid_ir() -> None:
 
 
 def test_a_none_argument_keeps_its_position() -> None:
-    # A convolution with no bias passes None where the bias goes. Dropping it would move every
-    # argument after it by one, so the stride would arrive where the padding belongs.
+    # A convolution with no bias passes None in the bias position. Dropping it would shift every
+    # later argument, putting the stride where the padding belongs.
     text = imported(
         lambda a, w: torch.nn.functional.conv2d(a, w, bias=None, padding=1),
         torch.randn(1, 2, 8, 8),
@@ -184,8 +182,8 @@ def test_an_operation_with_several_results() -> None:
 
 
 def test_two_multi_result_nodes_do_not_collide() -> None:
-    # FX names its second layer norm `native_layer_norm_1`, which is what naming the second result
-    # of the first one with an underscore would have produced. The dot is why they do not meet.
+    # FX names its second layer norm `native_layer_norm_1`. Naming the first one's second result
+    # with a dot keeps the two apart.
     def model(a: torch.Tensor, w: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         first = torch.nn.functional.layer_norm(a, (4,), w, b)
         return torch.nn.functional.layer_norm(first, (4,), w, b)
@@ -196,8 +194,8 @@ def test_two_multi_result_nodes_do_not_collide() -> None:
 
 
 def test_an_opaque_torch_label_is_carried_rather_than_refused() -> None:
-    # A memory format means nothing to this compiler, and the operations carrying one have no
-    # kernel here. Refusing the graph over it would lose the ones around it that do.
+    # The operations that take a memory format have no kernel here, so the argument is carried
+    # rather than refused, and the operations around them still compile.
     text = imported(
         lambda a: a.clone(memory_format=torch.contiguous_format).relu(), torch.randn(2, 4)
     )
@@ -205,24 +203,21 @@ def test_an_opaque_torch_label_is_carried_rather_than_refused() -> None:
 
 
 def test_a_permuted_value_carries_its_layout() -> None:
-    # A permute produces the same shape a contiguous tensor would have and a different order of
-    # steps through it. Recording only the shape would make the two look like the same type, and
-    # fusion decides what can share a loop by comparing types.
+    # A permute can have the shape of a contiguous tensor with different strides. Fusion compares
+    # types, so the strides have to be part of the type.
     text = imported(lambda a: torch.relu(a.transpose(0, 1)), torch.randn(4, 8))
     assert "f32[8,4:1,8]" in text, text
 
 
 def test_a_contiguous_value_says_nothing_about_its_layout() -> None:
-    # The common case has to print as it always did, or every golden file and every type in the
-    # documentation becomes noise.
+    # A contiguous type prints without strides.
     text = imported(lambda a, b: a + b, torch.randn(4), torch.randn(4))
     assert "f32[4]" in text, text
     assert ":" not in text.split("-> ")[1].split("{")[0], text
 
 
 def test_a_view_is_contiguous_and_a_permute_is_not() -> None:
-    # The distinction the layout work exists for. Both rearrange indices and neither computes
-    # anything, but a view can be read by a kernel that walks memory in order and a permute cannot.
+    # A reshape of a contiguous tensor stays contiguous; the transpose after it does not.
     text = imported(lambda a: a.reshape(2, 8).transpose(0, 1).relu(), torch.randn(4, 4))
     assert "aten.view.default" in text, text
     assert "f32[2,8]" in text, text

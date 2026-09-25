@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The whole path, on models rather than expressions.
 
-The tests elsewhere take one seam each. These take a model, compile it, run it, and compare
-against eager, which is the only claim a user of the backend actually cares about.
+These compile a model, run it and compare against eager.
 """
 
 from __future__ import annotations
@@ -40,8 +39,8 @@ def test_an_mlp_matches_eager() -> None:
 
 
 def test_an_mlp_runs_its_clusters_on_the_device() -> None:
-    # The agreement above would hold just as well if the backend quietly ran everything on the
-    # host, so the counters are what make the rest of this file mean something.
+    # Agreement would also hold if everything ran on the host, so the counters check that it did
+    # not.
     compiled = torch.compile(mlp(), backend="tessiq", dynamic=False)
     before = tessiq.memory_stats(tessiq.cpu).allocation_count
     compiled(torch.randn(8, 16))

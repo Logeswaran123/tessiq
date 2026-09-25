@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The recipe cache.
 
-Two things have to hold. A graph that would compile to the same recipe must hit, or the cache is
-pointless. A graph that would compile to a different one must miss, or the cache is dangerous:
-handing back a recipe built for another shape is a buffer of the wrong size, and nothing
-downstream would notice.
+A graph that would compile to the same recipe must hit. One that would compile to a different
+recipe must miss: a recipe built for another shape has buffers of the wrong size.
 """
 
 from __future__ import annotations
@@ -83,8 +81,8 @@ def test_a_different_device_misses() -> None:
 
 
 def test_the_cache_survives_a_dynamo_reset() -> None:
-    # This is the case the cache exists for. Dynamo caches compiled code against the code object
-    # it traced and forgets all of it on reset. Ours is keyed on the graph, so it does not.
+    # Dynamo caches compiled code against the code object and forgets it on reset. This cache is
+    # keyed on the graph, so it survives.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.tanh(torch.relu(a + b) * b)
 

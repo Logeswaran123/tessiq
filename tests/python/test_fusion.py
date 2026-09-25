@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Fusion on graphs PyTorch actually produces.
 
-The golden files pin the pass against IR written by hand, using whichever operation names were
-typed there. Only a real import proves those names match what `torch.compile` emits, which is the
-failure this file exists to catch: an operation missing from the elementwise table does not error,
-it quietly stops a chain fusing.
+The golden files test the pass on hand-written IR. These check that the operation names
+`torch.compile` actually emits fuse too: an operation missing from the elementwise table does not
+error, it stops a chain fusing.
 """
 
 from __future__ import annotations
@@ -70,9 +69,8 @@ def test_a_long_chain_stays_one_group() -> None:
 
 
 def test_every_supported_operation_fuses_under_its_aten_name() -> None:
-    # One chain touching each operation the backend claims, under the spelling torch emits. A
-    # missing entry in the elementwise table shows up as a smaller group rather than an error,
-    # which is why the count is asserted and not just the shape.
+    # One chain touching each operation under the spelling torch emits. A missing table entry
+    # shows as a smaller group, so the count is asserted.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         x = a + b
         x = x - b
@@ -89,9 +87,7 @@ def test_every_supported_operation_fuses_under_its_aten_name() -> None:
 
 
 def test_a_chain_of_transcendentals_is_one_group() -> None:
-    # The same property as the chain above, over the operations added for coverage rather than the
-    # original handful. Nothing here is special to fusion; the point is that widening the table
-    # widened what fuses, without anything in the fusion pass changing.
+    # The same check over the operations added for coverage.
     def model(a: torch.Tensor) -> torch.Tensor:
         x = torch.exp(a)
         x = torch.log1p(x)
@@ -119,8 +115,7 @@ def test_a_matmul_splits_the_fused_chain_without_leaving_the_device() -> None:
 
 
 def test_fusion_runs_in_the_compile_path() -> None:
-    # The backend's pipeline includes fusion now, so the IR a compile produces carries the groups
-    # and a recipe can turn them into kernels.
+    # The backend's pipeline includes fusion, so the partitioned IR carries the groups.
     ir, clusters = tessiq.partition(
         _capture(lambda a, b: torch.relu(a + b) * b, torch.randn(8), torch.randn(8))
     )
@@ -161,9 +156,8 @@ def fusion_group_of(ir: str, op: str) -> int | None:
 
 
 def test_a_reduction_ends_the_group_and_the_chain_before_it_still_fuses() -> None:
-    # A reduction reads a whole axis to write one element, so it cannot share a loop that gives
-    # each thread one index. What matters is that it ends the group without breaking the part in
-    # front of it, which is where the work is.
+    # A reduction reads a whole axis to write one element, so it ends the group without breaking
+    # the part in front of it.
     def model(a: torch.Tensor) -> torch.Tensor:
         return torch.sum(torch.relu(a * 2.0), dim=1)
 
@@ -187,8 +181,7 @@ def test_a_reduction_between_two_chains_splits_them() -> None:
 
 
 def test_keepdim_is_carried_through_to_the_ir() -> None:
-    # torch passes keepdim positionally, so it arrives as arg2 rather than under its own name.
-    # The shape rule reads it from there, so it is worth pinning that it survives the import.
+    # torch passes keepdim positionally, so it arrives as arg2, where the shape rule reads it.
     def model(a: torch.Tensor) -> torch.Tensor:
         return torch.sum(a, dim=1, keepdim=True)
 
@@ -209,9 +202,7 @@ def test_a_movement_operation_joins_the_group_it_sits_in() -> None:
 
 
 def test_a_movement_operation_on_its_own_stays_on_the_host() -> None:
-    # Claimed and not placed. Moving a tensor across to take a different view of it and moving
-    # that back is two transfers for no work, so a group holding nothing but movement is left
-    # where its input already was.
+    # Claimed and not placed: a unit holding nothing but movement stays where its input is.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.nn.functional.conv1d(a, b).reshape(4, 8)
 
@@ -221,9 +212,8 @@ def test_a_movement_operation_on_its_own_stays_on_the_host() -> None:
 
 
 def test_a_broadcasting_operand_joins_the_loop() -> None:
-    # Subtracting a row of values from every row is what a softmax and a layer norm do, and it
-    # used to end the group. The kernel works out where to read such an operand from the shapes,
-    # so the whole chain is one loop.
+    # Subtracting a row of values from every row, as softmax and layer norm do. The kernel reads
+    # the broadcast operand at an index worked out from the shapes, so the chain is one loop.
     def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return torch.relu(a - b) * 2.0
 
