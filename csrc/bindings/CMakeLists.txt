@@ -5,9 +5,8 @@
 # the same interpreter where cuDNN is installed and the two have to agree.
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 message(STATUS "tessiq: building the extension for ${Python_EXECUTABLE} (${Python_VERSION})")
-# torch and pybind11 ship their CMake config inside the Python packages, where CMake does not
-# look by default. Ask the interpreter rather than making every caller pass -DCMAKE_PREFIX_PATH:
-# a plain `cmake -S . -B build` should work in an environment that can already import them.
+# torch and pybind11 ship their CMake configs inside their Python packages. Ask the interpreter
+# where, so a plain `cmake -S . -B build` works without -DCMAKE_PREFIX_PATH.
 function(tessiq_prepend_python_cmake_path module expression)
   execute_process(
     COMMAND "${Python_EXECUTABLE}" -c "${expression}"
@@ -60,9 +59,8 @@ target_link_libraries(_C PRIVATE
   tessiq::support
   ${TORCH_LIBRARIES})
 
-# torch's headers have moved past C++17: recent releases use std::strong_ordering and requires
-# clauses, which do not parse under -std=c++17 no matter what we write. Only the code that
-# includes them is built this way; the core stays at C++17 so it keeps compiling anywhere.
+# torch's headers need C++20 (std::strong_ordering, requires clauses). Only the code that includes
+# them is built this way; the core stays at C++17.
 target_compile_features(_C PRIVATE cxx_std_20)
 
 
@@ -70,14 +68,12 @@ target_compile_features(_C PRIVATE cxx_std_20)
 find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
 target_link_libraries(_C PRIVATE "${TORCH_PYTHON_LIBRARY}")
 
-# Must match the ABI torch itself was built with, or every std::string crossing the boundary is
-# silently misinterpreted. Read from torch rather than assumed.
+# Must match the ABI torch was built with, or std::string is misread across the boundary.
 target_compile_definitions(_C PRIVATE
   _GLIBCXX_USE_CXX11_ABI=$<IF:$<BOOL:${TORCH_CXX_FLAGS}>,1,1>)
 
-# The extension links libtorch, which lives in the torch package next to ours in site-packages.
-# Without an RPATH, importing tessiq before torch fails with a bare "libtorch.so: cannot open
-# shared object file" that says nothing about the cause.
+# libtorch lives in the torch package next to ours. Without an RPATH, importing tessiq before
+# torch fails with "libtorch.so: cannot open shared object file".
 set_target_properties(_C PROPERTIES
   INSTALL_RPATH "$ORIGIN;$ORIGIN/../torch/lib;${TORCH_INSTALL_PREFIX}/lib"
   BUILD_WITH_INSTALL_RPATH ON)
@@ -86,11 +82,10 @@ tessiq_set_warnings(_C)
 
 # Must come after tessiq_set_warnings, which adds -Wnull-dereference: GCC takes the last flag.
 #
-# -isystem suppresses warnings raised while parsing a header, but not warnings from analyses that
-# run after inlining -- GCC attributes those to the translation unit that pulled the code in. At
-# -O2, GCC 13 reports a null dereference inside libstdc++'s std::vector::size() when torch's
-# c10::generic_to is inlined here. The code is not ours and the report is a false positive, so the
-# analysis is off for this target only. Everything else in the project keeps it.
+# -isystem does not suppress warnings from analyses that run after inlining; GCC attributes those
+# to the translation unit that pulled the code in. At -O2, GCC 13 reports a false null dereference
+# inside libstdc++'s std::vector::size() when torch's c10::generic_to is inlined here, so the
+# analysis is off for this target only.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   target_compile_options(_C PRIVATE -Wno-null-dereference)
 endif()

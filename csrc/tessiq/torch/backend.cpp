@@ -7,8 +7,7 @@
 // PyTorch's own enum and is confined to this file; the name users see is set
 // by rename_privateuse1_backend("tessiq") on the Python side.
 //
-// This is the most version-fragile file in the project. If a torch upgrade breaks the build, it
-// breaks here and nowhere else.
+// The file most exposed to changes in torch's internal interfaces.
 
 #include <c10/core/Allocator.h>
 #include <c10/core/Device.h>
@@ -35,19 +34,18 @@ constexpr c10::DeviceType kDeviceType = c10::DeviceType::PrivateUse1;
 
 /// Adapts CachingAllocator to the interface c10 expects.
 ///
-/// c10 reports allocation failure by throwing, so this is one of the few places where an Error
-/// becomes an exception outside the bindings layer: the caller is torch, not us.
+/// c10 reports allocation failure by throwing, so this is one of the few places outside the
+/// bindings where an Error becomes an exception.
 struct TessiqAllocator final : c10::Allocator {
   c10::DataPtr allocate(std::size_t bytes) override {
-    // No device argument here: c10's interface has none. The index comes from the guard PyTorch
-    // wraps around every op, which is the same mechanism CUDA's own allocator uses.
+    // c10's interface takes no device. The index comes from the device guard torch sets around
+    // every op, as it does for CUDA's allocator.
     const int index = current_device_index();
     auto ptr = current_allocator().allocate(bytes);
     if (!ptr) {
       TORCH_CHECK(false, ptr.error().to_string());
     }
-    // The deleter takes only a pointer, so the owning index has to be recoverable from the
-    // pointer itself at free time. record() keeps that mapping.
+    // The deleter gets only the pointer, so record() maps it back to its device.
     record(*ptr, index);
     return {*ptr, *ptr, &release, c10::Device(kDeviceType, static_cast<c10::DeviceIndex>(index))};
   }
@@ -69,8 +67,8 @@ struct TessiqAllocator final : c10::Allocator {
  private:
   /// Which allocator handed out each live pointer.
   ///
-  /// c10 frees through a plain function pointer taking only the address, so the device cannot be
-  /// passed along. Freeing on the wrong allocator would corrupt both pools, silently.
+  /// c10 frees through a function pointer that takes only the address, and freeing on the wrong
+  /// device's allocator would silently corrupt both pools.
   static std::unordered_map<void*, int>& owners() {
     static std::unordered_map<void*, int> map;
     return map;
@@ -102,11 +100,11 @@ TessiqAllocator g_allocator;
 
 /// Device and stream bookkeeping for the dispatcher.
 ///
-/// Streams are a stub: the CPU backend runs everything inline, so there is exactly one stream and
-/// synchronising it is a no-op. The CUDA backend replaces this with real stream handling.
+/// Streams are not exposed: every launch and copy goes on the legacy default stream, so torch
+/// sees only the default stream.
 ///
-/// Every signature below is fixed by c10, down to the spelling of `static_type`, which the guard
-/// registry looks up by name. The suppressions cover the house style this interface cannot follow.
+/// Every signature below is fixed by c10, down to the spelling of `static_type`. The suppressions
+/// cover the naming rules this interface cannot follow.
 // NOLINTBEGIN(readability-identifier-naming, readability-named-parameter,
 //             modernize-use-nodiscard, clang-diagnostic-unused-const-variable)
 struct TessiqGuardImpl final : c10::impl::DeviceGuardImplInterface {
@@ -127,7 +125,7 @@ struct TessiqGuardImpl final : c10::impl::DeviceGuardImplInterface {
   void setDevice(c10::Device device) const override {
     TORCH_CHECK(device.type() == kDeviceType, "expected a tessiq device, got ", device);
     if (device.index() < 0) {
-      return; // -1 means "whatever is current", which is where we already are.
+      return; // -1 means the current device.
     }
     const auto result = set_current_device_index(static_cast<int>(device.index()));
     TORCH_CHECK(result.has_value(), result.has_value() ? "" : result.error().to_string());
@@ -169,9 +167,8 @@ AllocatorStats allocator_stats(int index) { return allocator_at(index).stats(); 
 std::size_t empty_cache(int index) { return allocator_at(index).empty_cache(); }
 
 void register_allocator() {
-  // Registration happens at static initialisation via REGISTER_ALLOCATOR above. This exists so
-  // that the Python module can force this translation unit to be linked in and report what it
-  // found, rather than the backend silently not existing.
+  // Registration happens at static initialisation via REGISTER_ALLOCATOR above. Calling this
+  // from the Python module keeps this translation unit linked in.
   TESSIQ_LOG(kInfo, kLogModule) << "tessiq backend ready with " << device_count() << " device(s)";
 }
 

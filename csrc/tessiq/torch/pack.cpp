@@ -25,13 +25,12 @@ namespace {
 
 constexpr std::string_view kLogModule = "pack";
 
-/// A compiled pack kernel is identified by what it was written for and where it was loaded.
+/// Element size, rank and device ordinal.
 using PackKey = std::tuple<std::size_t, std::size_t, int>;
 
 /// The pack kernels compiled so far.
 ///
-/// Kept rather than rebuilt because there are at most a handful: one per element width and rank
-/// per device, and a model uses two or three. Compiling is milliseconds and this runs per call.
+/// At most one per element size, rank and device, and this runs on every call.
 std::map<PackKey, const codegen::Program*>& compiled() {
   static std::map<PackKey, const codegen::Program*> programs;
   return programs;
@@ -66,8 +65,7 @@ program_for(std::size_t element_bytes, std::size_t rank, int ordinal) {
 
 /// Which CUDA device holds this tensor, or nothing when it is not on one.
 ///
-/// The CPU reference is a tessiq device too, and its memory is host memory, so a pack there is
-/// something torch can already do without a kernel.
+/// The CPU reference is a tessiq device too, and torch packs its host memory without a kernel.
 Result<int> cuda_ordinal_of(const at::Tensor& tensor) {
   const auto index = static_cast<int>(tensor.device().index());
   TESSIQ_ASSIGN_OR_RETURN(Device * device, device_at(index));
@@ -93,7 +91,7 @@ Result<void> pack_on_device(const at::Tensor& src, const at::Tensor& dst) {
     return invalid_argument("a pack writes a contiguous tensor");
   }
   if (src.numel() == 0) {
-    // Nothing to move, and a launch of no threads is not something to ask the driver for.
+    // Nothing to copy, and a launch of no threads is an error.
     return ok();
   }
 
@@ -103,8 +101,7 @@ Result<void> pack_on_device(const at::Tensor& src, const at::Tensor& dst) {
   TESSIQ_ASSIGN_OR_RETURN(const codegen::Program* program,
                           program_for(element_bytes, rank, ordinal));
 
-  // The extents, then the steps, in the order the generated parameters take them. Steps are in
-  // elements, which is what the kernel indexes by, and which is what torch reports.
+  // The extents, then the strides in elements, in parameter order.
   std::vector<std::int64_t> scalars;
   scalars.reserve((2 * rank) + 1);
   scalars.push_back(src.numel());
@@ -115,15 +112,12 @@ Result<void> pack_on_device(const at::Tensor& src, const at::Tensor& dst) {
     scalars.push_back(step);
   }
 
-  // data_ptr rather than const_data_ptr: the launcher takes the buffers as one list of writable
-  // pointers, and a tensor's constness is shallow, so asking the const reference for a mutable
-  // pointer is what every other launch here already does. data_ptr carries the storage offset, so
-  // a tensor that starts partway into its storage needs nothing extra.
+  // data_ptr rather than const_data_ptr, since the launcher takes writable pointers. It includes
+  // the storage offset.
   const std::vector<void*> buffers{src.data_ptr(), dst.data_ptr()};
   const auto blocks = (src.numel() + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
                       static_cast<std::int64_t>(codegen::kBlockSize);
-  // An eager copy has no stream of its own to be handed, so it goes where every launch goes and
-  // is ordered against the kernels and transfers around it the same way.
+  // An eager copy is handed no stream, so it goes where every launch goes.
   return program->launch(buffers, scalars, blocks, codegen::kDefaultStream);
 }
 

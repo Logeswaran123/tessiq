@@ -1,14 +1,13 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// The exception boundary (ADR 0001). Result<T> is the currency inside the
-// core; Python callers expect exceptions. Translation happens here and nowhere else.
+// The exception boundary (ADR 0001). The core returns Result<T>; this is where an error becomes
+// a Python exception.
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-// Teaches pybind11 how to convert a Python torch.Tensor to an at::Tensor. Without it a
-// binding taking at::Tensor rejects every tensor it is given.
+// pybind11's torch.Tensor <-> at::Tensor conversion.
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -53,14 +52,12 @@ using tessiq::codegen::Stream;
 
 namespace {
 
-/// What Python passes for the legacy default stream, which is where every launch goes unless the
-/// caller names another. Zero because that is the stream's handle.
+/// The legacy default stream's handle, which Python passes unless it names another stream.
 constexpr std::uintptr_t kLegacyDefaultStream = 0;
 
 /// The stream whose handle Python holds as `address`, which is what `Stream.cuda_stream` gives.
 ///
-/// The driver hands streams out as pointers and Python can only carry them as integers, so the
-/// conversion has to happen somewhere, and this is the boundary where every other one happens.
+/// Python carries a stream handle as an integer.
 Stream stream_at(std::uintptr_t address) {
   // NOLINTNEXTLINE(performance-no-int-to-ptr)
   return Stream{reinterpret_cast<void*>(address)};
@@ -70,8 +67,8 @@ Stream stream_at(std::uintptr_t address) {
 
 namespace {
 
-/// Maps an Error onto the Python exception type a caller would expect. Collapsing these into
-/// RuntimeError would force callers to match on message text instead of using `except`.
+/// Maps an Error onto the matching Python exception type, so callers can `except` on the kind of
+/// failure rather than match message text.
 [[noreturn]] void raise_from_error(const tessiq::Error& error) {
   const std::string message = error.to_string();
   switch (error.code()) {
@@ -102,8 +99,7 @@ void set_log_level_from_string(const std::string& level_name) {
 
 /// CUDA source for every fusion group in a graph.
 ///
-/// A free function rather than a lambda in the module initialiser, which is one function and gets
-/// long enough to trip the complexity limit if everything is written inline.
+/// A free function to keep the module initialiser under the complexity limit.
 std::string emit_cuda_source(const std::string& ir) {
   auto graph = tessiq::ir::parse(ir);
   if (!graph) {
@@ -150,9 +146,9 @@ void value_or_raise(const tessiq::Result<void>& result) {
 
 /// Binds compiled work: the interface every kernel implements, and what each kind adds to it.
 ///
-/// The executor only uses the base class. The kinds are bound as subclasses so that a test or a
-/// report can still ask a matmul whether it reads an operand transposed, and pybind11 hands back
-/// the most derived type it knows, so `isinstance` works on what a compiled graph returns.
+/// The executor uses only the base class. The subclasses are bound so tests and reports can
+/// reach kind-specific details, and pybind11 returns the most derived type, so `isinstance`
+/// works.
 void bind_kernels(py::module_& m) {
   using tessiq::torch_backend::ConvKernel;
   using tessiq::torch_backend::CustomKernel;
@@ -341,8 +337,7 @@ PYBIND11_MODULE(_C, m) {
         if (!graph) {
           raise_from_error(graph.error());
         }
-        // Returns the printed IR rather than the graph itself. Nothing downstream consumes a
-        // graph yet, and text is what the tests compare and what tessiq-opt reads.
+        // The printed IR, which is what the tests compare and tessiq-opt reads.
         return tessiq::ir::print(**graph);
       },
       py::arg("graph_module"),
@@ -475,7 +470,7 @@ PYBIND11_MODULE(_C, m) {
       []() { return tessiq::passes::PassRegistry::instance().names(); },
       "Names of the registered passes.");
 
-  // Exercises the Result -> exception mapping from tests; a mapping nothing tests rots.
+  // Lets tests check the Result-to-exception mapping.
   m.def(
       "_raise_test_error",
       [](const std::string& code) {

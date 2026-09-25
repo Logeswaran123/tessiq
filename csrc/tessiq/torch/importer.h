@@ -21,11 +21,10 @@ Result<ir::DType> to_ir_dtype(at::ScalarType dtype);
 /// Converts a `torch.fx.GraphModule` into tessiq IR.
 ///
 /// The graph is expected to have been through AOTAutograd, which functionalises it and decomposes
-/// it to core ATen. That matters: the passes assume no operation mutates its operands, which is
-/// true of a functionalised graph and not of a raw one.
+/// it to core ATen. The passes assume no operation mutates its operands.
 ///
-/// Every node is imported, including operations tessiq has no kernel for. Deciding what to keep is
-/// partitioning, and it runs later over the imported graph.
+/// Every node is imported, including operations tessiq has no kernel for; partitioning decides
+/// later what runs where.
 Result<std::unique_ptr<ir::Graph>> import_fx(const pybind11::object& graph_module,
                                              std::string name);
 

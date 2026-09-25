@@ -41,8 +41,7 @@ Result<ir::DType> to_ir_dtype(at::ScalarType dtype) {
   case at::kLong:
     return ir::DType::kI64;
   default:
-    // Not a failure of the importer. The graph uses a dtype the IR cannot describe, so it has to
-    // stay on the host, and saying which one is what makes that actionable.
+    // The value stays on the host.
     return unsupported(std::string("tessiq has no IR dtype for ") + toString(dtype));
   }
 }
@@ -56,13 +55,8 @@ constexpr std::string_view kLogModule = "importer";
 /// What an argument list whose entries are computed reads as in the IR.
 constexpr std::string_view kComputedList = "dynamic";
 
-/// The type of an FX node, taken from the fake tensor AOTAutograd left in `meta["val"]`.
-///
-/// That is the only place shape and dtype are recorded. A node without it has not been through
-/// shape propagation, and guessing would put a wrong type on a value the passes then trust.
-/// A symbolic extent or step as the IR spells it: the number when torch knows it, `kDynamic`
-/// otherwise. maybe_as_int() is the question that does not add a guard, which matters because a
-/// guard added here would narrow the graph torch compiles on our behalf.
+/// A symbolic extent or stride as the IR spells it: the number when torch knows it, `kDynamic`
+/// otherwise. maybe_as_int() adds no guard, which would narrow the graph torch compiles.
 std::int64_t known_or_dynamic(const c10::SymInt& value) {
   const std::optional<std::int64_t> known = value.maybe_as_int();
   return known.value_or(ir::kDynamic);
@@ -70,9 +64,8 @@ std::int64_t known_or_dynamic(const c10::SymInt& value) {
 
 /// The type of a tensor whose shape torch only knows symbolically.
 ///
-/// Every unknown extent becomes the same `?`. The IR does not record which symbol an extent came
-/// from, so it cannot tell two unknowns apart, and nothing here concludes that two `?` axes match.
-/// The kernels that run on a shape like this check the sizes they were actually handed instead.
+/// Every unknown extent becomes the same `?`, so the IR cannot tell whether two of them are equal.
+/// Kernels for such shapes check the sizes they are handed instead.
 ir::TensorType symbolic_tensor_type(const at::Tensor& tensor, ir::DType dtype) {
   const c10::TensorImpl* impl = tensor.unsafeGetTensorImpl();
 
@@ -82,10 +75,9 @@ ir::TensorType symbolic_tensor_type(const at::Tensor& tensor, ir::DType dtype) {
     dims.push_back(known_or_dynamic(dim));
   }
 
-  // Asked of torch rather than worked out from the steps, because `[?,32]` with steps `[32,1]`
-  // is contiguous and comparing an unknown step against an unknown product cannot show it.
+  // Asked of torch, because an unknown stride cannot be compared with an unknown product here.
   // GUARD_OR_FALSE answers "not contiguous" when it cannot decide, which costs a fusion rather
-  // than producing a kernel that reads the wrong elements.
+  // than reading the wrong elements.
   if (TORCH_GUARD_OR_FALSE(impl->sym_is_contiguous())) {
     return {dtype, ir::Shape(std::move(dims))};
   }
@@ -98,6 +90,7 @@ ir::TensorType symbolic_tensor_type(const at::Tensor& tensor, ir::DType dtype) {
   return {dtype, ir::Shape(std::move(dims)), std::move(strides)};
 }
 
+/// The IR type of a (fake) tensor.
 Result<ir::TensorType> tensor_type(const at::Tensor& tensor) {
   TESSIQ_ASSIGN_OR_RETURN(const ir::DType dtype, to_ir_dtype(tensor.scalar_type()));
 
@@ -111,10 +104,8 @@ Result<ir::TensorType> tensor_type(const at::Tensor& tensor) {
     dims.push_back(dim);
   }
 
-  // Taken from the fake tensor rather than derived. A permute produces a value with the same
-  // shape as something contiguous and a different order of steps through it, and torch has
-  // already worked out which. Deriving it here would be a second implementation of that, and the
-  // two would disagree on the first operation this compiler did not model exactly.
+  // Taken from the fake tensor rather than derived; torch has already worked out the layout a
+  // permute or a slice produces.
   ir::Strides strides;
   strides.reserve(static_cast<std::size_t>(tensor.dim()));
   for (const auto stride : tensor.strides()) {
@@ -127,9 +118,8 @@ Result<ir::TensorType> tensor_type(const at::Tensor& tensor) {
 /// The IR type of a symbolic scalar, or nothing when `value` is not one.
 ///
 /// A graph traced for more than one shape carries its extents as values: `s33`, `s50` and the
-/// `s33*s50` a view multiplies them into. They are integers that are not known yet, so they are
-/// typed as the rank-0 integers they are. Nothing claims the arithmetic on them, which is right:
-/// it is a handful of host operations feeding the shapes, not work for an accelerator.
+/// `s33*s50` a view multiplies them into. They are typed as rank-0 integers. Nothing claims the
+/// arithmetic on them; it is a few host operations feeding the shapes.
 std::optional<ir::DType> symbolic_scalar_dtype(const py::object& value) {
   static const py::module_ torch = py::module_::import("torch");
   if (py::isinstance(value, torch.attr("SymInt"))) {
@@ -144,12 +134,11 @@ std::optional<ir::DType> symbolic_scalar_dtype(const py::object& value) {
   return std::nullopt;
 }
 
-/// The types an FX node produces, one per result.
+/// The types an FX node produces, one per result, from the fake tensor in `meta["val"]`.
 ///
-/// Usually one. A few operations return several: a layer norm gives the normalised tensor plus the
-/// mean and the reciprocal standard deviation it computed, and a batch norm does the same. FX
-/// spells reading one of them as a `getitem` on the tuple, which `import_getitem` turns back into
-/// a reference to the right result.
+/// Usually one. A layer norm or a batch norm also returns the mean and the reciprocal standard
+/// deviation it computed. FX reads one of those with a `getitem` on the tuple, which
+/// `import_getitem` turns back into a reference to the right result.
 Result<std::vector<ir::TensorType>> types_of(const py::object& node) {
   const py::object meta = node.attr("meta");
   const auto name = node.attr("name").cast<std::string>();
@@ -177,8 +166,7 @@ Result<std::vector<ir::TensorType>> types_of(const py::object& node) {
   std::vector<ir::TensorType> types;
   for (const py::handle item : value) {
     if (!THPVariable_Check(item.ptr())) {
-      // A tuple holding something that is not a tensor, such as the symbolic integer some
-      // operations return beside their output. Nothing here can give that a type.
+      // Such as the symbolic integer some operations return beside their output.
       return unsupported("fx node '" + name +
                          "' returns a tuple holding something that is not a "
                          "tensor, which the IR cannot hold");
@@ -199,10 +187,8 @@ bool is_fx_node(const py::object& value) {
 
 /// Whether `value` is one of torch's enumerations, which the compiler carries without reading.
 ///
-/// A memory format or a dtype decides what an operation does, but nothing in this compiler acts
-/// on one: the operations that take them have no kernel here and run through the fallback, which
-/// reads the original FX graph rather than this IR. So carrying the spelling is enough, and it is
-/// better than refusing the graph the argument appears in.
+/// The operations that take a memory format or a dtype have no kernel here and run through the
+/// fallback, which reads the FX graph rather than this IR. So carrying the spelling is enough.
 bool is_opaque_torch_label(const py::handle& value) {
   static const py::module_ torch = py::module_::import("torch");
   for (const char* name : {"memory_format", "dtype", "layout", "device"}) {
@@ -243,9 +229,7 @@ Result<ir::Attribute> to_attribute(const py::handle& value) {
     return ir::Attribute{std::move(values)};
   }
   // Labels the compiler never interprets: torch.contiguous_format, torch.float32, torch.strided,
-  // and a device. They have to survive the import because a real graph carries them, and their
-  // canonical spelling is all anything here needs. Only these four, so a type that does mean
-  // something to a pass still refuses rather than arriving as an uninterpretable string.
+  // and a device. Only these four, so any other type is still refused.
   if (is_opaque_torch_label(value)) {
     return ir::Attribute{py::str(value).cast<std::string>()};
   }
@@ -287,10 +271,8 @@ bool holds_fx_node(const py::object& value) {
 
 /// Marks an argument list whose entries the graph computes.
 ///
-/// The nodes in it become operands, so the IR shows what the operation reads. The attribute
-/// records the spelling `kDynamic` rather than a list of numbers, because there are no numbers:
-/// a pass reading it finds something it cannot interpret and declines the node, which is what an
-/// operation whose sizes arrive at run time should do until the kernels can take them.
+/// The nodes in it become operands, so the IR shows what the operation reads. The attribute holds
+/// `kComputedList` rather than numbers, so a pass reading it declines the node.
 Result<void> attach_computed_list(const py::object& value,
                                   std::size_t position,
                                   const std::unordered_map<std::string, ir::Value*>& scope,
@@ -314,8 +296,7 @@ Result<void> attach_computed_list(const py::object& value,
 /// Attaches one FX argument to a node.
 ///
 /// Tensor-valued arguments become operands. Everything else becomes an attribute keyed by its
-/// position, so `aten.add.Tensor(%x, 2.0)` keeps the 2.0 where it was rather than losing which
-/// argument it filled.
+/// position, so `aten.add.Tensor(%x, 2.0)` records which argument the 2.0 filled.
 Result<void> attach_argument(const py::handle& argument,
                              std::size_t position,
                              const std::unordered_map<std::string, ir::Value*>& scope,
@@ -346,9 +327,8 @@ Result<void> attach_argument(const py::handle& argument,
 
 /// How the IR spells an FX target.
 ///
-/// A torch overload already prints as `aten.view.default`. A plain Python function prints as
-/// `<built-in function mul>`, which is not a name the textual IR can be read back from, so one is
-/// built from the module and the function: `operator.mul`.
+/// A torch overload already prints as `aten.view.default`. A Python function prints as
+/// `<built-in function mul>`, which the text format cannot parse, so it becomes `operator.mul`.
 std::string op_name(const py::object& target) {
   auto printed = py::str(target).cast<std::string>();
   if (!printed.starts_with('<') || !py::hasattr(target, "__qualname__")) {
@@ -390,9 +370,8 @@ Result<void> import_call(const py::object& fx_node, ImportState& state, ir::Grap
   const auto name = fx_node.attr("name").cast<std::string>();
   const auto selected = state.selections.find(name);
   for (std::size_t i = 0; i < types.size(); ++i) {
-    // A result that a getitem reads takes that getitem's FX name. The executor runs the FX graph
-    // and looks its tensors up by FX name, so a result named anything else would resolve to the
-    // whole tuple the producer returned rather than to the tensor a kernel wants.
+    // A result a getitem reads takes that getitem's FX name. The executor looks tensors up by FX
+    // name, and the producer's own name holds the whole tuple.
     std::string result_name;
     if (selected != state.selections.end()) {
       const auto reader = selected->second.find(static_cast<std::int64_t>(i));
@@ -401,9 +380,8 @@ Result<void> import_call(const py::object& fx_node, ImportState& state, ir::Grap
       }
     }
     if (result_name.empty()) {
-      // Nothing reads it. Named after its position with a dot, because FX names its own nodes
-      // with an underscore and a number: `native_layer_norm_1` is the second layer norm in the
-      // graph, not the second result of the first one, and an underscore collided with it.
+      // Nothing reads it. Named with a dot, because FX's names use an underscore and a number:
+      // `native_layer_norm_1` is the second layer norm, not the first one's second result.
       result_name = i == 0 ? name : graph.unique_name(name + "." + std::to_string(i));
     }
     node->append_result(result_name, types[i]);
@@ -428,10 +406,8 @@ Result<void> import_output(const py::object& fx_node,
   std::vector<ir::Value*> results;
   for (const py::handle returned : returned_values) {
     const auto value = py::reinterpret_borrow<py::object>(returned);
-    // A backward graph returns None at every position whose input takes no gradient. Nothing is
-    // computed there, so there is no value to record. The FX graph stays the authority on output
-    // arity; results() holds the values the graph computes, which is what the passes need.
-    // Anything rebuilding a return value needs an output spec as well, for which see
+    // A backward graph returns None for every input that takes no gradient. results() holds only
+    // computed values; the FX graph keeps the output arity. See
     // docs/design_notes/0002-output-structure-is-calling-convention.md.
     if (value.is_none()) {
       continue;
@@ -460,9 +436,8 @@ bool is_getitem(const py::object& fx_node) {
 
 /// Binds a getitem's name to the result it selects, without adding a node.
 ///
-/// FX spells "the second thing native_layer_norm returned" as a getitem on the tuple. The IR has
-/// no tuples: a node has several results and a value refers to one of them directly. So a getitem
-/// is not an operation here, it is a name for something that already exists.
+/// The IR has no tuples: a node has several results and a value refers to one directly, so a
+/// getitem is a name rather than an operation.
 Result<void> import_getitem(const py::object& fx_node, ImportState& state) {
   const auto args = fx_node.attr("args").cast<py::tuple>();
   const auto name = fx_node.attr("name").cast<std::string>();
@@ -537,9 +512,8 @@ Result<void> import_node(const py::object& fx_node, ImportState& state, ir::Grap
     return import_output(fx_node, state.scope, graph);
   }
 
-  // call_method, call_module and get_attr should all be gone after AOTAutograd. Meeting one means
-  // the graph did not come from where this importer expects, and importing it anyway would produce
-  // IR that does not mean what the model means.
+  // call_method, call_module and get_attr are gone after AOTAutograd, so one here means the graph
+  // did not come from where this importer expects.
   return unsupported("fx node kind '" + kind +
                      "' is not supported; the graph should be functionalised and decomposed to "
                      "core ATen before import");
@@ -549,10 +523,8 @@ Result<void> import_node(const py::object& fx_node, ImportState& state, ir::Grap
 
 Result<std::unique_ptr<ir::Graph>> import_fx(const py::object& graph_module, std::string name) {
   auto graph = std::make_unique<ir::Graph>(std::move(name));
-  // Snapshotted into a real list. fx exposes `graph.nodes` as a view over an intrusive linked
-  // list, and iterating that view from C++ does not terminate: the walk wraps past the sentinel
-  // and starts again. A copy also means the walk is unaffected if the graph is ever mutated
-  // while it is in progress, and it is walked twice.
+  // Copied into a list. `graph.nodes` is a view over an intrusive linked list, and iterating it
+  // from C++ does not terminate: the walk wraps past the sentinel.
   const py::list nodes(graph_module.attr("graph").attr("nodes"));
 
   ImportState state;
