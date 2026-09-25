@@ -1,9 +1,8 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Recognising a convolution and describing it exactly. cuDNN is handed these numbers and reads
-// every tensor the way they say, so a misread stride or padding is a wrong answer rather than an
-// error. None of this needs a GPU: it is reading attributes off a node.
+// Recognising a convolution and describing it exactly. cuDNN reads every tensor the way these
+// numbers say, so a misread stride or padding is a wrong answer rather than an error. Needs no GPU.
 
 #include <gtest/gtest.h>
 #include <optional>
@@ -20,9 +19,8 @@ namespace {
 
 /// The one convolution in `text`, described.
 ///
-/// Returns a default-constructed kernel when there is none, having already failed the test that
-/// there is. A value rather than an optional keeps every assertion below reading the fields
-/// directly, which is the thing each test is about.
+/// Fails the test and returns a default-constructed kernel when there is none, so callers can read
+/// fields directly.
 ConvKernel describe(std::string_view text) {
   auto graph = ir::parse(text);
   EXPECT_TRUE(graph.has_value()) << (graph.has_value() ? "" : graph.error().to_string());
@@ -96,8 +94,8 @@ TEST(ConvTest, ASingleValueMeansBothAxes) {
 }
 
 TEST(ConvTest, GroupsAreCarried) {
-  // A depthwise convolution: one group per channel. cuDNN is told the count, and a description
-  // that dropped it would convolve every channel with every filter.
+  // A depthwise convolution: one group per channel. Dropping the count would convolve every
+  // channel with every filter.
   const auto kernel = describe(conv("[1,8,8,8]",
                                     "[8,1,3,3]",
                                     "[1,8,8,8]",
@@ -115,8 +113,8 @@ TEST(ConvTest, ABiasBecomesAThirdInput) {
   EXPECT_EQ(kernel.inputs().size(), 3U);
 }
 
-/// Whether `text`'s convolution has no description, which is what should happen to each of the
-/// kinds below. Not an error: they run on the host.
+/// Whether `text`'s convolution has no description, as each of the kinds below should not. They
+/// run on the host.
 bool has_no_description(std::string_view text) {
   auto graph = ir::parse(text);
   EXPECT_TRUE(graph.has_value());
@@ -149,7 +147,7 @@ TEST(ConvTest, AOneDimensionalConvolutionIsNotDescribed) {
 }
 
 TEST(ConvTest, AShapeNotKnownUntilTheCallIsNotDescribed) {
-  // cuDNN's descriptors are built once, when the graph is compiled, so they need numbers.
+  // cuDNN descriptors are built at compile time, so they need every extent.
   EXPECT_TRUE(has_no_description(conv("[?,16,8,8]", "[16,16,3,3]", "[?,16,8,8]", kPlain)));
 }
 

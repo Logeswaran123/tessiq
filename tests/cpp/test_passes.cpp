@@ -1,8 +1,8 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Pass tests are golden files: textual IR in, textual IR out, with the pipeline named in the file
-// itself. Adding a case means adding a file, and reviewing one means reading a diff.
+// Pass tests are golden files: textual IR in, textual IR out, with the pipeline named in the file.
+// Adding a case means adding a file.
 
 #include <algorithm>
 #include <filesystem>
@@ -109,8 +109,7 @@ TEST(RegistryTest, KnowsTheBuiltInPasses) {
 }
 
 TEST(LayoutAssignTest, RunningItTwiceChangesNothingTheSecondTime) {
-  // The pass reports whether it changed anything, and a pipeline can be run to a fixpoint. One
-  // that kept inserting a copy in front of the copy it just inserted would never stop.
+  // A second run must not insert a copy in front of the copy the first run inserted.
   auto graph = ir::parse("graph @g(%a: f32[4,8:1,4]) -> f32[4,8] {\n"
                          "  %r = aten.relu.default(%a) : f32[4,8]\n"
                          "  return %r\n}\n");
@@ -171,8 +170,8 @@ TEST(PassManagerTest, ReportsWhetherEachPassChangedAnything) {
 }
 
 TEST(ClusterTest, RefusesToRunBeforeMarkSupported) {
-  // Clustering reads an attribute mark-supported writes. Running it first would silently treat
-  // every node as unsupported and produce no clusters at all, which looks like a correct answer.
+  // Clustering reads the attribute mark-supported writes. Without it, cluster fails rather than
+  // treating every node as unsupported, which would look like a correct answer.
   auto graph = ir::parse(R"(graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
   %x = aten.add.Tensor(%a, %b) : f32[4]
   return %x
@@ -190,8 +189,7 @@ TEST(ClusterTest, RefusesToRunBeforeMarkSupported) {
 }
 
 TEST(ShapeInferenceTest, RejectsAContradiction) {
-  // The recorded type and the operands cannot both be right, and the pass says which is which
-  // rather than quietly overwriting one with the other.
+  // The recorded type contradicts the operands, and the pass reports it rather than overwriting it.
   auto graph = ir::parse(R"(graph @g(%a: f32[4,8], %b: f32[4,8]) -> f32[4,9] {
   %s = add(%a, %b) : f32[4,9]
   return %s
@@ -241,8 +239,7 @@ TEST(ShapeInferenceTest, RejectsShapesThatCannotBroadcast) {
 }
 
 TEST(PassManagerTest, PassesAreIdempotent) {
-  // Running a pass twice should be a no-op the second time. A pass that keeps reporting changes
-  // would spin forever under fixpoint iteration.
+  // A second run of any pass should report no change.
   for (const std::string& name : PassRegistry::instance().names()) {
     auto graph = ir::parse(R"(graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
   %s0 = add(%a, %b) : f32[4]

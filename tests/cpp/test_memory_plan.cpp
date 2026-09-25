@@ -1,9 +1,8 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// The arena planner. Its output is only useful if it is safe, so the central test is a property
-// check rather than a fixed expectation: no two values that are live at the same time may share a
-// byte.
+// The arena planner. The central test is a property check: no two values live at the same time
+// may share a byte.
 
 #include <algorithm>
 #include <cstddef>
@@ -28,8 +27,7 @@ std::unique_ptr<Graph> parsed(const std::string& text) {
   return graph.has_value() ? std::move(*graph) : nullptr;
 }
 
-/// No two values that are live at the same time may share a byte. This is the property the plan
-/// exists to guarantee, and it is worth checking directly rather than inferring from offsets.
+/// No two values that are live at the same time may share a byte.
 void expect_no_overlap(const Graph& graph, const MemoryPlan& plan) {
   const auto ranges = compute_liveness(graph);
   ASSERT_TRUE(ranges.has_value());
@@ -138,8 +136,7 @@ TEST(MemoryPlanTest, ADynamicShapeIsCountedRatherThanPlaced) {
 )");
   ASSERT_NE(graph, nullptr);
 
-  // %a is the only intermediate, and it has no byte count until the graph runs. Refusing the
-  // whole plan over it would refuse every graph traced for more than one shape.
+  // %a has no byte count until the graph runs. It is left out of the plan rather than failing it.
   const auto plan = plan_memory(*graph, kAlignment);
   ASSERT_TRUE(plan.has_value()) << plan.error().to_string();
   EXPECT_EQ(plan->unsized, 1U);

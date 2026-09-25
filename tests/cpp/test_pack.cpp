@@ -1,9 +1,8 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// The kernel that reads a strided tensor and writes a packed one. Emitting the text needs no GPU,
-// and what it says is the whole contract: the extents and the steps arrive as arguments, so one
-// kernel per rank serves every layout of every shape.
+// The kernel that reads a strided tensor and writes a packed one. Needs no GPU. Extents and strides
+// are arguments, so one kernel per rank serves every shape and layout.
 
 #include <cstddef>
 #include <gtest/gtest.h>
@@ -24,8 +23,8 @@ std::string source_for(std::size_t element_bytes, std::size_t rank) {
 TEST(PackTest, TheExtentsAndStepsAreArguments) {
   const std::string source = source_for(4, 3);
 
-  // The point of the whole thing. No extent and no step is written into the body, so the same
-  // compiled kernel packs a [2,3,4] and a [500,1,7] and a shape nobody knew at compile time.
+  // No extent or stride is written into the body, so one compiled kernel packs a [2,3,4], a
+  // [500,1,7] and a shape not known at compile time.
   EXPECT_NE(source.find("long long e0,\n    long long e1,\n    long long e2"), std::string::npos)
       << source;
   EXPECT_NE(source.find("long long s0,\n    long long s1,\n    long long s2"), std::string::npos)
@@ -45,8 +44,7 @@ TEST(PackTest, TheIndexIsTakenApartFromTheLastAxis) {
 }
 
 TEST(PackTest, ACopyIsWrittenForAWidthRatherThanAType) {
-  // A pack does no arithmetic, so what the bits mean does not come into it. That is what lets
-  // half precision and booleans be packed without the emitter having a spelling for either.
+  // A pack copies bytes, so half precision and booleans need no spelling in the emitter.
   EXPECT_NE(source_for(1, 2).find("typedef unsigned char word_t;"), std::string::npos);
   EXPECT_NE(source_for(2, 2).find("typedef unsigned short word_t;"), std::string::npos);
   EXPECT_NE(source_for(4, 2).find("typedef unsigned int word_t;"), std::string::npos);
@@ -54,8 +52,7 @@ TEST(PackTest, ACopyIsWrittenForAWidthRatherThanAType) {
 }
 
 TEST(PackTest, TheNameSaysWidthAndRank) {
-  // The cubin cache is keyed on this, and two kernels that differ only in rank have to not
-  // collide, which is the bug that cost us a day in phase 7.
+  // The name encodes the element width and the rank.
   EXPECT_EQ(pack_name(4, 3), "tessiq_pack_b4_r3");
   EXPECT_NE(pack_name(4, 3), pack_name(4, 2));
   EXPECT_NE(pack_name(4, 3), pack_name(8, 3));
@@ -73,8 +70,7 @@ TEST(PackTest, TheBoundsCheckIsThere) {
 }
 
 TEST(PackTest, AWidthNoIntegerHasIsRefused) {
-  // Three bytes, or ten. Not a shape anything produces, and refusing says so rather than
-  // generating a kernel that moves the wrong number of bytes.
+  // No integer type is three or ten bytes wide, so there is no kernel.
   EXPECT_FALSE(pack_source(3, 2).has_value());
   EXPECT_FALSE(pack_source(0, 2).has_value());
 }

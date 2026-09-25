@@ -225,11 +225,10 @@ TEST(GraphTest, UniqueNameAvoidsCollisions) {
   EXPECT_EQ(graph.unique_name("y"), "y");
 }
 
-// --- text round trip
-// ------------------------------------------------------------------------------
+// --- text round trip ---------------------------------------------------------------------------
 
-/// print(parse(text)) == text for anything the printer emits, which is what makes golden files a
-/// fair test: a diff means the pass changed something, not that the printer drifted.
+/// print(parse(text)) == text for anything the printer emits, so a golden-file diff means the pass
+/// changed something, not the printer.
 void expect_round_trips(const std::string& text) {
   auto graph = parse(text);
   ASSERT_TRUE(graph.has_value()) << text << "\n-> " << graph.error().to_string();
@@ -290,8 +289,7 @@ TEST(TextTest, RoundTripsMultipleResultsFromOneNode) {
 }
 
 TEST(TextTest, WholeNumberFloatsStayFloats) {
-  // 1.0 must not print as "1", or parsing it back gives an integer attribute and the type of the
-  // graph quietly changes.
+  // 1.0 must not print as "1", which would parse back as an integer attribute.
   expect_round_trips(R"(graph @g() -> f32[] {
   %c = const() {value = 1.0} : f32[]
   return %c
@@ -383,8 +381,8 @@ TEST(VerifierTest, CatchesDuplicateNames) {
 }
 
 TEST(AttributeTest, NoneIsAValueRatherThanAnAbsence) {
-  // A convolution with no bias carries None where the bias goes. Printing it as nothing would
-  // shift every argument after it by one position.
+  // A convolution with no bias carries None in the bias position. Printing nothing would shift
+  // every later argument.
   EXPECT_EQ(attribute_to_string(Attribute{std::monostate{}}), "none");
   EXPECT_TRUE(std::holds_alternative<std::monostate>(Attribute{}))
       << "a default-constructed attribute should be the absent one";
@@ -409,8 +407,8 @@ TEST(LayoutTest, ContiguousStridesStepByTheAxesAfterThem) {
 }
 
 TEST(LayoutTest, AContiguousLayoutIsRecordedAsNoLayoutAtAll) {
-  // Two spellings of the same thing have to be one type, or fusion would refuse to fuse a value
-  // with itself depending on how it was built.
+  // Two spellings of the same layout have to compare equal, or fusion would treat them as a type
+  // change.
   const TensorType implicit(DType::kF32, Shape({2, 4}));
   const TensorType spelled_out(DType::kF32, Shape({2, 4}), Strides{4, 1});
   EXPECT_EQ(implicit, spelled_out);
@@ -427,10 +425,8 @@ TEST(LayoutTest, ALayoutIsPartOfTheType) {
 }
 
 TEST(LayoutTest, AnAxisOfOneHasNoStrideWorthComparing) {
-  // There is no second index to step to on an axis of extent one, so whatever stride it carries is
-  // never used. torch leaves whatever that axis inherited, so a [1,64] row of a matrix arrives
-  // with strides (1,1) and is contiguous. Reading the 1 as a leading dimension is how a backward
-  // pass ended up handing cuBLAS an illegal value.
+  // The stride of an axis of extent 1 is never used, and torch leaves whatever that axis
+  // inherited. So a [1,64] row can arrive with strides (1,1) and is still contiguous.
   const TensorType row(DType::kF32, Shape({1, 64}), Strides{1, 1});
   EXPECT_TRUE(row.is_contiguous()) << row.to_string();
   EXPECT_EQ(row, TensorType(DType::kF32, Shape({1, 64})));

@@ -62,8 +62,7 @@ TEST(OpSupportTest, NamesAreSorted) {
 }
 
 TEST(OpSupportTest, LookupDoesNotAllocateAStringToCompare) {
-  // The set is transparent, so a string_view can be looked up without constructing a std::string.
-  // Worth pinning: partitioning asks this once per node.
+  // The set is transparent, so a string_view lookup constructs no std::string.
   const OpSupport support({"aten.add.Tensor"});
   const std::string_view view = "aten.add.Tensor";
   EXPECT_TRUE(support.supports(view));
@@ -78,8 +77,7 @@ TEST(DefaultOpSupportTest, ListsTheElementwiseOpsTheImporterProduces) {
 
 /// Claims or unclaims an operation for the duration of a test and restores what it found.
 ///
-/// The set is a global because partitioning reads it without being handed one, so a test that
-/// wants a different answer has to change it and change it back, including when the test fails.
+/// The set is a global, so a test that changes it has to restore it, even when the test fails.
 class SupportOverride {
  public:
   SupportOverride(std::string op, bool claimed)
@@ -134,10 +132,8 @@ Grouping group(std::string_view text) {
 }
 
 TEST(DefaultOpSupportTest, SupportDecidesWhereAChainBreaks) {
-  // Fusability and support are separate questions. Every elementwise operation in the table has a
-  // kernel today, so the two agree, and the only way to see them come apart is to take one away.
-  // The relu is as fusable as its neighbours either way; what changes is whether the backend can
-  // run it, and the chain breaks where support ends rather than where fusability does.
+  // Fusability and support are separate. Every elementwise operation in the table is supported,
+  // so this unclaims relu to show the chain breaking where support ends.
   const std::string_view text = "graph @g(%a: f32[64]) -> f32[64] {\n"
                                 "  %w = aten.abs.default(%a) : f32[64]\n"
                                 "  %x = aten.neg.default(%w) : f32[64]\n"
@@ -156,10 +152,8 @@ TEST(DefaultOpSupportTest, SupportDecidesWhereAChainBreaks) {
 }
 
 TEST(DefaultOpSupportTest, AReductionStaysOutOfAnElementwiseGroupEvenWhenClaimed) {
-  // sum has no kernel yet, so today it is unclaimed and could not fuse for that reason alone.
-  // Claiming it here removes that reason and leaves only the category, which is what has to refuse
-  // the fusion once the reduction kernel lands. A reduction reads a whole axis to write one
-  // element, so it cannot share a loop that gives each thread one index.
+  // Claimed explicitly, so only the category can keep it out. A reduction reads a whole axis to
+  // write one element, so it cannot share a loop that gives each thread one index.
   const std::string_view text = "graph @g(%a: f32[4,8]) -> f32[4] {\n"
                                 "  %x = aten.abs.default(%a) : f32[4,8]\n"
                                 "  %y = aten.neg.default(%x) : f32[4,8]\n"
@@ -175,8 +169,7 @@ TEST(DefaultOpSupportTest, AReductionStaysOutOfAnElementwiseGroupEvenWhenClaimed
 }
 
 TEST(DefaultOpSupportTest, DoesNotClaimWhatIsNotInTheTable) {
-  // The support set is seeded from ops.toml, so an operation nobody has added is declined by
-  // having no row rather than by a rule here.
+  // The support set is seeded from ops.toml, so an operation with no row is declined.
   const OpSupport& support = default_op_support();
   EXPECT_FALSE(support.supports("aten.hypot.default"));
   EXPECT_FALSE(support.supports("aten.native_layer_norm.default"));
@@ -184,9 +177,8 @@ TEST(DefaultOpSupportTest, DoesNotClaimWhatIsNotInTheTable) {
 }
 
 TEST(DefaultOpSupportTest, ClaimsConvolution) {
-  // Through cuDNN rather than generated code, the way a matmul goes through cuBLAS. It was the
-  // standing example of an operation the backend declined for nine phases, which is why the
-  // tests that needed one of those now use hypot instead.
+  // Through cuDNN, the way a matmul goes through cuBLAS. Tests that need an unsupported operation
+  // use hypot.
   EXPECT_TRUE(default_op_support().supports("aten.convolution.default"));
 }
 

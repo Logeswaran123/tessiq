@@ -1,8 +1,7 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Pulling a fusion group out of a graph and turning it into source. Emitting text needs no GPU and
-// no CUDA toolkit, which is why this half is a plain unit test.
+// Pulling a fusion group out of a graph and turning it into source. Needs no GPU or CUDA toolkit.
 
 #include <gtest/gtest.h>
 #include <memory>
@@ -57,9 +56,8 @@ TEST(ExtractTest, InputsAreTheValuesTheGroupDoesNotCompute) {
 }
 
 TEST(ExtractTest, AnInputLayoutAssignCopiedIsAskedForUnderItsSourcesName) {
-  // layout-assign copies a strided value before a kernel reads it, as tessiq.contiguous. The
-  // executor makes that copy itself when it packs the kernel's inputs, so the copy has no tensor of
-  // its own. The kernel asks for the value the copy was made from, and reads it packed.
+  // The executor makes layout-assign's tessiq.contiguous copy itself when it packs the kernel's
+  // inputs, so the kernel names the original value and reads it packed.
   auto graph = ir::parse(R"(graph @g(%a: f32[4,8:1,4]) -> f32[4,8] {
   %r = aten.relu.default(%a) : f32[4,8]
   return %r
@@ -78,7 +76,7 @@ TEST(ExtractTest, AnInputLayoutAssignCopiedIsAskedForUnderItsSourcesName) {
   EXPECT_TRUE(kernel->inputs.front().type.is_contiguous());
   EXPECT_EQ(kernel->inputs.front().index, "i");
 
-  // The copy's name has a dot in it, which is not something a C identifier can hold.
+  // The copy's name has a dot in it, which a C identifier cannot.
   const auto source = cuda_emitter().emit(*kernel);
   ASSERT_TRUE(source.has_value()) << source.error().to_string();
   EXPECT_EQ(source->find("contiguous"), std::string::npos) << *source;
@@ -122,9 +120,8 @@ TEST(ExtractTest, AConstantArgumentBecomesALiteral) {
 }
 
 TEST(ExtractTest, AConstantBeforeATensorKeepsItsPosition) {
-  // `1 - x` imports as sub with the constant at position 0 and the tensor at position 1, which a
-  // backward graph produces constantly. Appending constants after operands would emit `x - 1`:
-  // same shape, same type, wrong number, and only visible as a gradient that is subtly off.
+  // `1 - x` imports as sub with the constant at position 0, which backward graphs produce often.
+  // Appending constants after operands would emit `x - 1`: same shape and type, wrong number.
   auto graph = fused(R"(graph @g(%a: f32[8]) -> f32[8] {
   %s = aten.sub.Tensor(%a) {arg0 = 1.0} : f32[8]
   %r = aten.relu.default(%s) : f32[8]
@@ -216,7 +213,7 @@ TEST(CudaEmitterTest, TheElementTypeIsATypedefSoOneSpellingServesBoth) {
   const auto source = cuda_emitter().emit(*kernel);
   ASSERT_TRUE(source.has_value());
   EXPECT_NE(source->find("typedef double scalar_t;"), std::string::npos) << *source;
-  // The body is identical to the float version, which is the point of the typedef.
+  // The body is identical to the float version; only the scalar_t typedef differs.
   EXPECT_NE(source->find("scalar_t v_r = (v_m > scalar_t(0) ? v_m : scalar_t(0));"),
             std::string::npos)
       << *source;
@@ -233,9 +230,8 @@ TEST(CudaEmitterTest, RefusesATypeItHasNoSpellingFor) {
   const auto kernel = extract_kernel(*graph, 0);
   ASSERT_TRUE(kernel.has_value());
 
-  // Half precision needs a header and its own arithmetic, so the emitter declines rather than
-  // producing code that will not compile. Declining is not a failure: the caller runs the
-  // operations one at a time.
+  // Half precision needs a header and its own arithmetic, so the emitter declines and the
+  // operations run one at a time.
   EXPECT_FALSE(cuda_emitter().supports(*kernel));
 }
 
@@ -247,7 +243,7 @@ TEST(CudaEmitterTest, TheBoundsCheckIsThere) {
   const auto source = cuda_emitter().emit(*kernel);
   ASSERT_TRUE(source.has_value());
 
-  // A grid shaped to divide exactly is a grid somebody eventually launches wrongly.
+  // The bounds check lets the grid overshoot the element count.
   EXPECT_NE(source->find("if (i >= n) return;"), std::string::npos) << *source;
 }
 
@@ -284,8 +280,8 @@ TEST(IndexForTest, ARowAddedToEveryRowIsOneRemainder) {
 }
 
 TEST(IndexForTest, AMiddleAxisNeedsTheGeneralForm) {
-  // Neither a prefix nor a suffix of the result, so the position is taken apart and put back
-  // together against the operand's own extents.
+  // Neither a run nor a cycle, so the position is split into coordinates and mapped onto the
+  // operand's extents.
   EXPECT_EQ(index_for(dims({2, 6, 8}), dims({6, 1})), "((i / 8) % 6)");
 }
 
@@ -294,20 +290,17 @@ TEST(IndexForTest, AScalarReadsOnePosition) {
 }
 
 TEST(IndexForTest, APermutedOperandIsSteppedThroughItsOwnLayout) {
-  // What every clone in a transformer block materialises, and what layout-assign used to insert a
-  // copy for. The same bytes in a different order, so the loop steps through them rather than
-  // walking them.
+  // A transposed operand: the same bytes in a different order, so the loop steps through them.
   EXPECT_EQ(index_for(dims({4, 8}), strided({4, 8}, {1, 4})), "((i / 8) % 4) + (i % 8) * 4");
 }
 
 TEST(IndexForTest, AContiguousOperandOfTheSameShapeIsStillJustTheIndex) {
-  // The fast path has to survive the layout arithmetic, since it is what almost every operand is.
+  // Packed strides spelled out are still read at `i`.
   EXPECT_EQ(index_for(dims({2, 6, 8}), strided({2, 6, 8}, {48, 8, 1})), "i");
 }
 
 TEST(IndexForTest, AnOperandThatDoesNotBroadcastHasNoExpression) {
-  // Fusion asks this, and an empty answer is what keeps a group from forming that the emitter
-  // would then decline.
+  // Fusion asks this, so a group the emitter would decline never forms.
   EXPECT_TRUE(index_for(dims({4, 8}), dims({4, 4})).empty());
   EXPECT_TRUE(index_for(dims({4, 8}), dims({2, 4, 8})).empty()) << "more axes than the result";
 }
@@ -315,23 +308,20 @@ TEST(IndexForTest, AnOperandThatDoesNotBroadcastHasNoExpression) {
 // --- extents that are not known until the call ------------------------------------------------
 
 TEST(IndexForTest, AnUnknownExtentIsStillTheLoopIndexWhenTheShapesMatch) {
-  // The one case that needs no extent: identical dim lists read contiguously, where one index
-  // walks every buffer whatever the sizes turn out to be.
+  // Identical dim lists read contiguously need no extent: one index walks every buffer.
   EXPECT_EQ(index_for(dims({ir::kDynamic, 32}), dims({ir::kDynamic, 32})), "i");
   EXPECT_EQ(index_for(dims({ir::kDynamic, ir::kDynamic}), dims({ir::kDynamic, ir::kDynamic})), "i");
 }
 
 TEST(IndexForTest, AnUnknownExtentStillFoldsADivisorThatIsKnown) {
-  // A layer norm: the row length is written into the model, so it survives a shape that is not.
-  // Only the axes outside it are unknown, and the index does not need those.
+  // A layer norm: the row length is fixed by the model, and the index needs only that.
   EXPECT_EQ(index_for(dims({ir::kDynamic, 32}), dims({ir::kDynamic, 1})), "i / 32");
   EXPECT_EQ(index_for(dims({ir::kDynamic, 32}), dims({32})), "i % 32") << "a bias row";
 }
 
 TEST(IndexForTest, ADivisorThatIsNotKnownHasNoExpression) {
-  // A softmax over a sequence: the row length is the thing that changes, so there is no number to
-  // write and `index_for` has no answer. The read itself is still describable, which is what
-  // `operand_read` says and what lets the divisor be passed to the kernel instead.
+  // A softmax over a sequence: the row length is unknown, so `index_for` has no answer. The read
+  // is still a run, as `operand_read` says, so the divisor can be passed to the kernel.
   const ir::TensorType out = dims({ir::kDynamic, 4, ir::kDynamic, ir::kDynamic});
   const ir::TensorType row = dims({ir::kDynamic, 4, ir::kDynamic, 1});
   EXPECT_TRUE(index_for(out, row).empty());
@@ -347,8 +337,7 @@ TEST(IndexForTest, AnOperandThatCannotBroadcastIsStillRefused) {
 }
 
 TEST(IndexForTest, APermutedOperandNeedsEveryExtent) {
-  // The general form steps axis by axis, so there is no single number a launch could supply. An
-  // operand that reaches it without known extents has no kernel at all.
+  // The strided form needs every extent, so without them there is no kernel.
   EXPECT_TRUE(operand_read(dims({4, 8}), strided({4, 8}, {1, 4})).has_value());
   EXPECT_FALSE(
       operand_read(dims({ir::kDynamic, 8}), strided({ir::kDynamic, 8}, {1, 4})).has_value());
@@ -385,16 +374,14 @@ TEST(CudaEmitterTest, AKernelForUnknownExtentsHoldsNoExtent) {
   const auto source = cuda_emitter().emit(*kernel);
   ASSERT_TRUE(source.has_value()) << (source.has_value() ? "" : source.error().to_string());
 
-  // The count reaches the kernel as `n`, so the same text serves every shape. This is what makes
-  // one compile enough: nothing in the body would have to change if the extents did.
+  // The count reaches the kernel as `n`, so one compile serves every shape.
   EXPECT_NE(source->find("long long n) {"), std::string::npos) << *source;
   EXPECT_NE(source->find("[i]"), std::string::npos) << *source;
   EXPECT_EQ(source->find("32"), std::string::npos) << "an extent was written into the body";
 }
 
 TEST(CudaEmitterTest, ADivisorThatIsNotKnownBecomesAParameter) {
-  // A softmax row, whose length is the thing that changes. The kernel takes it beside the element
-  // count, so one compile still serves every shape.
+  // A softmax row of unknown length. The kernel takes the divisor beside the element count.
   auto graph = fused(R"(graph @g(%s: f32[?,4,?,?], %m: f32[?,4,?,1]) -> f32[?,4,?,?] {
   %d = aten.sub.Tensor(%s, %m) : f32[?,4,?,?]
   %e = aten.exp.default(%d) : f32[?,4,?,?]
@@ -414,8 +401,8 @@ TEST(CudaEmitterTest, ADivisorThatIsNotKnownBecomesAParameter) {
 }
 
 TEST(CudaEmitterTest, ADivisorThatIsKnownIsStillFoldedIn) {
-  // A dividing instruction by a constant is cheaper than one by a register, so the number is
-  // written in whenever there is one, and the parameter is only for when there is not.
+  // Division by a constant is cheaper than by a register, so a known divisor is written in and
+  // only an unknown one becomes a parameter.
   auto graph = fused(R"(graph @g(%x: f32[?,32], %m: f32[?,1]) -> f32[?,32] {
   %d = aten.sub.Tensor(%x, %m) : f32[?,32]
   %e = aten.exp.default(%d) : f32[?,32]

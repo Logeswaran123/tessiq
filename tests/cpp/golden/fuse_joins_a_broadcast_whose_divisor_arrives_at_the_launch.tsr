@@ -1,8 +1,7 @@
 // RUN: mark-supported,cluster,fuse-elementwise
-// A softmax's subtract, where the row length is the thing that changes. Reading one value per row
-// means dividing the output position by that length, and there is no number to write into the
-// kernel. The group forms anyway: the division is by a parameter the launch fills in, worked out
-// from how many elements each buffer turned out to hold.
+// A softmax's subtract with an unknown row length. Reading one value per row divides the output
+// position by that length, so the divisor is a parameter the launch works out from the buffer
+// sizes, and the group forms.
 graph @g(%s: f32[?,4,?,?], %m: f32[?,4,?,1]) -> f32[?,4,?,?] {
   %d = aten.sub.Tensor(%s, %m) : f32[?,4,?,?]
   %e = aten.exp.default(%d) : f32[?,4,?,?]

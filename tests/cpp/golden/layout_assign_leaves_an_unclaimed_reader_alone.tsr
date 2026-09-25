@@ -1,7 +1,6 @@
 // RUN: mark-supported,layout-assign
-// A strided value an unclaimed operation reads is not this pass's business. That operation runs
-// on the host through the fallback, which reads whatever layout it is given, so packing it here
-// would be a copy nobody asked for.
+// An unclaimed operation runs on the host, which reads any layout, so its strided input is not
+// packed.
 graph @g(%a: f32[4,8:1,4]) -> f32[4,8] {
   %m = aten.hypot.default(%a, %a) : f32[4,8]
   return %m

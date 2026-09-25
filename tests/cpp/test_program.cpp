@@ -1,8 +1,7 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Loading a compiled kernel and running it. This is where generated code first produces a number,
-// so the tests compare against one computed on the host rather than checking that nothing threw.
+// Loading a compiled kernel and running it, checked against results computed on the host.
 
 #include <algorithm>
 #include <cmath>
@@ -37,8 +36,7 @@ constexpr std::size_t kCount = 4096;
 
 /// The compute capability of the first GPU, which is what a cubin has to be built for.
 ///
-/// Asked rather than assumed. A cubin built for the wrong architecture fails at load with an
-/// invalid image, and there is no forward compatibility that would let a low guess work anywhere.
+/// A cubin built for another major architecture fails to load with an invalid image.
 std::pair<int, int> capability() {
   const auto found = device_capability(0);
   EXPECT_TRUE(found.has_value()) << (found.has_value() ? "" : found.error().to_string());
@@ -61,8 +59,7 @@ std::string source_for(const std::string& ir) {
 
 /// Compiles, loads and launches, returning what the kernel wrote.
 ///
-/// Inputs and the output live in device memory taken from the runtime's own allocator, which is
-/// the same memory a tensor would sit in.
+/// Buffers come from the runtime's allocator, as a tensor's would.
 std::vector<float>
 run(const std::string& ir, const std::string& name, const std::vector<std::vector<float>>& inputs) {
   const auto [major, minor] = capability();
@@ -142,8 +139,7 @@ TEST(ProgramTest, TheMilestoneChainProducesTheSameNumbersAsTheHost) {
 TEST(ProgramTest, ElementsThatDoNotFillTheLastBlockAreStillWritten) {
   TESSIQ_SKIP_WITHOUT_GPU();
 
-  // 4096 divides the block size exactly, which is the case that would hide a missing bounds check.
-  // This one does not.
+  // Not a multiple of the block size, so a missing bounds check would show.
   constexpr std::size_t kOdd = 4095;
   std::vector<float> a(kCount, 3.0F);
   for (std::size_t i = 0; i < kOdd; ++i) {
@@ -215,10 +211,9 @@ TEST(ProgramTest, LoadingTwiceReusesTheModule) {
 TEST(ProgramTest, TwoDifferentKernelsWithTheSameNameAreNotConfused) {
   TESSIQ_SKIP_WITHOUT_GPU();
 
-  // Every fused kernel is called tessiq_fused_<group>, so unrelated graphs routinely produce a
-  // kernel with the same name for the same device. The loaded-module map used to be keyed on the
-  // cubin's length, and these two are the same length, so the second load returned the first one's
-  // function and the wrong kernel ran with no error reported anywhere.
+  // Fused kernels are named tessiq_fused_<group>, so unrelated graphs often produce kernels with
+  // the same name. These two also compile to the same length, so the loaded-module map has to key
+  // on the contents.
   const auto [major, minor] = capability();
   const auto cubin_for = [major = major, minor = minor](const char* text) {
     return compile_cached(source_for(text), "tessiq_fused_0", major, minor);
@@ -270,9 +265,9 @@ TEST(ProgramTest, AMissingFunctionIsReportedByName) {
 
 /// A kernel written by hand, the way a custom operation brings one.
 ///
-/// It stages each element through dynamic shared memory on its way to the output, so a launch that
-/// gave it none would read what another block left there, and it takes three scalars of three
-/// different types, so an argument passed as the wrong type shows up as a wrong number.
+/// It stages each element through dynamic shared memory, so a launch that gave it none would read
+/// garbage, and it takes three scalars of different types, so a wrongly typed argument shows up
+/// as a wrong number.
 constexpr std::string_view kScaleRows = R"(
 extern "C" __global__ void scale_rows(const float* in, float* out, long long columns,
                                       float factor, int bias) {
@@ -332,8 +327,8 @@ TEST(ProgramTest, AHandWrittenKernelGetsItsGridSharedMemoryAndTypedArguments) {
 TEST(ProgramTest, SharedMemoryPastWhatEveryKernelGetsIsAskedFor) {
   TESSIQ_SKIP_WITHOUT_GPU();
 
-  // 64 KB, past the 48 KB a block gets without asking. Each thread writes a stretch of it and
-  // reads back a stretch another thread wrote, so the whole of it has to exist.
+  // 64 KB, past the 48 KB default. Each thread reads back what another thread wrote, so all of it
+  // has to exist.
   constexpr std::string_view kSource = R"(
 extern "C" __global__ void through_shared(float* out, long long count) {
   extern __shared__ float staged[];

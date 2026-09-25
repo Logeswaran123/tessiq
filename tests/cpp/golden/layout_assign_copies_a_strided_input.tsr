@@ -1,8 +1,6 @@
 // RUN: mark-supported,layout-assign
-// Every kernel reads p_in[i] and writes p_out[i], one index across every buffer, which is only
-// the same elements when the buffers are laid out the same way. So a claimed operation reading a
-// strided value needs that value packed first, and the copy is a node rather than something the
-// runtime does silently.
+// Generated kernels index their buffers as packed, so a claimed operation reading a strided value
+// needs it packed first. The executor does the packing; this records it as a node.
 graph @g(%a: f32[4,8:1,4], %b: f32[4,8]) -> f32[4,8] {
   %r = aten.relu.default(%a) : f32[4,8]
   %s = aten.add.Tensor(%r, %b) : f32[4,8]

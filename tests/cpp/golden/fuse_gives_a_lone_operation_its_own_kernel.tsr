@@ -1,7 +1,6 @@
 // RUN: mark-supported,cluster,fuse-elementwise
-// A node that fuses with nothing still becomes a kernel. It used to carry no group, on the
-// reasoning that not fusing already means a kernel per operation, and that was wrong: a node
-// with no group has no kernel, so it reached the fallback and cost a transfer each way.
+// A node that fuses with nothing still gets a group, and so a kernel. Without one it would run
+// through the fallback, a transfer each way.
 graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {
   %s = aten.add.Tensor(%a, %b) : f32[8]
   return %s

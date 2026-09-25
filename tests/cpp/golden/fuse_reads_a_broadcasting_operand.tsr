@@ -1,8 +1,6 @@
 // RUN: mark-supported,cluster,fuse-elementwise
-// Subtracting one mean per row is what every softmax and layer norm does, and it used to end the
-// group: a kernel read one index across every buffer, and an operand with fewer elements has
-// nothing at most of those indices. The kernel works out where to read it from the shapes now, so
-// the chain stays together.
+// Subtracting one mean per row, as softmax and layer norm do. The kernel reads the mean at an
+// index worked out from the shapes, so the chain stays in one group.
 graph @g(%a: f32[4,8], %m: f32[4,1]) -> f32[4,8] {
   %s = aten.sub.Tensor(%a, %m) : f32[4,8]
   %e = aten.exp.default(%s) : f32[4,8]

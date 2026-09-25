@@ -1,6 +1,5 @@
 // RUN: mark-supported,cluster,fuse-elementwise
-// %p is returned, so the caller reads it from memory. Keeping it in a register would mean not
-// producing it at all.
+// %p is returned, so it has to be written to memory.
 graph @g(%x: f32[8]) -> (f32[8], f32[8]) {
   %p = aten.relu.default(%x) : f32[8]
   %c = aten.tanh.default(%p) : f32[8]

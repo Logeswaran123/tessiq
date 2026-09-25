@@ -1,8 +1,7 @@
 // RUN: mark-supported,cluster
-// A permute costs nothing on either side: on a tessiq tensor it is a view, and on a host tensor
-// torch does the same thing. Running this one on the device would move the input across, take a
-// different view of it, and move that back, which is two transfers for no work. So it is claimed
-// and not placed, and the difference between those is what tessiq.cluster records.
+// A permute is a view on either side. Placing this unit on the device would copy the input
+// across, take a view and copy it back, so it is claimed (tessiq.supported) but not placed (no
+// tessiq.cluster).
 graph @g(%a: f32[4,8]) -> f32[8,4:1,8] {
   %m = aten.hypot.default(%a, %a) : f32[4,8]
   %p = aten.permute.default(%m) {arg1 = [1,0]} : f32[8,4:1,8]

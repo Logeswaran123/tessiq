@@ -1,6 +1,6 @@
 // RUN: algebraic-simplify,dead-node-elimination
-// Not an identity for floats. (-0.0) + 0.0 is +0.0, so replacing the add with its operand would
-// change the sign of a zero. Integers have one zero and no such trap, which the next file shows.
+// Not an identity for floats: (-0.0) + 0.0 is +0.0, so replacing the add with its operand would
+// change the sign of a zero. The integer case is algebraic_adds_an_integer_zero.tsr.
 graph @g(%x: f32[4]) -> f32[4] {
   %zero = const() {value = 0.0} : f32[]
   %a = add(%x, %zero) : f32[4]

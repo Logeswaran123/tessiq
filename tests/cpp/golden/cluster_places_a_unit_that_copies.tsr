@@ -1,8 +1,6 @@
 // RUN: mark-supported,cluster
-// The same permute as the previous case, with a copy after it. A permute alone is not worth
-// moving to the device, because it would arrive, take a different view, and go back. A copy is:
-// it costs a pass over the data, and doing that pass on the card is the whole point. So the unit
-// is placed, and the permute goes with it rather than being paid for twice.
+// The permute from cluster_leaves_a_movement_only_group_on_the_host.tsr with a copy after it.
+// The copy is a pass over the data, so the unit is placed, and the permute goes with it.
 graph @g(%a: f32[4,8]) -> f32[8,4] {
   %m = aten.hypot.default(%a, %a) : f32[4,8]
   %p = aten.permute.default(%m) {arg1 = [1,0]} : f32[8,4:1,8]

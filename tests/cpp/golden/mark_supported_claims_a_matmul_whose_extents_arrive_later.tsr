@@ -1,7 +1,6 @@
 // RUN: mark-supported
-// BLAS takes m, n and k at the call, so a matrix multiply is claimed whether or not the extents
-// are known here. Whether the operands are laid out in a way it can name with a transpose flag is
-// a separate question, and one the kernels answer when they are built.
+// BLAS takes m, n and k at the call, so a matmul is claimed whether or not the extents are known.
+// Whether a transpose flag can describe each operand is decided when the kernel is built.
 graph @g(%x: f32[?,32], %w: f32[32,64:1,32]) -> f32[?,64] {
   %p = aten.mm.default(%x, %w) : f32[?,64]
   return %p
