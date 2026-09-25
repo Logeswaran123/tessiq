@@ -73,6 +73,19 @@ def test_a_convolution_matches_eager(config: dict[str, object], bias: bool) -> N
 
 
 @pytest.mark.cuda
+def test_a_float64_convolution_runs_on_the_host_and_matches_eager() -> None:
+    # cuDNN here is float32 only, so a float64 convolution is left to the host rather than claimed
+    # and then refused when it is called.
+    _gpu()
+    torch.manual_seed(0)
+    layer = nn.Conv2d(4, 8, kernel_size=3, padding=1).double().eval()
+    example = torch.randn(2, 4, 8, 8, dtype=torch.float64)
+    compiled = torch.compile(layer, backend="tessiq", options={"device": str(tessiq.gpu)})
+    with torch.no_grad():
+        torch.testing.assert_close(compiled(example), layer(example))
+
+
+@pytest.mark.cuda
 def test_a_convolution_is_planned_rather_than_interpreted() -> None:
     # Matching eager proves nothing on its own: the fallback matches too. What this checks is that
     # cuDNN is actually the thing running it.

@@ -434,6 +434,9 @@ aten = ["aten.mm.default"]
 category = "matmul"
 arity = 2
 kernel = true
+# The cuBLAS call is float32 only for now. Any other type is left on the host rather than claimed
+# and then refused when it runs.
+dtypes = ["f32"]
 
 # The form nn.Linear produces: a bias row added to every row of the product. Its weight arrives
 # transposed, which BLAS takes as a flag rather than a copy.
@@ -443,6 +446,7 @@ aten = ["aten.addmm.default"]
 category = "matmul"
 arity = 3
 kernel = true
+dtypes = ["f32"]
 
 [[op]]
 name = "bmm"
@@ -450,6 +454,7 @@ aten = ["aten.bmm.default"]
 category = "matmul"
 arity = 2
 kernel = true
+dtypes = ["f32"]
 
 [[op]]
 name = "clone"
@@ -466,3 +471,5 @@ aten = ["aten.convolution.default"]
 category = "convolution"
 arity = 3
 kernel = true
+# The cuDNN plan is float32 only for now, for the same reason as the matmuls.
+dtypes = ["f32"]

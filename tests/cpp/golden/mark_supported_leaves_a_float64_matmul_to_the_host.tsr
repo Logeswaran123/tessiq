@@ -1,0 +1,14 @@
+// RUN: mark-supported
+// The matmul calls cuBLAS, which is float32 only here. A float64 one is left for the host to run
+// rather than claimed and then refused by cuBLAS when it is called.
+graph @g(%a: f32[4,8], %b: f32[8,16], %c: f64[4,8], %d: f64[8,16]) -> (f32[4,16], f64[4,16]) {
+  %mm = aten.mm.default(%a, %b) : f32[4,16]
+  %mm_1 = aten.mm.default(%c, %d) : f64[4,16]
+  return %mm, %mm_1
+}
+// ---
+graph @g(%a: f32[4,8], %b: f32[8,16], %c: f64[4,8], %d: f64[8,16]) -> (f32[4,16], f64[4,16]) {
+  %mm = aten.mm.default(%a, %b) {tessiq.supported = true} : f32[4,16]
+  %mm_1 = aten.mm.default(%c, %d) {tessiq.supported = false} : f64[4,16]
+  return %mm, %mm_1
+}

@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "tessiq/codegen/blas.h"
@@ -529,6 +530,17 @@ compile_one(const ir::Node& node, std::pair<int, int> capability, int ordinal) {
                              .program = program}));
 }
 
+/// Whether `mark-supported` claimed `node`.
+///
+/// A node it did not claim is placed on the host, so a kernel for it would be launched with host
+/// pointers. Every kind below asks, rather than taking every node of its kind: a node can be of a
+/// kind that has kernels and still be declined, such as a matmul of a type cuBLAS does not take.
+bool claimed(const ir::Node& node) {
+  const ir::Attribute* supported = node.attribute("tessiq.supported");
+  const auto* flag = supported == nullptr ? nullptr : std::get_if<bool>(supported);
+  return flag != nullptr && *flag;
+}
+
 Result<void> compile_reductions(const ir::Graph& graph, int ordinal, Kernels& compiled) {
   if (!codegen::launcher_available()) {
     return ok();
@@ -542,6 +554,9 @@ Result<void> compile_reductions(const ir::Graph& graph, int ordinal, Kernels& co
 
   std::size_t count = 0;
   for (const ir::Node* node : candidates) {
+    if (!claimed(*node)) {
+      continue;
+    }
     TESSIQ_ASSIGN_OR_RETURN(auto kernel, compile_one(*node, capability, ordinal));
     if (kernel != nullptr) {
       compiled.push_back(std::move(kernel));
@@ -566,6 +581,9 @@ Result<void> compile_gemms(const ir::Graph& graph, int ordinal, Kernels& compile
 
   std::size_t count = 0;
   for (const ir::Node* node : candidates) {
+    if (!claimed(*node)) {
+      continue;
+    }
     TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_gemm(*node));
     if (!description.has_value()) {
       TESSIQ_LOG(kDebug, kLogModule) << "no gemm shape for " << node->op() << ", leaving it alone";
@@ -598,6 +616,9 @@ Result<void> compile_convs(const ir::Graph& graph, int ordinal, Kernels& compile
   const std::vector<const ir::Node*> candidates = codegen::conv_nodes(graph);
   std::size_t count = 0;
   for (const ir::Node* node : candidates) {
+    if (!claimed(*node)) {
+      continue;
+    }
     TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_conv(*node));
     if (!description.has_value()) {
       TESSIQ_LOG(kDebug, kLogModule) << "no conv shape for " << node->op() << ", leaving it alone";

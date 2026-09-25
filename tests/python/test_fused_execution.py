@@ -414,6 +414,24 @@ def test_a_matmul_agrees_with_eager(
     torch.testing.assert_close(compiled(*inputs), call(*inputs), rtol=1e-4, atol=1e-4)
 
 
+def test_a_float64_linear_layer_runs_on_the_host_and_agrees_with_eager() -> None:
+    # cuBLAS here is float32 only. The matmul used to be claimed anyway and fail when it was
+    # called, so a float64 model compiled for the GPU did not run at all.
+    layer = torch.nn.Linear(32, 16).double().eval()
+    x = torch.randn(8, 32, dtype=torch.float64)
+    graph = captured(layer, x)
+    recipe = build_recipe(graph, tessiq.gpu, use_cache=False)
+    addmm = next(n.name for n in graph.graph.nodes if "addmm" in str(n.target))
+    assert recipe.devices.get(addmm, torch.device("cpu")).type == "cpu"
+    assert addmm not in recipe.kernels
+
+    compiled = torch.compile(
+        layer, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    with torch.no_grad():
+        torch.testing.assert_close(compiled(x), layer(x))
+
+
 def test_a_linear_layer_uses_a_transposed_weight_without_copying_it() -> None:
     # nn.Linear stores its weight as [out, in] and computes with [in, out], so every one of them
     # produces a transposed operand. BLAS takes that as a flag, which is the whole reason layouts

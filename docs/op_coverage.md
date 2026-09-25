@@ -18,7 +18,7 @@ and the two numbers are far apart.
 
 | Operation | ATen | Category | Runs on device |
 |---|---|---|---|
-| `convolution` | `aten.convolution.default` | convolution | yes |
+| `convolution` | `aten.convolution.default` | convolution | yes, float32 only |
 | `clone` | `aten.clone.default` | copy | yes |
 | `abs` | `aten.abs.default` | elementwise | yes |
 | `acos` | `aten.acos.default` | elementwise | yes |
@@ -53,9 +53,9 @@ and the two numbers are far apart.
 | `tan` | `aten.tan.default` | elementwise | yes |
 | `tanh` | `aten.tanh.default` | elementwise | yes |
 | `trunc` | `aten.trunc.default` | elementwise | yes |
-| `addmm` | `aten.addmm.default` | matmul | yes |
-| `bmm` | `aten.bmm.default` | matmul | yes |
-| `mm` | `aten.mm.default` | matmul | yes |
+| `addmm` | `aten.addmm.default` | matmul | yes, float32 only |
+| `bmm` | `aten.bmm.default` | matmul | yes, float32 only |
+| `mm` | `aten.mm.default` | matmul | yes, float32 only |
 | `expand` | `aten.expand.default` | movement | yes |
 | `permute` | `aten.permute.default` | movement | yes |
 | `reshape` | `aten.reshape.default`<br>`aten._reshape_alias.default` | movement | yes |
