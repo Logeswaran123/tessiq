@@ -83,11 +83,13 @@ class CudaDevice final : public Device {
 
   Result<void> synchronize() override {
     TESSIQ_RETURN_IF_ERROR(activate());
-    if (stream_ == nullptr) {
-      return ok();
-    }
+    // Transfers go on stream_ and every launch on the legacy default stream. Each stream waits for
+    // work queued earlier on the other, so waiting for both covers everything, whichever came last.
     if (const cudaError_t status = cudaStreamSynchronize(stream_); status != cudaSuccess) {
       return cuda_error(status, "cudaStreamSynchronize");
+    }
+    if (const cudaError_t status = cudaStreamSynchronize(cudaStreamLegacy); status != cudaSuccess) {
+      return cuda_error(status, "cudaStreamSynchronize(cudaStreamLegacy)");
     }
     return ok();
   }

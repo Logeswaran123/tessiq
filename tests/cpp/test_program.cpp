@@ -4,6 +4,7 @@
 // Loading a compiled kernel and running it, checked against results computed on the host.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -359,6 +360,38 @@ extern "C" __global__ void through_shared(float* out, long long count) {
   EXPECT_FLOAT_EQ(got.front(), static_cast<float>(kFloats - 1));
   EXPECT_FLOAT_EQ(got.back(), 0.0F);
   gpu.raw_deallocate(*output, kFloats * sizeof(float));
+}
+
+TEST(ProgramTest, SynchronizeWaitsForAKernelOnTheDefaultStream) {
+  TESSIQ_SKIP_WITHOUT_GPU();
+
+  // Spins on the device's own clock. It goes on the legacy default stream, as every launch does,
+  // and the device's transfer stream stays idle, so a synchronize that waited only for transfers
+  // would return at once.
+  constexpr std::string_view kSource = R"(
+extern "C" __global__ void spin(long long nanoseconds) {
+  unsigned long long start;
+  asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(start));
+  unsigned long long now = start;
+  while (now - start < (unsigned long long)nanoseconds) {
+    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(now));
+  }
+}
+)";
+  constexpr std::int64_t kSpinNanoseconds = 50'000'000;
+  auto program = compile_program(kSource, "spin", 0);
+  ASSERT_TRUE(program.has_value()) << program.error().to_string();
+  auto device = device_at(1);
+  ASSERT_TRUE(device.has_value());
+  Device& gpu = **device;
+  ASSERT_TRUE(gpu.synchronize().has_value());
+
+  const auto launched = (*program)->launch({}, {kSpinNanoseconds}, 1, kDefaultStream);
+  ASSERT_TRUE(launched.has_value()) << launched.error().to_string();
+  const auto start = std::chrono::steady_clock::now();
+  ASSERT_TRUE(gpu.synchronize().has_value());
+  const std::chrono::duration<double, std::milli> waited = std::chrono::steady_clock::now() - start;
+  EXPECT_GE(waited.count(), 25.0) << "synchronize returned before a 50 ms kernel could finish";
 }
 
 TEST(ProgramTest, ALaunchShapeNoDeviceRunsIsRefused) {
