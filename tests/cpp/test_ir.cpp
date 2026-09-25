@@ -257,6 +257,15 @@ TEST(TextTest, RoundTripsAttributesOfEveryKind) {
 )");
 }
 
+TEST(TextTest, RoundTripsAStringHoldingCommasAndBrackets) {
+  // A rewrite records the values it absorbed as one string, commas and all.
+  expect_round_trips(R"(graph @g(%a: f32[4]) -> f32[4] {
+  %b = op(%a) {names = "pow_1,mean,add", note = "[1,2]", rate = 2.5} : f32[4]
+  return %b
+}
+)");
+}
+
 TEST(TextTest, RoundTripsDynamicShapesAndScalars) {
   expect_round_trips(R"(graph @g(%a: f32[?,16], %s: i64[]) -> (f32[?,16], i64[]) {
   %b = neg(%a) : f32[?,16]
