@@ -1,23 +1,22 @@
 ---
-# Checks are deliberately strict: lint is a merge gate here, not a suggestion.
+# Lint is a merge gate.
 #
-# Disabled checks, and why. Note that comments cannot live inside the `Checks` value below -- it is
-# a YAML folded scalar, so a '#' there becomes part of the check list rather than a comment.
+# Disabled checks, and why. Comments cannot go inside the `Checks` value below: it is a YAML folded
+# scalar, so a '#' there becomes part of the check list.
 #
 #   bugprone-easily-swappable-parameters  Fires on every (width, height)-style signature.
 #   cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
 #                                         Fires on every operator[], including indexing a loop
-#                                         already bounded by size(). Rewriting those as at() adds
-#                                         a redundant branch to the IR printer, parser and every
-#                                         pass, which are the hot paths. Out-of-range indexing is
-#                                         caught by the sanitizer builds instead.
+#                                         already bounded by size(). at() would add a redundant
+#                                         branch to the printer, the parser and every pass.
+#                                         The sanitizer builds catch out-of-range indexing.
 #   cppcoreguidelines-avoid-do-while      The assertion macros need do-while for statement safety.
 #   cppcoreguidelines-macro-usage         TESSIQ_LOG must not evaluate its arguments, and the
 #                                         assertion macros need __FILE__/__LINE__. A function
 #                                         cannot do either job.
 #   modernize-use-trailing-return-type    A style preference this project does not share.
 #   performance-enum-size                 These enums appear in signatures and switches, never in
-#                                         bulk storage. Shrinking them trades clarity for nothing.
+#                                         bulk storage.
 #   portability-avoid-pragma-once         Supported by every compiler this project targets.
 #   readability-inconsistent-ifelse-braces TESSIQ_LOG expands to a braceless if/else by design;
 #                                         this would fire at every log site in the project.

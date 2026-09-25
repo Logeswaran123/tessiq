@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """What the generated reduction kernel costs, against PyTorch's own.
 
-A reduction is memory bound in the same way an elementwise kernel is: it reads the input once and
-writes far less, so the input's size is the work. Both sides are measured with the data already on
-the device, because the transfer around a call dominates it otherwise and that is a different
-measurement, made in `against_torch.py`.
+A reduction is memory bound: it reads the input once and writes far less. Both sides are measured
+with the data already on the device; the transfers around a call are `against_torch.py`'s
+subject.
 
-The shape matters more here than it does for an elementwise kernel. Reducing the last axis walks
-contiguous memory; reducing the first walks with a stride, and every block reads a column. Both are
-measured for that reason.
+Reducing the last axis walks contiguous memory, and reducing the first walks with a stride, so
+both are measured.
 
 Run with: python bench/reduction.py
 """

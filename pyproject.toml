@@ -22,13 +22,11 @@ classifiers = [
   "Topic :: Software Development :: Compilers",
 ]
 
-# The version is owned by CMakeLists.txt and read from it, so that the Python package, the native
-# module and the build all report the same number.
+# The version is read from CMakeLists.txt, so the package, the native module and the build agree.
 dynamic = ["version"]
 
 # The extension module links libtorch, so torch is required to import tessiq. The C++ core
-# (csrc/tessiq/runtime, csrc/tessiq/support) still builds and tests without it, which is what
-# keeps the compiler testable on a machine with neither torch nor a GPU.
+# (support, runtime, IR and passes) builds and tests without torch or a GPU.
 dependencies = ["torch>=2.6"]
 
 [project.optional-dependencies]
@@ -82,10 +80,8 @@ markers = [
 line-length = 100
 target-version = "py310"
 src = ["python", "tests/python", "tools"]
-# Build trees contain vendored third-party sources: googletest ships Python helpers, and linting
-# them reports hundreds of errors in code this project does not own. Matched by pattern rather
-# than by exact name, because build directories get suffixes (build-asan, build-cuda) and an
-# exclude list that only covers "build" silently stops working the first time one appears.
+# Build trees contain vendored third-party sources, such as googletest's Python helpers. Matched
+# by pattern, because build directories get suffixes (build-asan, build-cuda).
 extend-exclude = ["build*", "_skbuild*", "**/_deps/**", "csrc/generated"]
 
 [tool.ruff.lint]
@@ -117,10 +113,9 @@ ignore = [
 "python/tessiq/_C.pyi" = ["N999"]
 
 [tool.mypy]
-# Matches the development interpreter rather than the minimum supported version: dependencies ship
-# stubs using 3.12 syntax, which mypy cannot parse when told to assume 3.10. Compatibility with the
-# 3.10 floor declared in requires-python is enforced by ruff's target-version and by CI running the
-# test suite on the oldest supported interpreter.
+# The development interpreter rather than the 3.10 floor: dependencies ship stubs in 3.12 syntax,
+# which mypy cannot parse when assuming 3.10. The floor is enforced by ruff's target-version and by
+# CI running the tests on 3.10.
 python_version = "3.12"
 files = ["python/tessiq", "tests/python"]
 strict = true

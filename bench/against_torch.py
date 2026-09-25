@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """How tessiq compares to PyTorch on the same hardware.
 
-`fusion.py` asks what fusion buys inside tessiq. This asks the question a user would: is any of
-this faster than just using PyTorch. The answer has two halves and they point opposite ways, so
-both are measured here rather than whichever one flatters.
+`fusion.py` asks what fusion buys inside tessiq. This asks whether tessiq is faster than PyTorch,
+in two halves that can point opposite ways:
 
   kernel       The generated kernel against Inductor's, with the data already on the device.
                This measures the code generator.
-  end to end   A whole `torch.compile` call against PyTorch's, from host tensors. This measures
-               the path around the kernel, which is currently what dominates.
+  end to end   A whole `torch.compile` call against PyTorch's, from host tensors. This also
+               measures everything around the kernel.
 
 Run with: python bench/against_torch.py
 """
@@ -39,7 +38,7 @@ BYTES_PER_ELEMENT = 4 * 4
 
 
 def chain(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-    """The chain from the phase 6 milestone."""
+    """The fused chain the README quotes."""
     return torch.sigmoid(torch.relu(a * b + c))
 
 
@@ -62,8 +61,8 @@ def capture(fn: Callable[..., Any], *inputs: torch.Tensor) -> torch.fx.GraphModu
 def measure(work: Callable[[], object], synchronise: Callable[[], None]) -> float:
     """Median wall time in milliseconds, with the device drained before the clock stops.
 
-    A launch returns as soon as it is queued, so timing one without synchronising measures how
-    long it takes to ask rather than how long it takes.
+    A launch returns as soon as it is queued, so timing without synchronising measures only the
+    launch.
     """
     for _ in range(WARMUP):
         work()
@@ -80,7 +79,7 @@ def measure(work: Callable[[], object], synchronise: Callable[[], None]) -> floa
 
 
 def nothing() -> None:
-    """No synchronise needed: the tessiq path already drains the device before it returns."""
+    """No synchronise needed: the result is copied back to the host, which waits for the device."""
 
 
 def bandwidth(elements: int, milliseconds: float) -> float:
@@ -148,9 +147,8 @@ def main() -> None:
 def block() -> None:
     """The same question on a whole transformer encoder block rather than one chain.
 
-    One chain flatters the backend: it is a single kernel and the comparison is of code generation.
-    A block is twenty-eight launches and the transfers between them, which is what a user actually
-    runs, and it is where the distance shows.
+    One chain is a single kernel, so it compares code generation. A block is many launches and the
+    transfers between them, which is what a user runs.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests" / "python"))
     from test_models import EncoderBlock
