@@ -37,11 +37,6 @@ cmake --build build-asan -j8
 ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-asan
 ```
 
-The same command passes on a machine with a GPU. The CUDA driver allocates state once and never
-frees it, which LeakSanitizer used to report at the end of every test that touched the GPU;
-[`tests/cpp/sanitizer_defaults.cpp`](tests/cpp/sanitizer_defaults.cpp) suppresses exactly that and
-says why it also needs the slower unwinder.
-
 Two things that will waste an afternoon if nobody tells you:
 
 - **Build with the compiler CI uses, not only yours.** CI is on g++ 13 and warns about things

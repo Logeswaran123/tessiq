@@ -159,5 +159,3 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - The IR could print a string attribute holding a comma and not read it back.
 - A float64 matmul or convolution compiled for the GPU was claimed and then refused by cuBLAS or
   cuDNN when it was called. It runs on the host now.
-- The ASan run failed every CUDA-backed C++ test on a machine with a GPU, from state the CUDA driver
-  allocates once and never frees.
