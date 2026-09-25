@@ -232,48 +232,6 @@ void bind_kernels(py::module_& m) {
       .def_property_readonly("op", &CustomKernel::op);
 }
 
-/// Binds adding an operation from Python, and compiling it for the eager path.
-void bind_registry(py::module_& m) {
-  m.def(
-      "register_elementwise",
-      [](const std::string& name,
-         const std::string& canonical,
-         const std::string& expression,
-         int arity,
-         const std::vector<std::string>& dtypes) {
-        tessiq::passes::OpDefinition definition;
-        definition.name = name;
-        definition.canonical = canonical;
-        definition.category = tessiq::passes::OpCategory::kElementwise;
-        definition.arity = arity;
-        definition.expression = expression;
-        for (const std::string& dtype : dtypes) {
-          definition.dtypes.push_back(value_or_raise(tessiq::ir::parse_dtype(dtype)));
-        }
-        value_or_raise(tessiq::passes::register_op(definition));
-      },
-      py::arg("name"),
-      py::arg("canonical"),
-      py::arg("expression"),
-      py::arg("arity"),
-      py::arg("dtypes"),
-      "Adds an elementwise operation the compiler claims, fuses and emits like a built-in one.");
-  m.def("registered_ops",
-        &tessiq::passes::registered_op_names,
-        "Every operation added with register_elementwise, sorted.");
-  m.def(
-      "compile_elementwise",
-      [](const std::string& name, int arity, const std::string& dtype, int ordinal) {
-        return value_or_raise(tessiq::torch_backend::compile_elementwise(
-            name, arity, value_or_raise(tessiq::ir::parse_dtype(dtype)), ordinal));
-      },
-      py::arg("name"),
-      py::arg("arity"),
-      py::arg("dtype"),
-      py::arg("ordinal"),
-      "A kernel running one elementwise operation over operands of the result's shape.");
-}
-
 /// Binds the custom operations compiled into the extension: listing them, compiling them ahead of
 /// their first call, and counting the calls that ran their reference.
 void bind_custom_ops(py::module_& m) {
@@ -409,7 +367,6 @@ PYBIND11_MODULE(_C, m) {
       .def("__str__", &tessiq::ir::Recipe::to_string);
 
   bind_kernels(m);
-  bind_registry(m);
   bind_custom_ops(m);
 
   py::class_<tessiq::torch_backend::CompiledGraph>(m, "CompiledGraph")

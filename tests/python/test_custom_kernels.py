@@ -4,7 +4,7 @@
 
 Its kernel, rms_norm.cu, reduces each row and scales it in one launch, which no expression can say.
 It runs as its own kernel in a compiled graph and is never fused. Whether a call ran the kernel or
-fell back to the reference is read from `_C.custom_op_fallbacks`, since both give the same answer.
+fell back to the reference is read from `tessiq.library.fallbacks`, since both give the same answer.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def expected(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
 
 
 def fallbacks() -> int:
-    return _C.custom_op_fallbacks("tessiq::rms_norm")
+    return tessiq.library.fallbacks("tessiq::rms_norm")
 
 
 class Block(torch.nn.Module):
