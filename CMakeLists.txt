@@ -19,6 +19,34 @@ option(TESSIQ_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 find_package(CUDAToolkit QUIET)
 option(TESSIQ_ENABLE_CUDA "Build the CUDA backend" ${CUDAToolkit_FOUND})
 
+# nvcc compiles the precompiled custom operations, csrc/custom_ops/*/*.nvcc.cu. Without it those
+# files are left out and the operations run their reference.
+set(TESSIQ_NVCC OFF)
+if(TESSIQ_ENABLE_CUDA)
+  if(NOT CMAKE_CUDA_COMPILER AND CUDAToolkit_NVCC_EXECUTABLE)
+    set(CMAKE_CUDA_COMPILER "${CUDAToolkit_NVCC_EXECUTABLE}")
+  endif()
+  # Read before check_language, which fills it in with nvcc's own default.
+  set(tessiq_cuda_architectures "${CMAKE_CUDA_ARCHITECTURES}")
+  include(CheckLanguage)
+  check_language(CUDA)
+  if(CMAKE_CUDA_COMPILER)
+    # The GPUs in this machine unless told otherwise, since a precompiled kernel only runs on an
+    # architecture it was built for. A machine with nvcc and no GPU has to say which.
+    if(tessiq_cuda_architectures)
+      set(CMAKE_CUDA_ARCHITECTURES "${tessiq_cuda_architectures}")
+    else()
+      set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
+    # The same shared runtime the rest of tessiq links, so the process has one.
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    enable_language(CUDA)
+    set(TESSIQ_NVCC ON)
+  endif()
+endif()
+
 # Reserved for the MLIR export target; not implemented yet.
 option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PHASES.md, phase 15)" OFF)
 
@@ -87,5 +115,10 @@ message(STATUS "  tests .............. ${TESSIQ_BUILD_TESTS}")
 message(STATUS "  python module ...... ${TESSIQ_BUILD_PYTHON}")
 message(STATUS "  warnings as errors . ${TESSIQ_WARNINGS_AS_ERRORS}")
 message(STATUS "  cuda backend ....... ${TESSIQ_ENABLE_CUDA}")
+if(TESSIQ_NVCC)
+  message(STATUS "  precompiled ops .... ${CMAKE_CUDA_ARCHITECTURES}")
+else()
+  message(STATUS "  precompiled ops .... OFF (no nvcc)")
+endif()
 message(STATUS "  sanitizers ......... ${TESSIQ_SANITIZER}")
 message(STATUS "")
