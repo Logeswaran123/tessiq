@@ -455,20 +455,28 @@ expression_for(RegisteredOp& op, at::ScalarType dtype, int ordinal) {
 }
 
 /// Launches `op`'s kernel over `arguments`, whose tensors are packed, writing `out`.
-Result<void> launch_kernel(RegisteredOp& op,
+///
+/// Returns false, having launched nothing, when the launch function refuses the arguments with
+/// TORCH_CHECK. That is how a kernel says it cannot take a call its reference can, such as a
+/// weight that broadcasts, and the caller then runs the reference instead. Any other failure is an
+/// error.
+Result<bool> launch_kernel(RegisteredOp& op,
                            const std::vector<c10::IValue>& arguments,
                            const at::Tensor& out,
                            int ordinal,
                            codegen::Stream stream) {
   if (out.numel() == 0) {
     // Nothing to compute, and a launch over no blocks is not something to ask the driver for.
-    return ok();
+    return true;
   }
   custom_ops::Launch launch;
   try {
     launch = op.definition->launch_function()(arguments, out);
   } catch (const c10::Error& error) {
-    return invalid_argument(op.qualified + ": " + error.what_without_backtrace());
+    TESSIQ_LOG(kDebug, kLogModule)
+        << op.qualified
+        << " declines a call, so it runs its reference: " << error.what_without_backtrace();
+    return false;
   }
   TESSIQ_ASSIGN_OR_RETURN(const codegen::Program* program, program_for(op, ordinal));
 
@@ -483,14 +491,38 @@ Result<void> launch_kernel(RegisteredOp& op,
   shape.grid = launch.grid;
   shape.block = launch.block;
   shape.shared_bytes = launch.shared_bytes;
-  return program->launch(buffers, launch.arguments, shape, stream);
+  TESSIQ_RETURN_IF_ERROR(program->launch(buffers, launch.arguments, shape, stream));
+  return true;
+}
+
+/// Runs `op`'s reference on host copies of `arguments` and writes what it gives into `out`.
+///
+/// For a call the kernel declined in a compiled graph, where the result already has a tensor the
+/// executor allocated. A call made outside one goes through the dispatcher's own fallback instead.
+Result<void>
+reference_into(RegisteredOp& op, const std::vector<c10::IValue>& arguments, const at::Tensor& out) {
+  op.fallbacks.fetch_add(1, std::memory_order_relaxed);
+  torch::jit::Stack stack;
+  stack.reserve(arguments.size());
+  for (const c10::IValue& argument : arguments) {
+    stack.push_back(argument.isTensor() ? c10::IValue(argument.toTensor().cpu()) : argument);
+  }
+  try {
+    op.handle->callBoxed(stack);
+    out.copy_(stack.back().toTensor());
+  } catch (const c10::Error& error) {
+    return invalid_argument(op.qualified + ": " + error.what_without_backtrace());
+  }
+  return ok();
 }
 
 void raise_if_error(const Result<void>& result) {
   TORCH_CHECK(result.has_value(), result.has_value() ? "" : result.error().to_string());
 }
 
-at::Tensor run_kernel(RegisteredOp& op, std::vector<c10::IValue> arguments, int ordinal) {
+/// The result of launching `op`'s kernel, or nothing when the kernel declined the call.
+std::optional<at::Tensor>
+run_kernel(RegisteredOp& op, std::vector<c10::IValue> arguments, int ordinal) {
   for (c10::IValue& argument : arguments) {
     if (argument.isTensor()) {
       argument = argument.toTensor().contiguous();
@@ -506,7 +538,11 @@ at::Tensor run_kernel(RegisteredOp& op, std::vector<c10::IValue> arguments, int 
     return c10::Device(c10::kCPU);
   }();
   at::Tensor out = at::empty(like.sizes(), like.options().device(device));
-  raise_if_error(launch_kernel(op, arguments, out, ordinal, codegen::kDefaultStream));
+  const Result<bool> launched = launch_kernel(op, arguments, out, ordinal, codegen::kDefaultStream);
+  TORCH_CHECK(launched.has_value(), launched.has_value() ? "" : launched.error().to_string());
+  if (!*launched) {
+    return std::nullopt;
+  }
   return out;
 }
 
@@ -561,10 +597,15 @@ void run_on_device(const c10::OperatorHandle& handle, torch::jit::Stack* stack) 
     return;
   }
 
-  at::Tensor out = op->has_kernel() ? run_kernel(*op, std::move(arguments), *ordinal)
-                                    : run_expression(*op, arguments, *ordinal);
+  std::optional<at::Tensor> out = op->has_kernel() ? run_kernel(*op, std::move(arguments), *ordinal)
+                                                   : run_expression(*op, arguments, *ordinal);
+  if (!out.has_value()) {
+    op->fallbacks.fetch_add(1, std::memory_order_relaxed);
+    at::native::cpu_fallback(handle, stack);
+    return;
+  }
   torch::jit::drop(*stack, count);
-  torch::jit::push(*stack, std::move(out));
+  torch::jit::push(*stack, std::move(*out));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -890,7 +931,12 @@ CustomKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
 Result<void> CustomKernel::launch(const std::vector<at::Tensor>& tensors,
                                   const at::Tensor& out,
                                   codegen::Stream stream) const {
-  return launch_kernel(*op_, arguments(tensors), out, ordinal_, stream);
+  const std::vector<c10::IValue> called = arguments(tensors);
+  TESSIQ_ASSIGN_OR_RETURN(const bool launched, launch_kernel(*op_, called, out, ordinal_, stream));
+  if (launched) {
+    return ok();
+  }
+  return reference_into(*op_, called, out);
 }
 
 Result<std::vector<std::shared_ptr<Kernel>>> custom_kernels(const ir::Graph& graph, int ordinal) {

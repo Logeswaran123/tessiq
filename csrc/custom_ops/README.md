@@ -167,9 +167,10 @@ replaced, because no backend ever sees it. Replace the one it becomes, as `softm
   on the host.
 - **The result's shape and type** are the reference's. They are found by running the reference on
   tensors that have a shape and no data, so there is nothing else to write for them.
-- **Refusing an input.** A launch function can refuse arguments its kernel cannot handle with
-  `TORCH_CHECK`. `rms_norm` does this for a weight that is not one value per column, which the
-  reference would broadcast and the kernel would read past the end of.
+- **Declining a call.** A launch function can decline arguments its kernel cannot handle with
+  `TORCH_CHECK`, and the call runs the reference instead, counted in `fallbacks()`. `rms_norm` does
+  this for a weight that is not one value per column, which the reference would broadcast and the
+  kernel would read past the end of.
 - **No defaults, no backward.** A schema argument cannot have a default yet, because a compiled
   graph leaves out an argument equal to its default. The operation has no backward, so it is for
   inference until one is registered.

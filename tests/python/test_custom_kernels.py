@@ -101,12 +101,39 @@ def test_a_type_it_was_not_written_for_runs_the_reference() -> None:
 
 @pytest.mark.cuda
 @pytest.mark.usefixtures("needs_gpu")
-def test_a_weight_the_kernel_cannot_read_is_refused() -> None:
-    # The reference would broadcast a single weight, but the kernel reads one per column, so the
-    # launch function refuses it rather than let the kernel read past the end.
+def test_a_weight_the_kernel_cannot_read_runs_the_reference() -> None:
+    # The reference broadcasts a single weight, but the kernel reads one per column, so the launch
+    # function declines the call rather than let the kernel read past the end, and the reference
+    # computes it instead.
     x, w = torch.randn(4, 64), torch.randn(1)
-    with pytest.raises(RuntimeError, match="reads one weight per column"):
-        rms_norm(x.to(tessiq.gpu), w.to(tessiq.gpu), 1e-6)
+    before = fallbacks()
+    got = rms_norm(x.to(tessiq.gpu), w.to(tessiq.gpu), 1e-6)
+    assert fallbacks() == before + 1
+    torch.testing.assert_close(got.cpu(), expected(x, w, 1e-6))
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+def test_compiled_a_call_the_kernel_declines_runs_the_reference() -> None:
+    class OneWeight(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.randn(1))
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            out: torch.Tensor = torch.relu(rms_norm(x * 2.0, self.weight, 1e-5))
+            return out
+
+    model = OneWeight().eval()
+    x = torch.randn(8, 64)
+    recipe = build_recipe(tessiq.capture(model, x), tessiq.gpu, use_cache=False)
+    assert any(isinstance(k, _C.CustomKernel) for k in recipe.kernels.values())
+
+    compiled = torch.compile(model, backend="tessiq", options={"device": str(tessiq.gpu)})
+    before = fallbacks()
+    with torch.no_grad():
+        torch.testing.assert_close(compiled(x), model(x))
+    assert fallbacks() > before
 
 
 @pytest.mark.cuda
