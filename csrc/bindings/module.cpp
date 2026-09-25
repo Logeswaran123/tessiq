@@ -9,19 +9,24 @@
 
 // Teaches pybind11 how to convert a Python torch.Tensor to an at::Tensor. Without it a
 // binding taking at::Tensor rejects every tensor it is given.
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <torch/csrc/utils/pybind.h>
 
+#include "tessiq/codegen/call.h"
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
+#include "tessiq/codegen/program.h"
 #include "tessiq/codegen/stream.h"
 #include "tessiq/codegen/timing.h"
 #include "tessiq/ir/recipe.h"
@@ -150,6 +155,7 @@ void value_or_raise(const tessiq::Result<void>& result) {
 /// the most derived type it knows, so `isinstance` works on what a compiled graph returns.
 void bind_kernels(py::module_& m) {
   using tessiq::torch_backend::ConvKernel;
+  using tessiq::torch_backend::CustomKernel;
   using tessiq::torch_backend::FusedKernel;
   using tessiq::torch_backend::GemmKernel;
   using tessiq::torch_backend::Kernel;
@@ -221,54 +227,42 @@ void bind_kernels(py::module_& m) {
         const auto& plan = kernel.parts().plan;
         return plan == nullptr ? std::size_t{0} : plan->workspace_bytes();
       });
+
+  py::class_<CustomKernel, Kernel, std::shared_ptr<CustomKernel>>(m, "CustomKernel")
+      .def_property_readonly("op", &CustomKernel::op);
 }
 
-/// Binds adding an operation from Python, and compiling it for the eager path.
-void bind_registry(py::module_& m) {
+/// Binds the custom operations compiled into the extension: listing them, compiling them ahead of
+/// their first call, and counting the calls that ran their reference.
+void bind_custom_ops(py::module_& m) {
+  m.def("custom_ops",
+        &tessiq::torch_backend::custom_op_names,
+        "Every custom operation in csrc/custom_ops, as tessiq::<name>, sorted.");
   m.def(
-      "register_elementwise",
-      [](const std::string& name,
-         const std::string& canonical,
-         const std::string& expression,
-         int arity,
-         const std::vector<std::string>& dtypes) {
-        tessiq::passes::OpDefinition definition;
-        definition.name = name;
-        definition.canonical = canonical;
-        definition.category = tessiq::passes::OpCategory::kElementwise;
-        definition.arity = arity;
-        definition.expression = expression;
-        for (const std::string& dtype : dtypes) {
-          definition.dtypes.push_back(value_or_raise(tessiq::ir::parse_dtype(dtype)));
-        }
-        value_or_raise(tessiq::passes::register_op(definition));
+      "custom_op_fallbacks",
+      [](const std::string& name) {
+        return value_or_raise(tessiq::torch_backend::custom_op_fallbacks(name));
       },
       py::arg("name"),
-      py::arg("canonical"),
-      py::arg("expression"),
-      py::arg("arity"),
-      py::arg("dtypes"),
-      "Adds an elementwise operation the compiler claims, fuses and emits like a built-in one.");
-  m.def("registered_ops",
-        &tessiq::passes::registered_op_names,
-        "Every operation added with register_elementwise, sorted.");
+      "How many calls of the operation on a tessiq tensor ran its reference instead.");
   m.def(
-      "compile_elementwise",
-      [](const std::string& name, int arity, const std::string& dtype, int ordinal) {
-        return value_or_raise(tessiq::torch_backend::compile_elementwise(
-            name, arity, value_or_raise(tessiq::ir::parse_dtype(dtype)), ordinal));
+      "compile_custom_op",
+      [](const std::string& name, int ordinal) {
+        value_or_raise(tessiq::torch_backend::compile_custom_op(name, ordinal));
       },
       py::arg("name"),
-      py::arg("arity"),
-      py::arg("dtype"),
       py::arg("ordinal"),
-      "A kernel running one elementwise operation over operands of the result's shape.");
+      "Compiles the operation's kernel, or its expression for every type it declares, now.");
 }
 
 PYBIND11_MODULE(_C, m) {
   m.doc() = "tessiq native core";
 
   m.attr("__version__") = tessiq::kVersion;
+
+  // Every operation in csrc/custom_ops is checked here, so one whose definition does not hold
+  // together fails the import with a message naming it.
+  value_or_raise(tessiq::torch_backend::register_custom_ops());
 
   m.def(
       "version",
@@ -373,7 +367,7 @@ PYBIND11_MODULE(_C, m) {
       .def("__str__", &tessiq::ir::Recipe::to_string);
 
   bind_kernels(m);
-  bind_registry(m);
+  bind_custom_ops(m);
 
   py::class_<tessiq::torch_backend::CompiledGraph>(m, "CompiledGraph")
       .def_readonly("recipe", &tessiq::torch_backend::CompiledGraph::recipe)

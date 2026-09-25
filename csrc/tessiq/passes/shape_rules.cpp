@@ -63,8 +63,10 @@ std::optional<RuleKind> find_rule(std::string_view op) {
   case OpCategory::kMatmul:
     return RuleKind::kMatmul;
   case OpCategory::kConvolution:
-    // No rule. The output's spatial extents depend on stride, padding and dilation, and imported
-    // graphs carry the answer, so shape-infer skips it rather than repeating ATen's arithmetic.
+  case OpCategory::kCustom:
+    // No rule for either. A convolution's spatial extents depend on stride, padding and dilation,
+    // and the compiler knows nothing about what a registered kernel computes. Imported graphs carry
+    // both answers, so shape-infer skips them rather than repeating ATen's arithmetic or guessing.
     return std::nullopt;
   case OpCategory::kCopy:
     // Same shape in, same shape out, which the unary elementwise rule already says. What it does

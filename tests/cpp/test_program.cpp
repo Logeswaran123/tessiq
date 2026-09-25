@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -265,6 +266,121 @@ TEST(ProgramTest, AMissingFunctionIsReportedByName) {
   ASSERT_FALSE(program.has_value());
   EXPECT_NE(program.error().message().find("not_in_this_module"), std::string::npos)
       << program.error().message();
+}
+
+/// A kernel written by hand, the way a custom operation brings one.
+///
+/// It stages each element through dynamic shared memory on its way to the output, so a launch that
+/// gave it none would read what another block left there, and it takes three scalars of three
+/// different types, so an argument passed as the wrong type shows up as a wrong number.
+constexpr std::string_view kScaleRows = R"(
+extern "C" __global__ void scale_rows(const float* in, float* out, long long columns,
+                                      float factor, int bias) {
+  extern __shared__ float staged[];
+  const long long row = blockIdx.y;
+  const long long column = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+  if (column < columns) {
+    staged[threadIdx.x] = in[row * columns + column] * factor;
+  }
+  __syncthreads();
+  if (column < columns) {
+    out[row * columns + column] = staged[threadIdx.x] + (float)bias;
+  }
+}
+)";
+
+TEST(ProgramTest, AHandWrittenKernelGetsItsGridSharedMemoryAndTypedArguments) {
+  TESSIQ_SKIP_WITHOUT_GPU();
+
+  constexpr std::uint32_t kRows = 3;
+  constexpr std::uint32_t kColumns = 300;
+  constexpr std::uint32_t kThreads = 128;
+  std::vector<float> in(static_cast<std::size_t>(kRows) * kColumns);
+  for (std::size_t i = 0; i < in.size(); ++i) {
+    in[i] = static_cast<float>(i) * 0.5F;
+  }
+
+  auto program = compile_program(kScaleRows, "scale_rows", 0);
+  ASSERT_TRUE(program.has_value()) << program.error().to_string();
+  auto device = device_at(1);
+  ASSERT_TRUE(device.has_value());
+  Device& gpu = **device;
+  const std::size_t bytes = in.size() * sizeof(float);
+  auto input = gpu.raw_allocate(bytes);
+  auto output = gpu.raw_allocate(bytes);
+  ASSERT_TRUE(input.has_value() && output.has_value());
+  ASSERT_TRUE(gpu.copy_host_to_device(*input, in.data(), bytes).has_value());
+
+  LaunchShape shape;
+  shape.grid = {(kColumns + kThreads - 1) / kThreads, kRows, 1};
+  shape.block = {kThreads, 1, 1};
+  shape.shared_bytes = kThreads * sizeof(float);
+  const std::vector<KernelArgument> arguments{
+      std::int64_t{kColumns}, KernelArgument{2.5F}, KernelArgument{std::int32_t{7}}};
+  ASSERT_TRUE((*program)->launch({*input, *output}, arguments, shape, kDefaultStream).has_value());
+  ASSERT_TRUE(gpu.synchronize().has_value());
+
+  std::vector<float> got(in.size());
+  ASSERT_TRUE(gpu.copy_device_to_host(got.data(), *output, bytes).has_value());
+  for (std::size_t i = 0; i < in.size(); ++i) {
+    ASSERT_FLOAT_EQ(got[i], (in[i] * 2.5F) + 7.0F) << "at " << i;
+  }
+  gpu.raw_deallocate(*input, bytes);
+  gpu.raw_deallocate(*output, bytes);
+}
+
+TEST(ProgramTest, SharedMemoryPastWhatEveryKernelGetsIsAskedFor) {
+  TESSIQ_SKIP_WITHOUT_GPU();
+
+  // 64 KB, past the 48 KB a block gets without asking. Each thread writes a stretch of it and
+  // reads back a stretch another thread wrote, so the whole of it has to exist.
+  constexpr std::string_view kSource = R"(
+extern "C" __global__ void through_shared(float* out, long long count) {
+  extern __shared__ float staged[];
+  for (long long i = threadIdx.x; i < count; i += blockDim.x) { staged[i] = (float)i; }
+  __syncthreads();
+  for (long long i = threadIdx.x; i < count; i += blockDim.x) { out[i] = staged[count - 1 - i]; }
+}
+)";
+  constexpr std::size_t kFloats = 16384;
+  auto program = compile_program(kSource, "through_shared", 0);
+  ASSERT_TRUE(program.has_value()) << program.error().to_string();
+  auto device = device_at(1);
+  ASSERT_TRUE(device.has_value());
+  Device& gpu = **device;
+  auto output = gpu.raw_allocate(kFloats * sizeof(float));
+  ASSERT_TRUE(output.has_value());
+
+  LaunchShape shape;
+  shape.block = {256, 1, 1};
+  shape.shared_bytes = kFloats * sizeof(float);
+  const auto launched =
+      (*program)->launch({*output}, {std::int64_t{kFloats}}, shape, kDefaultStream);
+  ASSERT_TRUE(launched.has_value()) << launched.error().to_string();
+  ASSERT_TRUE(gpu.synchronize().has_value());
+
+  std::vector<float> got(kFloats);
+  ASSERT_TRUE(gpu.copy_device_to_host(got.data(), *output, kFloats * sizeof(float)).has_value());
+  EXPECT_FLOAT_EQ(got.front(), static_cast<float>(kFloats - 1));
+  EXPECT_FLOAT_EQ(got.back(), 0.0F);
+  gpu.raw_deallocate(*output, kFloats * sizeof(float));
+}
+
+TEST(ProgramTest, ALaunchShapeNoDeviceRunsIsRefused) {
+  TESSIQ_SKIP_WITHOUT_GPU();
+
+  auto program = compile_program(kScaleRows, "scale_rows", 0);
+  ASSERT_TRUE(program.has_value()) << program.error().to_string();
+
+  LaunchShape too_many;
+  too_many.block = {2048, 1, 1};
+  const auto refused = (*program)->launch({}, {}, too_many, kDefaultStream);
+  ASSERT_FALSE(refused.has_value());
+  EXPECT_NE(refused.error().message().find("1024"), std::string::npos);
+
+  LaunchShape empty;
+  empty.grid = {0, 1, 1};
+  EXPECT_FALSE((*program)->launch({}, {}, empty, kDefaultStream).has_value());
 }
 
 } // namespace

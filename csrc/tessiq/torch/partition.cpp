@@ -10,12 +10,14 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "tessiq/ir/graph.h"
 #include "tessiq/ir/recipe.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
 #include "tessiq/support/logging.h"
+#include "tessiq/torch/custom.h"
 #include "tessiq/torch/fused.h"
 #include "tessiq/torch/importer.h"
 
@@ -85,6 +87,9 @@ Result<CompiledGraph> build_recipe_fx(const pybind11::object& graph_module,
   TESSIQ_ASSIGN_OR_RETURN(compiled.recipe, ir::build_recipe(*graph, alignment));
   if (ordinal >= 0) {
     TESSIQ_ASSIGN_OR_RETURN(compiled.kernels, compile_kernels(*graph, ordinal));
+    TESSIQ_ASSIGN_OR_RETURN(std::vector<std::shared_ptr<Kernel>> custom,
+                            custom_kernels(*graph, ordinal));
+    compiled.kernels.insert(compiled.kernels.end(), custom.begin(), custom.end());
   }
 
   TESSIQ_LOG(kDebug, kLogModule) << "recipe with " << compiled.recipe.steps.size()

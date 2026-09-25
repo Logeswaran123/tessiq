@@ -1,15 +1,16 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""Operations registered from Python.
+"""Custom operations defined by an expression: `fast_gelu` and `swiglu` from csrc/custom_ops.
 
-The two operations below are defined in this file and nowhere else: no row in ops.toml, no C++, no
-rebuild. That is the claim these check. Each reference counts its calls, which is how a test tells
-the kernel running from the reference running, since both give the same answer.
+Neither has a kernel file. The compiler writes each one's expression into the loop of whatever it
+fuses the operation with, and runs the same code on its own for an eager call. `swiglu` is here for
+what `fast_gelu` cannot show: two operands, which broadcast. Whether a call ran on the GPU or fell
+back to the reference is read from `tessiq.library.fallbacks`, since both give the same answer.
 """
 
 from __future__ import annotations
 
-import re
+from pathlib import Path
 
 import pytest
 import torch
@@ -18,34 +19,26 @@ import tessiq
 from tessiq import _C
 from tessiq.recipe import build_recipe
 
-calls = {"fast_gelu": 0, "fma": 0}
+CUSTOM_OPS = Path(__file__).resolve().parents[2] / "csrc" / "custom_ops"
 
-
-@tessiq.library.elementwise(
-    "tessiq_test::fast_gelu",
-    "$0 * (scalar_t(1) / (scalar_t(1) + exp(scalar_t(-1.702) * $0)))",
-    dtypes=(torch.float32, torch.float64),
-)
-def fast_gelu(x: torch.Tensor) -> torch.Tensor:
-    calls["fast_gelu"] += 1
-    return x * torch.sigmoid(1.702 * x)
-
-
-@tessiq.library.elementwise("tessiq_test::fma", "($0 * $1 + $2)")
-def fma(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-    calls["fma"] += 1
-    return a * b + c
+fast_gelu = torch.ops.tessiq.fast_gelu
+swiglu = torch.ops.tessiq.swiglu
 
 
 def expected_gelu(x: torch.Tensor) -> torch.Tensor:
     return x * torch.sigmoid(1.702 * x)
 
 
+def expected_swiglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+    return torch.nn.functional.silu(gate) * up
+
+
 class Block(torch.nn.Module):
     """The custom operation between two built-in ones on each side, which fusion should swallow."""
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.relu(fast_gelu(x * 2.0) + 1.0)
+        out: torch.Tensor = torch.relu(fast_gelu(x * 2.0) + 1.0)
+        return out
 
 
 @pytest.fixture
@@ -59,58 +52,87 @@ def _fresh() -> None:
     torch._dynamo.reset()
 
 
-def test_both_are_registered_with_the_compiler() -> None:
-    assert {"tessiq_test.fast_gelu.default", "tessiq_test.fma.default"} <= set(
-        tessiq.library.registered()
-    )
+def test_every_directory_in_custom_ops_is_an_operation() -> None:
+    directories = {p.name for p in CUSTOM_OPS.iterdir() if p.is_dir()}
+    assert {"fast_gelu", "rms_norm", "swiglu"} <= directories
+    assert tessiq.library.registered() == sorted(f"tessiq::{name}" for name in directories)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+def test_every_operation_compiles() -> None:
+    assert tessiq.library.check() == tessiq.library.registered()
+
+
+def test_checking_an_unknown_operation_names_the_known_ones() -> None:
+    with pytest.raises(KeyError, match="tessiq::fast_gelu"):
+        tessiq.library.check("tessiq::missing")
 
 
 def test_on_the_host_it_is_the_reference() -> None:
     x = torch.randn(100)
-    before = calls["fast_gelu"]
     torch.testing.assert_close(fast_gelu(x), expected_gelu(x))
-    assert calls["fast_gelu"] == before + 1
 
 
 @pytest.mark.cuda
 @pytest.mark.usefixtures("needs_gpu")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_on_a_gpu_tensor_it_runs_the_kernel(dtype: torch.dtype) -> None:
+def test_on_a_gpu_tensor_it_runs_there(dtype: torch.dtype) -> None:
     x = torch.randn(1000, dtype=dtype)
-    before = calls["fast_gelu"]
+    before = tessiq.library.fallbacks("tessiq::fast_gelu")
     got = fast_gelu(x.to(tessiq.gpu))
     assert got.device == tessiq.gpu
-    assert calls["fast_gelu"] == before, "the reference ran instead of the kernel"
+    assert tessiq.library.fallbacks("tessiq::fast_gelu") == before, "the reference ran instead"
     torch.testing.assert_close(got.cpu(), expected_gelu(x))
 
 
 @pytest.mark.cuda
 @pytest.mark.usefixtures("needs_gpu")
 def test_on_a_gpu_tensor_its_operands_broadcast() -> None:
-    a, b, c = torch.randn(4, 1), torch.randn(1, 5), torch.randn(5)
-    before = calls["fma"]
-    got = fma(a.to(tessiq.gpu), b.to(tessiq.gpu), c.to(tessiq.gpu))
-    assert calls["fma"] == before
-    torch.testing.assert_close(got.cpu(), a * b + c)
+    gate, up = torch.randn(4, 1), torch.randn(1, 5)
+    before = tessiq.library.fallbacks("tessiq::swiglu")
+    got = swiglu(gate.to(tessiq.gpu), up.to(tessiq.gpu))
+    assert tessiq.library.fallbacks("tessiq::swiglu") == before
+    assert got.shape == (4, 5)
+    torch.testing.assert_close(got.cpu(), expected_swiglu(gate, up))
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+def test_on_an_empty_gpu_tensor_nothing_is_launched() -> None:
+    got = swiglu(torch.randn(0, 3).to(tessiq.gpu), torch.randn(3).to(tessiq.gpu))
+    assert got.shape == (0, 3)
 
 
 def test_on_the_cpu_reference_device_it_is_the_reference() -> None:
     x = torch.randn(100)
-    before = calls["fast_gelu"]
+    before = tessiq.library.fallbacks("tessiq::fast_gelu")
     got = fast_gelu(x.to(tessiq.cpu))
     assert got.device == tessiq.cpu
-    assert calls["fast_gelu"] == before + 1
+    assert tessiq.library.fallbacks("tessiq::fast_gelu") == before + 1
     torch.testing.assert_close(got.cpu(), expected_gelu(x))
 
 
 @pytest.mark.cuda
 @pytest.mark.usefixtures("needs_gpu")
-def test_a_type_the_expression_was_not_written_for_runs_the_reference() -> None:
-    a, b, c = (torch.randn(8, dtype=torch.float64) for _ in range(3))
-    before = calls["fma"]
-    got = fma(a.to(tessiq.gpu), b.to(tessiq.gpu), c.to(tessiq.gpu))
-    assert calls["fma"] == before + 1
-    torch.testing.assert_close(got.cpu(), a * b + c)
+def test_a_type_it_was_not_written_for_runs_the_reference() -> None:
+    x = torch.randn(64, dtype=torch.float16)
+    before = tessiq.library.fallbacks("tessiq::fast_gelu")
+    got = fast_gelu(x.to(tessiq.gpu))
+    assert tessiq.library.fallbacks("tessiq::fast_gelu") == before + 1
+    torch.testing.assert_close(got.cpu(), expected_gelu(x))
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+def test_operands_of_different_types_run_the_reference() -> None:
+    # The expression is compiled for one element type, so there is no kernel for a mix of two.
+    gate, up = torch.randn(8), torch.randn(8, dtype=torch.float64)
+    before = tessiq.library.fallbacks("tessiq::swiglu")
+    got = swiglu(gate.to(tessiq.gpu), up.to(tessiq.gpu))
+    assert tessiq.library.fallbacks("tessiq::swiglu") == before + 1
+    assert got.dtype == torch.float64
+    torch.testing.assert_close(got.cpu(), expected_swiglu(gate, up))
 
 
 @pytest.mark.cuda
@@ -157,52 +179,9 @@ def test_compiled_for_the_cpu_reference_device() -> None:
 @pytest.mark.cuda
 @pytest.mark.usefixtures("needs_gpu")
 def test_compiled_a_type_it_was_not_written_for_stays_on_the_host() -> None:
-    class Fma(torch.nn.Module):
-        def forward(self, a: torch.Tensor) -> torch.Tensor:
-            out: torch.Tensor = fma(a, a, a)
-            return out
-
-    a = torch.randn(32, dtype=torch.float64)
-    graph = tessiq.capture(Fma(), a)
+    x = torch.randn(32, dtype=torch.float16)
+    graph = tessiq.capture(Block(), x)
     recipe = build_recipe(graph, tessiq.gpu, use_cache=False)
-    custom = next(n.name for n in graph.graph.nodes if "fma" in str(n.target))
+    custom = next(n.name for n in graph.graph.nodes if "fast_gelu" in str(n.target))
     assert recipe.devices.get(custom, torch.device("cpu")).type == "cpu"
-    torch.testing.assert_close(tessiq.execute(recipe)(a)[0], a * a + a)
-
-
-@pytest.mark.parametrize(
-    ("qualname", "expression", "message"),
-    [
-        ("tessiq_test::bare", "$0 * 1.702", "write scalar_t(1.702) instead"),
-        ("tessiq_test::out_of_range", "$0 * $1", "its expression reads $1"),
-        ("no_namespace", "$0", "write it as namespace::name"),
-    ],
-)
-def test_a_registration_the_compiler_refuses_leaves_nothing_behind(
-    qualname: str, expression: str, message: str
-) -> None:
-    def reference(x: torch.Tensor) -> torch.Tensor:
-        return x
-
-    with pytest.raises(ValueError, match=re.escape(message)):
-        tessiq.library.elementwise(qualname, expression)(reference)
-    assert not hasattr(torch.ops.tessiq_test, qualname.partition("::")[2] or qualname)
-
-
-def test_a_reference_must_take_a_fixed_number_of_operands() -> None:
-    def variadic(*xs: torch.Tensor) -> torch.Tensor:
-        return xs[0]
-
-    with pytest.raises(ValueError, match="positional"):
-        tessiq.library.elementwise("tessiq_test::variadic", "$0")(variadic)
-
-
-@pytest.mark.cuda
-@pytest.mark.usefixtures("needs_gpu")
-def test_an_expression_that_does_not_compile_fails_the_registration() -> None:
-    def reference(x: torch.Tensor) -> torch.Tensor:
-        return x
-
-    with pytest.raises(RuntimeError, match="nvrtc"):
-        tessiq.library.elementwise("tessiq_test::broken", "($0 +* $0)")(reference)
-    assert not hasattr(torch.ops.tessiq_test, "broken")
+    torch.testing.assert_close(tessiq.execute(recipe)(x)[0], Block()(x))

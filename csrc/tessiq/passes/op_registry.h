@@ -27,19 +27,29 @@ struct OpDefinition {
   /// What the operation is called apart from its overload, such as `demo::fast_gelu`.
   std::string canonical;
 
-  /// Only elementwise so far: an expression the emitter drops into a fused loop.
+  /// Elementwise, an expression the emitter drops into a fused loop, or custom, a kernel of its own
+  /// that somebody wrote.
   OpCategory category = OpCategory::kElementwise;
 
-  /// Tensor operands it takes, between one and ten, because the expression names them `$0` to
-  /// `$9`.
+  /// Tensor operands it takes. At most ten for an elementwise operation, because the expression
+  /// names them `$0` to `$9`.
   int arity = 0;
+
+  /// Every parameter's name in the order the schema declares them, tensors and scalars alike.
+  ///
+  /// Only a custom kernel's call needs these. The importer keeps an argument passed by keyword
+  /// under its name rather than its position, and the kernel takes its arguments in position order,
+  /// so the name is how the argument finds its place again. Empty means every argument is
+  /// positional.
+  std::vector<std::string> parameters;
 
   /// The scalar computation in the same form ops.toml uses: `$0` for the first operand, a constant
   /// written `scalar_t(1.702)`, and maths functions spelled `exp` rather than `expf` so that one
-  /// expression serves every element type.
+  /// expression serves every element type. Empty for a custom kernel, which brings its own code.
   std::string expression;
 
-  /// The element types the expression was written for. Float32 and float64.
+  /// The element types it has a kernel for. Float32 and float64 for an expression; whatever the
+  /// author wrote the kernel for, for a custom one.
   std::vector<ir::DType> dtypes;
 };
 
@@ -62,6 +72,9 @@ struct OpDefinition {
 
 /// The registered row for `name`, or null. `find_op` asks this after the generated table.
 [[nodiscard]] const OpInfo* find_registered_op(std::string_view name);
+
+/// Everything registered under `name`, or null. Valid for the life of the program.
+[[nodiscard]] const OpDefinition* find_registered_definition(std::string_view name);
 
 /// Every registered spelling, sorted.
 [[nodiscard]] std::vector<std::string> registered_op_names();

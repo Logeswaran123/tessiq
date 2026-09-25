@@ -43,6 +43,10 @@ enum class OpCategory {
   /// code: cuDNN chooses among several algorithms by the shapes and the card, which is the reason
   /// to call it rather than write one.
   kConvolution,
+  /// A kernel somebody wrote and registered, rather than one the backend generates or a library
+  /// provides. Runs on its own, like a matmul. The compiler knows its operands and their types and
+  /// nothing about what it computes, so it neither fuses it nor derives its shape.
+  kCustom,
 };
 
 /// Everything known about one spelling of one operation.

@@ -24,15 +24,6 @@
 
 namespace tessiq::torch_backend {
 
-namespace {
-
-namespace py = pybind11;
-
-constexpr std::string_view kLogModule = "importer";
-
-/// What an argument list whose entries are computed reads as in the IR.
-constexpr std::string_view kComputedList = "dynamic";
-
 Result<ir::DType> to_ir_dtype(at::ScalarType dtype) {
   switch (dtype) {
   case at::kHalf:
@@ -55,6 +46,15 @@ Result<ir::DType> to_ir_dtype(at::ScalarType dtype) {
     return unsupported(std::string("tessiq has no IR dtype for ") + toString(dtype));
   }
 }
+
+namespace {
+
+namespace py = pybind11;
+
+constexpr std::string_view kLogModule = "importer";
+
+/// What an argument list whose entries are computed reads as in the IR.
+constexpr std::string_view kComputedList = "dynamic";
 
 /// The type of an FX node, taken from the fake tensor AOTAutograd left in `meta["val"]`.
 ///

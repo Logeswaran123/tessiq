@@ -100,6 +100,7 @@ add_library(tessiq::ir ALIAS tessiq_ir)
 
 add_library(tessiq_codegen STATIC
   tessiq/codegen/blas.cpp
+  tessiq/codegen/call.cpp
   tessiq/codegen/conv.cpp
   tessiq/codegen/cubin_cache.cpp
   tessiq/codegen/cudnn.cpp
@@ -161,4 +162,6 @@ add_library(tessiq::codegen ALIAS tessiq_codegen)
 
 if(TESSIQ_BUILD_PYTHON)
   add_subdirectory(bindings)
+  # After bindings, because it adds the operations it finds to the extension that defines.
+  add_subdirectory(custom_ops)
 endif()

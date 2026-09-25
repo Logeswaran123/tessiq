@@ -3,10 +3,12 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "tessiq/codegen/nvrtc.h"
@@ -21,6 +23,21 @@ namespace tessiq::codegen {
 /// block's worth of values, and a block launched with a different size would read past it. It is a
 /// power of two because the reduction halves the block on each step of its combine.
 constexpr unsigned int kBlockSize = 256;
+
+/// One scalar argument to a kernel, as the C type of the parameter it fills.
+///
+/// Typed rather than a number the launcher converts, because the kernel's own signature decides
+/// how many bytes a parameter is and what they mean, and nothing at the launch can read that
+/// signature. A float handed to a `double eps` is read as the wrong bytes without any error.
+using KernelArgument = std::variant<std::int64_t, std::int32_t, float, double>;
+
+/// How a launch is laid over the device: a grid of blocks, the threads in each block, and the
+/// dynamic shared memory each block gets, in bytes.
+struct LaunchShape {
+  std::array<std::uint32_t, 3> grid{1, 1, 1};
+  std::array<std::uint32_t, 3> block{1, 1, 1};
+  std::size_t shared_bytes = 0;
+};
 
 /// A kernel loaded onto a device and ready to launch.
 ///
@@ -38,18 +55,32 @@ class Program {
   Program(Program&&) = delete;
   Program& operator=(Program&&) = delete;
 
-  /// Launches the kernel with `blocks` blocks of `kBlockSize` threads on `stream`.
+  /// Launches the kernel over `shape` on `stream`.
   ///
-  /// `buffers` are device pointers in the order the kernel takes them: every input, then the
-  /// output. `scalars` follow them, which is how the kernel learns its extents. An elementwise
-  /// kernel takes one, its element count; a reduction takes three.
+  /// `buffers` are device pointers in the order the kernel takes them, and `arguments` follow them
+  /// in the order the kernel's remaining parameters are declared. Each argument's type has to be
+  /// the parameter's type exactly.
+  ///
+  /// Refused when a dimension of the grid or the block is zero, or the block has more than 1024
+  /// threads, which no device runs. Shared memory beyond the 48 KB every kernel gets is asked for
+  /// from the driver first, which is how a kernel opts into the rest of what the card has.
   ///
   /// The launch is asynchronous. Nothing here synchronises, so the caller orders the result
   /// against whatever reads it, which is what choosing the stream is for.
   [[nodiscard]] virtual Result<void> launch(const std::vector<void*>& buffers,
-                                            const std::vector<std::int64_t>& scalars,
-                                            std::int64_t blocks,
+                                            const std::vector<KernelArgument>& arguments,
+                                            const LaunchShape& shape,
                                             Stream stream) const = 0;
+
+  /// Launches the kernel with `blocks` blocks of `kBlockSize` threads on `stream`.
+  ///
+  /// The shape every kernel the backend generates takes. `buffers` are every input and then the
+  /// output, and `scalars` follow them as 64-bit integers, which is how the kernel learns its
+  /// extents. An elementwise kernel takes one, its element count; a reduction takes three.
+  [[nodiscard]] Result<void> launch(const std::vector<void*>& buffers,
+                                    const std::vector<std::int64_t>& scalars,
+                                    std::int64_t blocks,
+                                    Stream stream) const;
 
   /// Launches one thread per element, which is what every elementwise kernel wants.
   ///
@@ -72,6 +103,14 @@ class Program {
 /// module is loaded once per device and kept, because loading walks the whole image and a model
 /// launches the same kernel thousands of times.
 Result<const Program*> load_program(const Cubin& cubin, std::string_view function, int ordinal);
+
+/// Compiles `source` for CUDA device `ordinal` and loads `entry` from it.
+///
+/// The compile goes through the cubin cache, so the same source costs a compile once per machine
+/// and a load once per process. For a kernel written by hand rather than generated, which is what
+/// a custom operation brings.
+Result<const Program*>
+compile_program(std::string_view source, std::string_view entry, int ordinal);
 
 /// Whether this build can load and launch device code.
 [[nodiscard]] bool launcher_available();

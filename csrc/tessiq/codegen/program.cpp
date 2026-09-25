@@ -3,16 +3,23 @@
 
 #include "tessiq/codegen/program.h"
 
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "tessiq/codegen/cubin_cache.h"
+#include "tessiq/codegen/nvrtc.h"
+#include "tessiq/codegen/stream.h"
+#include "tessiq/support/result.h"
+
 #ifdef TESSIQ_WITH_CUDA
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <mutex>
-#include <string>
 #include <string_view>
 #include <unordered_map>
-#include <vector>
+#include <variant>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -62,6 +69,27 @@ Result<void> activate(int ordinal) {
   return ok();
 }
 
+/// Dynamic shared memory a block gets without the kernel asking for more.
+constexpr std::size_t kSharedWithoutAsking = std::size_t{48} * 1024;
+
+/// The most threads any CUDA device runs in one block.
+constexpr std::uint64_t kMostThreadsPerBlock = 1024;
+
+Result<void> check_shape(const LaunchShape& shape) {
+  std::uint64_t threads = 1;
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    if (shape.grid.at(axis) == 0 || shape.block.at(axis) == 0) {
+      return invalid_argument("a launch with a zero in its grid or its block runs nothing");
+    }
+    threads *= shape.block.at(axis);
+  }
+  if (threads > kMostThreadsPerBlock) {
+    return invalid_argument("a block of " + std::to_string(threads) +
+                            " threads is more than the 1024 a device runs");
+  }
+  return ok();
+}
+
 /// A loaded module is never unloaded. A program lives for the process, and tearing one down
 /// during static destruction races the driver's own teardown, which reports an error nobody can
 /// act on. The module handle is therefore not kept: holding state nothing reads invites somebody
@@ -75,38 +103,49 @@ class CudaProgram final : public Program {
   TESSIQ_DISALLOW_COPY_AND_MOVE(CudaProgram);
 
   [[nodiscard]] Result<void> launch(const std::vector<void*>& buffers,
-                                    const std::vector<std::int64_t>& scalars,
-                                    std::int64_t blocks,
+                                    const std::vector<KernelArgument>& arguments,
+                                    const LaunchShape& shape,
                                     Stream stream) const override {
-    if (blocks <= 0) {
-      return invalid_argument("cuLaunchKernel with " + std::to_string(blocks) + " blocks");
-    }
+    TESSIQ_RETURN_IF_ERROR(check_shape(shape));
     TESSIQ_RETURN_IF_ERROR(activate(ordinal_));
+    if (shape.shared_bytes > kSharedWithoutAsking) {
+      // A block gets 48 KB of dynamic shared memory without asking, and a kernel that wants more
+      // has to say so first. The driver refuses an amount the card does not have, which is the
+      // error a caller should see rather than a failed launch.
+      if (const CUresult status =
+              cuFuncSetAttribute(function_,
+                                 CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                                 static_cast<int>(shape.shared_bytes));
+          status != CUDA_SUCCESS) {
+        return driver_error(
+            status, "asking for " + std::to_string(shape.shared_bytes) + " bytes of shared memory");
+      }
+    }
 
-    // The kernel takes each buffer and then each scalar. cuLaunchKernel wants pointers to the
-    // arguments rather than the arguments, so this is an array of addresses of the entries above,
+    // The kernel takes each buffer and then each argument. cuLaunchKernel wants pointers to the
+    // arguments rather than the arguments, so this is an array of addresses of the entries below,
     // which is why both vectors are copied and have to outlive the call.
     std::vector<void*> values = buffers;
-    std::vector<std::int64_t> counts = scalars;
-    std::vector<void*> arguments;
-    arguments.reserve(values.size() + counts.size());
+    std::vector<KernelArgument> scalars = arguments;
+    std::vector<void*> addresses;
+    addresses.reserve(values.size() + scalars.size());
     for (void*& value : values) {
-      arguments.push_back(static_cast<void*>(&value));
+      addresses.push_back(static_cast<void*>(&value));
     }
-    for (std::int64_t& count : counts) {
-      arguments.push_back(static_cast<void*>(&count));
+    for (KernelArgument& scalar : scalars) {
+      addresses.push_back(std::visit([](auto& held) { return static_cast<void*>(&held); }, scalar));
     }
 
     if (const CUresult status = cuLaunchKernel(function_,
-                                               static_cast<unsigned int>(blocks),
-                                               1,
-                                               1,
-                                               kBlockSize,
-                                               1,
-                                               1,
-                                               0,
+                                               shape.grid[0],
+                                               shape.grid[1],
+                                               shape.grid[2],
+                                               shape.block[0],
+                                               shape.block[1],
+                                               shape.block[2],
+                                               static_cast<unsigned int>(shape.shared_bytes),
                                                static_cast<CUstream>(stream.handle),
-                                               arguments.data(),
+                                               addresses.data(),
                                                nullptr);
         status != CUDA_SUCCESS) {
       return driver_error(status, "cuLaunchKernel");
@@ -183,6 +222,14 @@ std::size_t loaded_program_count() {
   return programs().size();
 }
 
+Result<const Program*>
+compile_program(std::string_view source, std::string_view entry, int ordinal) {
+  TESSIQ_ASSIGN_OR_RETURN(const auto capability, device_capability(ordinal));
+  TESSIQ_ASSIGN_OR_RETURN(const Cubin cubin,
+                          compile_cached(source, entry, capability.first, capability.second));
+  return load_program(cubin, entry, ordinal);
+}
+
 Result<const Program*> load_program(const Cubin& cubin, std::string_view function, int ordinal) {
   const std::string key = std::string(function) + "@" + std::to_string(ordinal) + "#" +
                           content_digest(cubin.data) + ":" + cubin.architecture;
@@ -236,6 +283,29 @@ load_program(const Cubin& /*cubin*/, std::string_view function, int /*ordinal*/)
   return unsupported("cannot load '" + std::string(function) + "': this build has no CUDA toolkit");
 }
 
+Result<const Program*>
+compile_program(std::string_view /*source*/, std::string_view entry, int /*ordinal*/) {
+  return unsupported("cannot compile '" + std::string(entry) + "': this build has no CUDA toolkit");
+}
+
 } // namespace tessiq::codegen
 
 #endif // TESSIQ_WITH_CUDA
+
+namespace tessiq::codegen {
+
+Result<void> Program::launch(const std::vector<void*>& buffers,
+                             const std::vector<std::int64_t>& scalars,
+                             std::int64_t blocks,
+                             Stream stream) const {
+  if (blocks <= 0 || blocks > static_cast<std::int64_t>(UINT32_MAX)) {
+    return invalid_argument("a launch of " + std::to_string(blocks) + " blocks");
+  }
+  LaunchShape shape;
+  shape.grid[0] = static_cast<std::uint32_t>(blocks);
+  shape.block[0] = kBlockSize;
+  return launch(
+      buffers, std::vector<KernelArgument>(scalars.begin(), scalars.end()), shape, stream);
+}
+
+} // namespace tessiq::codegen

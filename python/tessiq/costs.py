@@ -64,8 +64,8 @@ def _tensor_like(node: torch.fx.Node, device: torch.device, *, packed: bool) -> 
     return torch.empty_strided(meta.shape, meta.stride(), dtype=meta.dtype, device=device)
 
 
-def _kind_of(kernel: object) -> str:
-    return type(kernel).__name__.removesuffix("Kernel").lower()
+def _kind_of(kernel: _C.Kernel) -> str:
+    return kernel.kind
 
 
 def kernel_costs(recipe: Recipe, *, repeats: int = DEFAULT_REPEATS) -> list[KernelCost]:

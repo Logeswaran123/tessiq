@@ -45,9 +45,10 @@ Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::
 struct CompiledGraph {
   ir::Recipe recipe;
 
-  /// Every kernel the graph can run on the device, of whatever kind. Empty on a build with no CUDA
-  /// toolkit, and short of what the graph could use wherever the compiler declined something,
-  /// which then runs one operation at a time.
+  /// Every kernel the graph can run on the device, of whatever kind, the calls to custom
+  /// operations with kernels of their own included. Empty on a build with no CUDA toolkit, and
+  /// short of what the graph could use wherever the compiler declined something, which then runs
+  /// one operation at a time.
   std::vector<std::shared_ptr<Kernel>> kernels;
 };
 

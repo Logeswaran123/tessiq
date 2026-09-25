@@ -72,6 +72,7 @@ TEST(OpTraitsTest, EverythingTheBackendSupportsHasAWayToRun) {
     case OpCategory::kMatmul:      // cuBLAS
     case OpCategory::kCopy:        // the device's clone registration, over a generated kernel
     case OpCategory::kConvolution: // cuDNN
+    case OpCategory::kCustom:      // a registered kernel, launched on its own
       break;
     }
   }

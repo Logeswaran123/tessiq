@@ -254,7 +254,7 @@ def _kernels(report: Report) -> str:
 
     parts = []
     for name, kernel in _kernels_by_kind(recipe):
-        kind = type(kernel).__name__.replace("Kernel", "").lower()
+        kind = kernel.kind
         covered = getattr(kernel, "members", None) or [name]
         extents = "at the launch" if getattr(kernel, "has_dynamic_extent", False) else "known here"
         parts.append(

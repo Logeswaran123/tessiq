@@ -72,6 +72,11 @@ bool has_a_kernel_for_these_types(const ir::Node& node) {
   if (info != nullptr && !accepts_the_types(*info, node)) {
     return false;
   }
+  if (info != nullptr && info->category == OpCategory::kCustom) {
+    // A registered kernel is launched over whatever it is handed, with its own code working out
+    // the extents from the tensors, so a shape that is not known until the call stops nothing.
+    return true;
+  }
   if (info != nullptr && info->category == OpCategory::kConvolution) {
     // Asked before anything else, because unlike the other categories a convolution can have no
     // kernel even when every extent is known. cuDNN is given a two dimensional convolution, which
