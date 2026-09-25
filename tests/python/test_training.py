@@ -98,6 +98,51 @@ def test_training_reaches_the_same_parameters_as_eager() -> None:
         torch.testing.assert_close(ours, theirs, rtol=1e-4, atol=1e-5)
 
 
+class WithItsLoss(nn.Module):
+    """The model and its loss in one module, so the compiled backward starts from a scalar."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.net = model()
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Written out rather than as mse_loss, whose backward is one operation that never reads the
+        # broadcast gradient through a kernel. A mean written out divides it, and that does.
+        loss: torch.Tensor = ((self.net(inputs) - targets) ** 2).mean()
+        return loss
+
+
+@pytest.mark.cuda
+def test_a_module_that_computes_its_own_loss_trains_the_same_as_eager() -> None:
+    # The backward graph then begins by broadcasting the scalar gradient to every element, a value
+    # whose strides are all zero, which layout-assign copies before a kernel reads it. That copy
+    # used to reach the kernel under a name that was neither a C identifier nor a value the
+    # executor holds, so the kernel did not compile.
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+    inputs, targets = dataset()
+
+    def train(compiled: bool) -> nn.Module:
+        net = WithItsLoss()
+        step = (
+            torch.compile(net, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)})
+            if compiled
+            else net
+        )
+        optimiser = torch.optim.SGD(net.parameters(), lr=0.05)
+        for _ in range(50):
+            optimiser.zero_grad()
+            step(inputs, targets).backward()
+            optimiser.step()
+        return net
+
+    eager = train(compiled=False)
+    torch._dynamo.reset()
+    ours = train(compiled=True)
+    for theirs, mine in zip(eager.parameters(), ours.parameters(), strict=True):
+        torch.testing.assert_close(mine, theirs, rtol=1e-4, atol=1e-5)
+
+
 @pytest.mark.cuda
 def test_the_backward_graph_is_compiled_too() -> None:
     # AOTAutograd produces two graphs and hands both to the same compiler. The backward one is the
