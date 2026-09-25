@@ -18,7 +18,8 @@ from tessiq import _C
 #: The name PrivateUse1 is renamed to.
 DEVICE_NAME = "tessiq"
 
-#: The CPU reference backend, always present. An unqualified ``device="tessiq"`` lands here.
+#: The CPU reference backend, always present. An unqualified ``device="tessiq"`` lands here
+#: unless :func:`set_device` names another.
 #:
 #: Assigned by :func:`_register`, because ``torch.device("tessiq", 0)`` only exists once the
 #: backend has been renamed.
@@ -33,18 +34,6 @@ _registered = False
 
 def _is_available() -> bool:
     return device_count() > 0
-
-
-def _current_device() -> int:
-    return 0
-
-
-def _set_device(_device: object) -> None:
-    """Accepted and ignored; ``current_device`` always reports 0."""
-
-
-def _synchronize(_device: object = None) -> None:
-    """Accepted and ignored. Does not wait for queued GPU work; copies to the host do."""
 
 
 def _is_in_bad_fork() -> bool:
@@ -82,9 +71,9 @@ def _build_torch_device_module() -> types.ModuleType:
     members = {
         "is_available": _is_available,
         "device_count": device_count,
-        "current_device": _current_device,
-        "set_device": _set_device,
-        "synchronize": _synchronize,
+        "current_device": current_device,
+        "set_device": set_device,
+        "synchronize": synchronize,
         "empty_cache": empty_cache,
         "_is_in_bad_fork": _is_in_bad_fork,
         "manual_seed": _manual_seed,
@@ -161,15 +150,47 @@ def gpu_count() -> int:
 
 
 def _resolve(device: torch.device | str | int | None) -> int:
-    """Turn anything that names a tessiq device into its index."""
+    """Turn anything that names a tessiq device into its index. No index means the current one."""
     if device is None:
-        return 0
+        return current_device()
     if isinstance(device, int):
         return device
     resolved = torch.device(device)
     if resolved.type != DEVICE_NAME:
         raise ValueError(f"expected a {DEVICE_NAME} device, got {resolved}")
-    return resolved.index or 0
+    return current_device() if resolved.index is None else resolved.index
+
+
+def current_device() -> int:
+    """The index of the device this thread uses when none is named.
+
+    0, the CPU reference, until :func:`set_device` or ``torch.accelerator.set_device_index``
+    changes it. Each thread has its own, as with CUDA.
+    """
+    return int(_C.current_device())
+
+
+def set_device(device: torch.device | str | int) -> None:
+    """Make `device` the one this thread uses when none is named.
+
+    ``torch.empty(4, device="tessiq")`` then allocates there, and :func:`synchronize` and the
+    memory functions default to it.
+
+    Raises:
+        ValueError: If `device` names no tessiq device.
+    """
+    _C.set_current_device(_resolve(device))
+
+
+def synchronize(device: torch.device | str | int | None = None) -> None:
+    """Wait until all work queued on `device` has finished. Defaults to the current device.
+
+    A launch returns as soon as it is queued, so this is what to call before stopping a clock.
+
+    Raises:
+        ValueError: If `device` names no tessiq device.
+    """
+    _C.synchronize(_resolve(device))
 
 
 def backend_name(device: torch.device | str | int | None = None) -> str:
@@ -184,11 +205,13 @@ def cuda_ordinal(device: torch.device | str | int | None = None) -> int:
     callers can use one code path for both.
     """
     if not isinstance(device, torch.device):
-        device = torch.device(device) if device is not None else cpu
-    index = device.index or 0
-    if device.type != DEVICE_NAME or index < 1:
+        device = torch.device(device) if device is not None else torch.device(DEVICE_NAME)
+    if device.type != DEVICE_NAME:
         return -1
-    return index - 1 if backend_name(device) == "cuda" else -1
+    index = _resolve(device)
+    if index < 1:
+        return -1
+    return index - 1 if backend_name(index) == "cuda" else -1
 
 
 def memory_stats(device: torch.device | str | int | None = None) -> MemoryStats:

@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
 
 import pytest
 import torch
 
 import tessiq
+from tessiq.device import cuda_ordinal
 
 DEVICE = tessiq.DEVICE_NAME
 
@@ -237,6 +239,96 @@ def test_live_blocks_balance_out() -> None:
     assert tessiq.memory_stats().live_blocks == before + 8
     del tensors
     assert tessiq.memory_stats().live_blocks == before
+
+
+# --- the current device and synchronising ---------------------------------------------------------
+
+
+@pytest.fixture
+def _restore_current_device() -> Iterator[None]:
+    previous = tessiq.current_device()
+    yield
+    tessiq.set_device(previous)
+
+
+def test_the_current_device_is_the_reference_by_default() -> None:
+    assert tessiq.current_device() == 0
+    assert torch.tessiq.current_device() == 0  # type: ignore[attr-defined]
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+def test_set_device_decides_where_an_unqualified_tensor_lands() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    torch.tessiq.set_device(tessiq.gpu)  # type: ignore[attr-defined]
+    assert tessiq.current_device() == tessiq.gpu.index
+    assert torch.empty(4, device=DEVICE).device == tessiq.gpu
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+def test_torch_accelerator_and_tessiq_agree_on_the_current_device() -> None:
+    # torch.accelerator goes through the device guard, and tessiq through the runtime. Both are
+    # the same per-thread index.
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    torch.accelerator.set_device_index(tessiq.gpu.index)
+    assert tessiq.current_device() == tessiq.gpu.index
+    tessiq.set_device(tessiq.cpu)
+    assert torch.accelerator.current_device_index() == 0
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+def test_the_current_device_belongs_to_one_thread() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    tessiq.set_device(tessiq.gpu)
+    seen: list[int] = []
+    other = threading.Thread(target=lambda: seen.append(tessiq.current_device()))
+    other.start()
+    other.join()
+    assert seen == [0]
+
+
+def test_a_device_that_does_not_exist_is_refused() -> None:
+    missing = tessiq.device_count()
+    with pytest.raises(ValueError, match=f"no tessiq device at index {missing}"):
+        tessiq.set_device(missing)
+    with pytest.raises(ValueError, match=f"no tessiq device at index {missing}"):
+        tessiq.synchronize(missing)
+    assert tessiq.current_device() == 0
+
+
+def test_synchronizing_the_reference_does_nothing() -> None:
+    tessiq.synchronize(tessiq.cpu)
+    torch.tessiq.synchronize()  # type: ignore[attr-defined]
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+@pytest.mark.parametrize("named", [True, False], ids=["named", "current"])
+def test_synchronize_waits_for_queued_kernels(named: bool) -> None:
+    # A launch returns once it is queued, and every launch goes on the legacy default stream.
+    # Packing a large transposed view a hundred times queues tens of milliseconds of work there,
+    # and synchronize has to wait for all of it, not only for the stream transfers use.
+    if tessiq.gpu_count() == 0 or not torch.cuda.is_available():
+        pytest.skip("needs a gpu")
+
+    x = torch.randn(4096, 4096, device=tessiq.gpu)
+    for _ in range(100):
+        x.t().contiguous()
+
+    if named:
+        torch.tessiq.synchronize(tessiq.gpu)  # type: ignore[attr-defined]
+    else:
+        tessiq.set_device(tessiq.gpu)
+        tessiq.synchronize()
+    assert torch.cuda.default_stream(cuda_ordinal(tessiq.gpu)).query()
 
 
 # --- views ---------------------------------------------------------------------------------------
