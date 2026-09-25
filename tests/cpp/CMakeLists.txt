@@ -36,7 +36,6 @@ add_executable(tessiq_tests
   test_replace_op.cpp
   test_rewrite.cpp
   test_reduction.cpp
-  sanitizer_defaults.cpp
   test_result.cpp
   test_shape_rules.cpp)
 
