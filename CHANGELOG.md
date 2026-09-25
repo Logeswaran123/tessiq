@@ -142,6 +142,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `ops.toml` can name the element types an operation takes. The matmuls and the convolution name
   float32, since cuBLAS and cuDNN are float32 only here.
 - `tessiq.current_device()`, `set_device()` and `synchronize()`, which `torch.tessiq` uses too.
+- torch's PrivateUse1 hooks. `pin_memory()` and a DataLoader with `pin_memory=True` work,
+  page-locking when there is a GPU. `torch.Generator(device="tessiq")` gives a host generator,
+  since random operations run on the host. A tessiq storage can be resized, and
+  `torch.accelerator.synchronize()` waits for the device.
 
 ### Changed
 

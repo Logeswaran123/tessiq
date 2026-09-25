@@ -14,8 +14,8 @@ namespace tessiq::torch_backend {
 /// The c10 allocator backing tessiq tensors.
 c10::Allocator* get_allocator();
 
-/// Installs the allocator with c10. Idempotent, and called during module import.
-void register_allocator();
+/// Registers the backend's hooks with torch. Idempotent, and called during module import.
+void register_backend();
 
 /// Gives a tessiq storage a new allocation of `bytes` on its own device, keeping the bytes the old
 /// and new sizes share.

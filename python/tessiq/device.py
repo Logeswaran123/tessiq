@@ -40,6 +40,14 @@ def _is_in_bad_fork() -> bool:
     return False
 
 
+def _lazy_init() -> None:
+    """Nothing to do, since the backend registers on import.
+
+    torch calls this before a device is first used. A backend without one is never counted as
+    initialised, and ``torch.accelerator.synchronize()`` does nothing for it.
+    """
+
+
 def _manual_seed(_seed: int) -> None:
     """Accept and ignore.
 
@@ -76,6 +84,7 @@ def _build_torch_device_module() -> types.ModuleType:
         "synchronize": synchronize,
         "empty_cache": empty_cache,
         "_is_in_bad_fork": _is_in_bad_fork,
+        "_lazy_init": _lazy_init,
         "manual_seed": _manual_seed,
         "manual_seed_all": _manual_seed,
         "get_rng_state": _get_rng_state,

@@ -11,19 +11,25 @@
 
 #include "tessiq/torch/backend.h"
 
+#include <ATen/CPUGeneratorImpl.h>
+#include <ATen/detail/PrivateUse1HooksInterface.h>
 #include <algorithm>
 #include <c10/core/Allocator.h>
 #include <c10/core/Device.h>
 #include <c10/core/DeviceType.h>
 #include <c10/core/Storage.h>
 #include <c10/core/impl/DeviceGuardImplInterface.h>
+#include <c10/core/impl/alloc_cpu.h>
 #include <cstddef>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <torch/library.h>
 
 #include "tessiq/runtime/allocator.h"
+#include "tessiq/runtime/cuda_device.h"
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/support/macros.h"
@@ -68,6 +74,14 @@ struct TessiqAllocator final : c10::Allocator {
     allocator_at(forget(ptr)).deallocate(ptr);
   }
 
+  /// The device index that allocated `ptr`, or nothing if tessiq did not. `ptr` has to be the
+  /// start of the allocation.
+  static std::optional<int> owner_of(void* ptr) {
+    const std::scoped_lock guard(owners_mutex());
+    const auto it = owners().find(ptr);
+    return it == owners().end() ? std::nullopt : std::optional<int>(it->second);
+  }
+
  private:
   /// Which allocator handed out each live pointer.
   ///
@@ -101,6 +115,85 @@ struct TessiqAllocator final : c10::Allocator {
 // REGISTER_ALLOCATOR takes a pointer to a mutable allocator, and c10 owns the lifetime from there.
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 TessiqAllocator g_allocator;
+
+/// Host memory for `pin_memory()` and a DataLoader with `pin_memory=True`.
+///
+/// Page-locked when there is a GPU, so a copy from it is a direct DMA and one made with
+/// `non_blocking=True` returns before it finishes. With no GPU every tessiq device is host memory,
+/// so ordinary memory is as good, and pinning works rather than failing.
+struct PinnedAllocator final : c10::Allocator {
+  c10::DataPtr allocate(std::size_t bytes) override {
+    if (bytes == 0) {
+      return {nullptr, nullptr, &release, c10::Device(c10::DeviceType::CPU)};
+    }
+    void* ptr = nullptr;
+    if (page_locked()) {
+      auto locked = allocate_page_locked(bytes);
+      TORCH_CHECK(locked.has_value(), locked.has_value() ? "" : locked.error().to_string());
+      ptr = *locked;
+    } else {
+      ptr = c10::alloc_cpu(bytes);
+    }
+    {
+      const std::scoped_lock guard(mutex());
+      pinned().insert(ptr);
+    }
+    return {ptr, ptr, &release, c10::Device(c10::DeviceType::CPU)};
+  }
+
+  [[nodiscard]] c10::DeleterFnPtr raw_deleter() const override { return &release; }
+
+  void copy_data(void* dest, const void* src, std::size_t count) const override {
+    default_copy_data(dest, src, count);
+  }
+
+  /// Whether `ptr` is the start of a block this allocator handed out.
+  static bool owns(const void* ptr) {
+    const std::scoped_lock guard(mutex());
+    return pinned().contains(ptr);
+  }
+
+  static void release(void* ptr) {
+    if (ptr == nullptr) {
+      return;
+    }
+    {
+      const std::scoped_lock guard(mutex());
+      pinned().erase(ptr);
+    }
+    if (!page_locked()) {
+      c10::free_cpu(ptr);
+      return;
+    }
+    // A copy made with non_blocking=True may still be reading or writing it.
+    for (int index = 1; index < device_count(); ++index) {
+      if (const auto device = device_at(index); device.has_value()) {
+        static_cast<void>((*device)->synchronize());
+      }
+    }
+    free_page_locked(ptr);
+  }
+
+ private:
+  /// Whether this process pins by page-locking, which it does when there is a GPU.
+  static bool page_locked() {
+    static const bool locked = device_count() > 1;
+    return locked;
+  }
+
+  static std::unordered_set<const void*>& pinned() {
+    static std::unordered_set<const void*> set;
+    return set;
+  }
+
+  static std::mutex& mutex() {
+    static std::mutex mutex;
+    return mutex;
+  }
+};
+
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables): c10 takes it as mutable.
+PinnedAllocator g_pinned_allocator;
 
 /// Device and stream bookkeeping for the dispatcher.
 ///
@@ -152,12 +245,91 @@ struct TessiqGuardImpl final : c10::impl::DeviceGuardImplInterface {
   c10::DeviceIndex deviceCount() const noexcept override {
     return static_cast<c10::DeviceIndex>(device_count());
   }
+
+  void synchronizeDevice(const c10::DeviceIndex device_index) const override {
+    const auto device = device_at(device_index);
+    TORCH_CHECK(device.has_value(), device.has_value() ? "" : device.error().to_string());
+    const auto done = (*device)->synchronize();
+    TORCH_CHECK(done.has_value(), done.has_value() ? "" : done.error().to_string());
+  }
 };
 
 // NOLINTEND(readability-identifier-naming, readability-named-parameter,
 //           modernize-use-nodiscard, clang-diagnostic-unused-const-variable)
 
 C10_REGISTER_GUARD_IMPL(PrivateUse1, TessiqGuardImpl);
+
+/// What torch asks of an out-of-tree backend besides running its operations: pinned host memory,
+/// generators, resizing a storage, and which device a pointer is on.
+///
+/// Generators are CPU generators. A random operation on a tessiq tensor runs on the host through
+/// the fallback, and a CPU generator is the one the host kernel accepts.
+// NOLINTBEGIN(readability-identifier-naming, readability-named-parameter, modernize-use-nodiscard)
+struct TessiqHooks final : at::PrivateUse1HooksInterface {
+  bool isBuilt() const override { return true; }
+
+  bool isAvailable() const override { return device_count() > 0; }
+
+  // A device counts as set up once it exists. tessiq does not track whether a GPU's context has
+  // been created yet.
+  bool hasPrimaryContext(c10::DeviceIndex device_index) const override {
+    return device_at(device_index).has_value();
+  }
+
+  void init() const override {}
+
+  c10::DeviceIndex deviceCount() const override {
+    return static_cast<c10::DeviceIndex>(device_count());
+  }
+
+  void setCurrentDevice(c10::DeviceIndex device) const override {
+    const auto result = set_current_device_index(device);
+    TORCH_CHECK(result.has_value(), result.has_value() ? "" : result.error().to_string());
+  }
+
+  c10::DeviceIndex getCurrentDevice() const override {
+    return static_cast<c10::DeviceIndex>(current_device_index());
+  }
+
+  c10::DeviceIndex exchangeDevice(c10::DeviceIndex device) const override {
+    const c10::DeviceIndex previous = getCurrentDevice();
+    setCurrentDevice(device);
+    return previous;
+  }
+
+  c10::DeviceIndex maybeExchangeDevice(c10::DeviceIndex device) const override {
+    return exchangeDevice(device);
+  }
+
+  // Page-locked memory from anywhere counts, since torch pins with CUDA's allocator rather than
+  // this one whenever CUDA is present, as for `torch.empty(n, pin_memory=True)`.
+  bool isPinnedPtr(const void* data) const override {
+    return PinnedAllocator::owns(data) || (device_count() > 1 && is_page_locked(data));
+  }
+
+  c10::Allocator* getPinnedMemoryAllocator() const override { return &g_pinned_allocator; }
+
+  const at::Generator& getDefaultGenerator(c10::DeviceIndex) const override {
+    return at::detail::getDefaultCPUGenerator();
+  }
+
+  at::Generator getNewGenerator(c10::DeviceIndex) const override {
+    return at::detail::createCPUGenerator();
+  }
+
+  at::Device getDeviceFromPtr(void* data) const override {
+    const std::optional<int> index = TessiqAllocator::owner_of(data);
+    TORCH_CHECK(index.has_value(), "tessiq did not allocate ", data);
+    return {kDeviceType, static_cast<c10::DeviceIndex>(*index)};
+  }
+
+  void resizePrivateUse1Bytes(const c10::Storage& storage, std::size_t newsize) const override {
+    TORCH_CHECK(storage.resizable(), "tessiq cannot resize a storage that is not resizable");
+    reallocate_storage(storage, newsize);
+  }
+};
+
+// NOLINTEND(readability-identifier-naming, readability-named-parameter, modernize-use-nodiscard)
 
 } // namespace
 
@@ -184,9 +356,15 @@ void reallocate_storage(const c10::Storage& storage, std::size_t bytes) {
   storage.set_nbytes(bytes);
 }
 
-void register_allocator() {
-  // Registration happens at static initialisation via REGISTER_ALLOCATOR above. Calling this
-  // from the Python module keeps this translation unit linked in.
+void register_backend() {
+  // The allocator and the guard register at static initialisation, above. The hooks register
+  // here, once.
+  static const bool hooks_registered = [] {
+    static TessiqHooks hooks;
+    at::RegisterPrivateUse1HooksInterface(&hooks);
+    return true;
+  }();
+  static_cast<void>(hooks_registered);
   TESSIQ_LOG(kInfo, kLogModule) << "tessiq backend ready with " << device_count() << " device(s)";
 }
 

@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import tessiq
+from tessiq import _C
 from tessiq.device import cuda_ordinal
 
 DEVICE = tessiq.DEVICE_NAME
@@ -311,8 +312,8 @@ def test_synchronizing_the_reference_does_nothing() -> None:
 
 @pytest.mark.cuda
 @pytest.mark.usefixtures("_restore_current_device")
-@pytest.mark.parametrize("named", [True, False], ids=["named", "current"])
-def test_synchronize_waits_for_queued_kernels(named: bool) -> None:
+@pytest.mark.parametrize("how", ["named", "current", "accelerator"])
+def test_synchronize_waits_for_queued_kernels(how: str) -> None:
     # A launch returns once it is queued, and every launch goes on the legacy default stream.
     # Packing a large transposed view a hundred times queues tens of milliseconds of work there,
     # and synchronize has to wait for all of it, not only for the stream transfers use.
@@ -323,18 +324,84 @@ def test_synchronize_waits_for_queued_kernels(named: bool) -> None:
     for _ in range(100):
         x.t().contiguous()
 
-    if named:
+    if how == "named":
         torch.tessiq.synchronize(tessiq.gpu)  # type: ignore[attr-defined]
-    else:
+    elif how == "current":
         tessiq.set_device(tessiq.gpu)
         tessiq.synchronize()
+    else:
+        torch.accelerator.synchronize(tessiq.gpu)
     assert torch.cuda.default_stream(cuda_ordinal(tessiq.gpu)).query()
+
+
+# --- what torch asks of the backend besides running ops ----------------------------------------
+
+
+def test_pin_memory_gives_a_pinned_host_copy() -> None:
+    host = torch.randn(1024)
+    pinned = host.pin_memory()
+    assert pinned.is_pinned()
+    assert not host.is_pinned()
+    assert pinned.device.type == "cpu"
+    assert torch.equal(pinned, host)
+
+
+def test_a_tensor_can_be_created_pinned() -> None:
+    # torch uses CUDA's pinned allocator here whenever CUDA is present, and tessiq's otherwise.
+    # Either way tessiq has to recognise the memory as pinned.
+    assert torch.empty(16, pin_memory=True).is_pinned()
+
+
+def test_a_data_loader_pins_its_batches() -> None:
+    dataset = torch.utils.data.TensorDataset(torch.randn(8, 3))
+    loader = torch.utils.data.DataLoader(dataset, batch_size=4, pin_memory=True)
+    assert all(batch.is_pinned() for (batch,) in loader)
+
+
+@pytest.mark.cuda
+def test_a_pinned_tensor_can_cross_without_blocking() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    host = torch.randn(1 << 20).pin_memory()
+    staged = host.to(tessiq.gpu, non_blocking=True)
+    tessiq.synchronize(tessiq.gpu)
+    assert torch.equal(staged.cpu(), host)
+
+
+def test_a_tessiq_generator_draws_what_a_host_generator_does(device: torch.device) -> None:
+    # Random operations run on the host through the fallback, so tessiq's generators are host
+    # generators.
+    generator = torch.Generator(device=DEVICE).manual_seed(3)
+    assert generator.device == torch.device("cpu")
+    drawn = torch.randn(6, device=device, generator=generator)
+    assert torch.equal(drawn.cpu(), torch.randn(6, generator=torch.Generator().manual_seed(3)))
+
+
+def test_resizing_a_storage_keeps_what_it_held(device: torch.device) -> None:
+    x = torch.arange(8.0, device=device)
+    storage = x.untyped_storage()
+
+    storage.resize_(64)
+    assert storage.nbytes() == 64
+    assert storage.device == x.device
+    assert torch.equal(x.cpu(), torch.arange(8.0))
+
+    storage.resize_(16)
+    assert torch.equal(x.as_strided((4,), (1,)).cpu(), torch.arange(4.0))
 
 
 def test_an_op_that_resizes_its_output_allocates_on_that_device(device: torch.device) -> None:
     # arange writes into an empty output that the fallback resizes. resize_ runs with no device
     # guard, so it has to allocate on the output's device rather than the current one.
     assert torch.equal(torch.arange(8.0, device=device).cpu(), torch.arange(8.0))
+
+
+def test_torch_can_tell_which_device_a_pointer_is_on(device: torch.device) -> None:
+    x = torch.empty(16, device=device)
+    assert _C._device_of_pointer(x.untyped_storage().data_ptr()) == device.index
+    with pytest.raises(RuntimeError, match="tessiq did not allocate"):
+        _C._device_of_pointer(torch.empty(16).data_ptr())
 
 
 # --- views ---------------------------------------------------------------------------------------

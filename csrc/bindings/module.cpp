@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 // pybind11's torch.Tensor <-> at::Tensor conversion.
+#include <ATen/detail/PrivateUse1HooksInterface.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -313,6 +314,16 @@ void bind_devices(py::module_& m) {
       py::arg("index"),
       "Blocks until all work queued on a device has finished.");
 
+  m.def(
+      "_device_of_pointer",
+      [](std::uintptr_t address) {
+        // NOLINTNEXTLINE(performance-no-int-to-ptr)
+        void* data = reinterpret_cast<void*>(address);
+        return at::detail::getPrivateUse1Hooks().getDeviceFromPtr(data).index();
+      },
+      py::arg("address"),
+      "Internal: the device torch's PrivateUse1 hooks give for a pointer tessiq allocated.");
+
   m.def("empty_cache",
         &tessiq::torch_backend::empty_cache,
         py::arg("index"),
@@ -359,7 +370,7 @@ PYBIND11_MODULE(_C, m) {
       "Returns the current native log level as a string.");
 
   m.def("_init_backend",
-        &tessiq::torch_backend::register_allocator,
+        &tessiq::torch_backend::register_backend,
         "Internal: makes the native backend known to PyTorch. Called during import.");
 
   bind_devices(m);
