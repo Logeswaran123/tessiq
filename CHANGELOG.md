@@ -166,3 +166,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   otherwise.
 - `torch.tessiq.synchronize()` returned without waiting, and `torch.tessiq.set_device()` was
   ignored. A GPU device's `synchronize()` also waited only for transfers and not for kernels.
+- `torch.arange` on a GPU, and any other operation whose output the fallback resizes, failed with
+  `cudaMemcpyAsync: invalid argument`. `resize_` allocated on the thread's current device rather
+  than the output's.

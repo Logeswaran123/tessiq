@@ -331,6 +331,12 @@ def test_synchronize_waits_for_queued_kernels(named: bool) -> None:
     assert torch.cuda.default_stream(cuda_ordinal(tessiq.gpu)).query()
 
 
+def test_an_op_that_resizes_its_output_allocates_on_that_device(device: torch.device) -> None:
+    # arange writes into an empty output that the fallback resizes. resize_ runs with no device
+    # guard, so it has to allocate on the output's device rather than the current one.
+    assert torch.equal(torch.arange(8.0, device=device).cpu(), torch.arange(8.0))
+
+
 # --- views ---------------------------------------------------------------------------------------
 
 #: Every way of taking a view that these registrations have to cover. Only as_strided, view and

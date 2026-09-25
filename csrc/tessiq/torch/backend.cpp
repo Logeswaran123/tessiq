@@ -9,9 +9,13 @@
 //
 // The file most exposed to changes in torch's internal interfaces.
 
+#include "tessiq/torch/backend.h"
+
+#include <algorithm>
 #include <c10/core/Allocator.h>
 #include <c10/core/Device.h>
 #include <c10/core/DeviceType.h>
+#include <c10/core/Storage.h>
 #include <c10/core/impl/DeviceGuardImplInterface.h>
 #include <cstddef>
 #include <mutex>
@@ -165,6 +169,20 @@ c10::Allocator* get_allocator() { return &g_allocator; }
 AllocatorStats allocator_stats(int index) { return allocator_at(index).stats(); }
 
 std::size_t empty_cache(int index) { return allocator_at(index).empty_cache(); }
+
+void reallocate_storage(const c10::Storage& storage, std::size_t bytes) {
+  // Allocated under the storage's own index. An op with no device guard, such as resize_, runs
+  // with whatever index the thread last set, which may be another device.
+  const DeviceIndexGuard guard(storage.device().index());
+  at::DataPtr data = g_allocator.allocate(bytes);
+  const std::size_t kept = std::min(bytes, storage.nbytes());
+  if (kept > 0 && storage.data() != nullptr) {
+    const auto copied = current_device().copy_device_to_device(data.get(), storage.data(), kept);
+    TORCH_CHECK(copied.has_value(), copied.has_value() ? "" : copied.error().to_string());
+  }
+  storage.set_data_ptr_noswap(std::move(data));
+  storage.set_nbytes(bytes);
+}
 
 void register_allocator() {
   // Registration happens at static initialisation via REGISTER_ALLOCATOR above. Calling this

@@ -214,19 +214,9 @@ void grow_storage(at::TensorImpl* impl, std::size_t new_bytes) {
   const c10::Storage& storage = impl->unsafe_storage();
   TORCH_CHECK(storage, "tessiq tensor has no storage to resize");
 
-  const std::size_t current_bytes = storage.nbytes();
-  if (new_bytes <= current_bytes) {
-    return;
+  if (new_bytes > storage.nbytes()) {
+    reallocate_storage(storage, new_bytes);
   }
-
-  at::DataPtr data = get_allocator()->allocate(new_bytes);
-  if (current_bytes > 0 && storage.data() != nullptr) {
-    const auto result = current_device().copy_device_to_device(
-        data.get(), storage.data(), std::min(new_bytes, current_bytes));
-    TORCH_CHECK(result.has_value(), result.has_value() ? "" : result.error().to_string());
-  }
-  storage.set_data_ptr_noswap(std::move(data));
-  storage.set_nbytes(new_bytes);
 }
 
 /// Native resize_, which the CPU fallback depends on. Through the fallback, resizing a tessiq
