@@ -44,6 +44,11 @@ CustomOp::CustomOp(std::string name, std::string signature, std::string_view fil
       directory_(std::filesystem::path(file).parent_path().filename().string()),
       kernel_file_(name_ + ".cu"), entry_(name_) {}
 
+CustomOp& CustomOp::precompiled() {
+  precompiled_ = true;
+  return *this;
+}
+
 CustomOp& CustomOp::expression(std::string expression) {
   expression_ = std::move(expression);
   return *this;

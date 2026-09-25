@@ -13,6 +13,10 @@
 //       .launch(launch)
 //       .dtypes({at::kFloat});
 //
+// Its kernel is one of three things: a `.cu` file compiled at run time and launched as `.launch()`
+// describes, an `.expression()` the compiler fuses, or host code in a `.nvcc.cu` file compiled
+// when tessiq is built, declared with `.precompiled()`.
+//
 // Once tessiq is imported it is `torch.ops.tessiq.rms_norm`, and it runs on the GPU both called
 // directly and inside torch.compile. csrc/custom_ops/README.md walks through adding one.
 
@@ -151,6 +155,13 @@ class CustomOp {
     return *this;
   }
 
+  /// Host code in `<name>.nvcc.cu`, next to the .cpp this is written in, which nvcc compiles when
+  /// tessiq is built. That file registers it with TESSIQ_PRECOMPILED, from
+  /// tessiq/codegen/precompiled.h, and launches what it needs on the stream it is handed.
+  ///
+  /// A build without nvcc has no host code for the operation, which then runs its reference.
+  CustomOp& precompiled();
+
   /// One element of the result, for an operation that has no kernel of its own.
   ///
   /// The compiler writes the expression into the loop of whatever it fuses the operation with, the
@@ -205,6 +216,8 @@ class CustomOp {
 
   [[nodiscard]] const std::string& expression_text() const { return expression_; }
 
+  [[nodiscard]] bool is_precompiled() const { return precompiled_; }
+
   [[nodiscard]] const std::vector<at::ScalarType>& element_types() const { return dtypes_; }
 
   [[nodiscard]] const std::string& kernel_file() const { return kernel_file_; }
@@ -224,6 +237,7 @@ class CustomOp {
   std::vector<Parameter> launch_parameters_;
   LaunchFunction launch_;
   std::string expression_;
+  bool precompiled_ = false;
   std::vector<at::ScalarType> dtypes_{at::kFloat};
   std::string kernel_file_;
   std::string entry_;

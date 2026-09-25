@@ -28,6 +28,15 @@ def registered() -> list[str]:
     return list(_C.custom_ops())
 
 
+def precompiled() -> list[str]:
+    """Every custom operation whose host code this build compiled, as `tessiq::<name>`, sorted.
+
+    An operation declared `.precompiled()` is missing from this list in a build without nvcc, and
+    runs its reference.
+    """
+    return list(_C.precompiled_ops())
+
+
 def overrides() -> dict[str, str]:
     """Each custom operation that replaces a torch one, and the torch operation it replaces.
 

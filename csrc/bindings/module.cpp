@@ -246,6 +246,9 @@ void bind_custom_ops(py::module_& m) {
       },
       "Every custom operation that replaces a torch one, as (operation, torch operation as a "
       "graph spells it, the dtypes it replaces it for).");
+  m.def("precompiled_ops",
+        &tessiq::torch_backend::precompiled_op_names,
+        "Every custom operation whose host code this build compiled, as tessiq::<name>, sorted.");
   m.def("custom_op_rewrites",
         &tessiq::torch_backend::custom_op_rewrites,
         "Every custom operation with a pattern, and the name of the pass that rewrites to it.");
