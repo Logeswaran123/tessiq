@@ -2,13 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Which operations are rewritten before the compiler sees them.
 
-A decomposition is the cheapest way to cover an operation: instead of a kernel, it becomes the
-operations the backend already runs. `core_aten_decompositions()` does most of it, and leaves a few
-whole that are worth breaking up here because every piece they break into is something tessiq has.
-
-The reverse is also possible and is a trap. Decomposing further than this reaches `prims`, a lower
-operation set with its own names, and a model that was seven operations short becomes one that is
-short a whole namespace.
+A decomposition covers an operation by rewriting it into ones the backend already runs.
+`core_aten_decompositions()` does most of it; this adds a few it leaves whole. Decomposing further
+would reach `prims`, a lower operation set tessiq does not cover.
 """
 
 from __future__ import annotations
@@ -25,15 +21,13 @@ from tessiq import _C
 #: Left whole by core ATen and broken up here.
 #:
 #: A softmax is a max, a subtract, an exp, a sum and a divide. A layer norm is a mean, a variance
-#: and an elementwise pass. Every one of those runs on the device, so the two operations that did
-#: not are worth more as their parts.
+#: and an elementwise pass. Each part runs on the device.
 _EXTRA = [
     torch.ops.aten._softmax,
     torch.ops.aten._softmax_backward_data,
     torch.ops.aten.native_layer_norm,
-    # A batch norm in eval mode is arithmetic rather than a library call: the running mean and
-    # variance are fixed, so it is a subtract, a reciprocal square root, a scale and a shift. Core
-    # ATen leaves it whole because training needs the statistics computed, and inference does not.
+    # In eval mode the running statistics are fixed, so a batch norm is a subtract, a reciprocal
+    # square root, a scale and a shift.
     torch.ops.aten._native_batch_norm_legit_no_training,
     # The first rewrite lands on this one rather than on leaves, so both spellings are asked for.
     torch.ops.aten._native_batch_norm_legit,
@@ -49,9 +43,8 @@ def _var_mean(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """The variance and the mean, written in operations the backend claims.
 
-    torch's own decomposition goes to `prims`, which is further down than anything else here. This
-    stays in ATen: a mean, a squared difference, a sum, and a divide by however many elements went
-    into it less the correction.
+    torch's own decomposition goes to `prims`. This stays in ATen: a mean, a squared difference, a
+    sum, and a divide by the element count less the correction.
     """
     axes = list(range(self.dim())) if dim is None else list(dim)
     count = 1
@@ -71,10 +64,9 @@ def _unless_replaced(
 ) -> Callable[..., Any]:
     """`decomposition`, except where a custom operation replaces the operation it decomposes.
 
-    There it returns NotImplemented, which tells the tracer to keep the operation whole, so the
-    compiler's `override-<name>` pass can find it and put the custom operation in its place. That is
-    exactly where every tensor has a type the custom operation declares, which is the same test the
-    pass makes.
+    There it returns NotImplemented, which keeps the operation whole so the `override-<name>` pass
+    can replace it. That is where every tensor has a type the custom operation declares, the same
+    test the pass makes.
     """
 
     def decompose(*args: Any, **kwargs: Any) -> Any:
@@ -96,8 +88,7 @@ def _operation(spelling: str) -> Any:
 def decompositions() -> dict[Any, Any]:
     """The table the backend hands AOTAutograd.
 
-    Built fresh each time. AOTAutograd stores its keyword arguments and rewrites them on first use,
-    so a shared dictionary would be modified under whoever holds it.
+    Built fresh each time, because AOTAutograd modifies the dictionary it is given.
 
     An operation a custom operation replaces is kept whole wherever the custom operation has the
     types for it, and decomposed as before everywhere else.

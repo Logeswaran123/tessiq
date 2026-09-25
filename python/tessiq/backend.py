@@ -74,26 +74,20 @@ def compile_graph(
                 len(recipe.kernels),
             )
         except TypeError as error:
-            # TypeError is what the compiler raises for a graph it cannot represent, as opposed to
-            # one that is malformed, which raises ValueError and is a bug worth seeing. Running an
-            # unrepresentable graph as it arrived is correct and is what a backend should do with
-            # something it cannot compile. Dynamo recompiles with symbolic shapes the second time
-            # a dimension changes, whether or not anyone asked for it, so a graph that reaches
-            # here is an ordinary one rather than an exotic one.
+            # TypeError means the compiler cannot represent the graph (a malformed one raises
+            # ValueError instead), so run it uncompiled. Dynamo recompiles with symbolic shapes the
+            # second time a dimension changes, so this path is not rare.
             _log.debug("running the graph without compiling it: %s", error)
             return traced.forward
 
-        # Boxed, so AOTAutograd hands the arguments over in a list it can drop its own reference
-        # to. Unboxed it holds every input alive for the length of the call, which in training is
-        # the whole activation set.
+        # Boxed, so AOTAutograd can drop its references to the inputs during the call. Unboxed it
+        # keeps them all alive, which in training is every saved activation.
         return make_boxed_func(execute(recipe))
 
-    # AOTAutograd is what makes the graph importable: it functionalises the mutations Dynamo leaves
-    # in and lowers to core ATen, which is the op set the passes and the support table assume. The
-    # decompositions are the reason a model using an op tessiq never heard of can still cluster,
-    # because they rewrite it into ones tessiq has.
+    # AOTAutograd functionalises the graph and lowers it to core ATen, the op set the passes
+    # assume. The decompositions rewrite ops tessiq does not know into ones it does.
     #
-    # Built per call because AotAutograd stores its kwargs and rewrites them on the first use.
+    # Built per call because aot_autograd stores its kwargs and rewrites them on first use.
     compiler = aot_autograd(fw_compiler=compile_forward, decompositions=decompositions())
     return compiler(graph_module, example_inputs)
 

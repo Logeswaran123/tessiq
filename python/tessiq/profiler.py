@@ -2,22 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Where a compiled call spends its time.
 
-A recipe says how many kernels a graph became and how many of its values have to cross between the
-host and the device. It does not say what either costs, and those are the two things that decide
-whether a backend is worth using. This measures them.
+A recipe says how many kernels a graph became and how many values cross between the host and the
+device, but not what either costs. This measures both, with two clocks: the host's says what
+issuing work cost, and the device's, read from marks on the stream, says what running it cost. The
+marks are read once at the end of a run, so measuring does not serialise the pipeline.
 
-Two clocks, because a launch returns long before the work does and one clock cannot tell you both
-things. The host's says what issuing cost. The device's own, read from a pair of marks on the
-stream, says what running cost.
-
-The obvious alternative is to wait for the device before stopping the host clock, which is what
-this did until phase 10. It measures the right thing and it changes the program while measuring
-it: waiting after every kernel turns a pipeline the device would overlap into a serial one, and on
-a transformer block that more than doubled the call. Marking the stream costs a command in a
-queue, and the reading happens once at the end when the work has finished anyway.
-
-Neither number is a share of the other. They overlap, which is the point: a device figure well
-below the call's own duration is a device that spent the difference waiting to be fed.
+The two numbers overlap rather than one being a share of the other. Device time well below the
+call's duration means the device spent the difference waiting for work.
 """
 
 from __future__ import annotations
@@ -37,8 +28,8 @@ import torch
 from tessiq import _C
 from tessiq.device import cuda_ordinal
 
-#: The profile collecting events on this thread, if any. Thread-local because a profile belongs to
-#: the call being measured, and two threads calling the same compiled function are two calls.
+#: The profile collecting events on this thread, if any. Thread-local, since two threads calling
+#: the same compiled function make two calls.
 _active = threading.local()
 
 
@@ -51,8 +42,7 @@ class Event:
         category: ``kernel``, ``interpreted`` or ``transfer``.
         device: Where it ran, as a string.
         microseconds: Host time, exclusive of anything measured inside it. For a kernel this is
-            what issuing it cost, not what running it cost, because a launch returns long before
-            the work does.
+            what issuing it cost, not what running it cost.
         device_microseconds: What the device spent on it, from the device's own clock, or None
             where there was nothing to ask. Only a kernel has one.
         nbytes: Bytes moved, for a transfer. Zero otherwise.
@@ -85,9 +75,8 @@ class Profile:
     def resolve(self) -> None:
         """Read the device clock for every region that marked it.
 
-        Left until the run is over on purpose. Reading waits for the mark, and waiting during the
-        run is what made the old profiler more than double the call it was describing. By the time
-        this runs the work has finished anyway, so the wait costs nothing.
+        Left until the run is over, because reading waits for the mark and waiting during the run
+        would serialise it.
         """
         with self._lock:
             pending, self._pending = self._pending, []
@@ -95,8 +84,7 @@ class Profile:
             try:
                 elapsed = timer.microseconds()
             except (TypeError, ValueError, RuntimeError):
-                # A region that queued no device work has nothing to report, which is not a
-                # failure. Leaving it as None says so, rather than a zero that reads as instant.
+                # No device work was queued. None, rather than a zero that reads as instant.
                 continue
             with self._lock:
                 self.events[index] = dataclasses.replace(
@@ -107,8 +95,7 @@ class Profile:
     def device_microseconds(self) -> float:
         """What the device spent, over the regions that could say.
 
-        Not comparable with `microseconds` as a share of one whole. That one is host time and this
-        one is device time, and the point of having both is that they overlap.
+        Not a share of `microseconds`, which is host time; the two overlap.
         """
         return sum(e.device_microseconds or 0.0 for e in self.events)
 
@@ -117,9 +104,8 @@ class Profile:
         """Everything measured, which is most but not all of the call.
 
         Events hold exclusive time, so this is a running total rather than an outermost duration.
-        It is kept rather than summed because every measured region reads it twice, to work out
-        how much of itself belongs to regions inside it, and summing made the profiler quadratic
-        in the number of steps.
+        Kept rather than summed because every measured region reads it twice, and summing each
+        time would be quadratic in the number of steps.
         """
         with self._lock:
             return self._total
@@ -133,7 +119,7 @@ class Profile:
         return dict(sorted(totals.items(), key=lambda item: -item[1][1]))
 
     def summary(self) -> str:
-        """A table of where the time went, which is the question this exists to answer."""
+        """A table of where the time went."""
         if not self.events:
             return "no events recorded"
 
@@ -164,8 +150,7 @@ class Profile:
     def chrome_trace(self) -> list[dict[str, Any]]:
         """The events in the Trace Event format, for chrome://tracing or Perfetto.
 
-        One row per category rather than per thread, because the interesting grouping is what kind
-        of work it was and everything here ran in sequence anyway.
+        One row per category rather than per thread, since everything here ran in sequence.
         """
         rows = {"kernel": 1, "transfer": 2, "interpreted": 3}
         trace: list[dict[str, Any]] = []
@@ -203,11 +188,9 @@ def profile(*, device_time: bool = False) -> Iterator[Profile]:
     ```
 
     Args:
-        device_time: Also mark the stream around every kernel, so that each one reports what the
-            device spent as well as what issuing it cost. Off by default because a mark costs
-            about what a small kernel costs, so asking changes the call it is asking about. Turn
-            it on when the question is which kernel is slow, and read the numbers knowing each is
-            biased upward by the gap between the mark and the launch.
+        device_time: Also mark the stream around every kernel, so each one reports device time.
+            Off by default because a mark costs about as much as a small kernel, which slows the
+            call and biases each reading upward. Use it to find which kernel is slow.
 
     Nesting is not supported: the inner block takes over and the outer one sees nothing from it.
     """
@@ -229,20 +212,11 @@ def current() -> Profile | None:
     return getattr(_active, "profile", None)
 
 
-#: Categories whose work the device may still be doing when the call returns.
-#:
-#: The one category whose work outlives its region. A launch returns as soon as the command is
-#: queued, so the host clock around it measures the asking. What the device spent comes from the
-#: device, through a pair of marks on the stream that are read once the run is over.
+#: Categories whose work the device may still be doing when the region ends, so their device time
+#: comes from marks on the stream.
 _TIMED_ON_THE_DEVICE = frozenset({"kernel"})
 
-#: Whether the profile collecting on this thread asked for the device clock.
-#:
-#: Off by default, because marking the stream is not free. On this card `cudaEventRecord` costs
-#: about eight microseconds, which is what a small kernel takes to launch and about what one takes
-#: to run, so marking every kernel changes the call by half again and biases each reading upward
-#: by the gap between the mark and the launch. Worth paying when the question is which kernel is
-#: slow. Not worth paying to find out where a call's host time goes, which is the usual question.
+#: Whether the profile collecting on this thread asked for the device clock. See `profile`.
 _device_detail = threading.local()
 
 
@@ -250,9 +224,8 @@ _device_detail = threading.local()
 def _timing_ordinal(device: str) -> int:
     """The CUDA device behind `device`, or -1 when there is no clock to read.
 
-    Cached on the spelling because this is asked once per measured region, and the answer is a
-    property of the device rather than of the call. Without the cache it was two calls across the
-    binding per region, which on a graph with ninety of them is most of what a profiler costs.
+    Cached on the spelling, since this is asked once per measured region and each miss is two
+    calls across the binding.
     """
     if not _C.device_timing_available():
         return -1
@@ -262,9 +235,8 @@ def _timing_ordinal(device: str) -> int:
 def _device_timer(category: str, device: torch.device) -> Any:
     """A timer for this region, or None when there is no device clock to read.
 
-    None covers three cases that are all ordinary: a category whose work is finished by the time
-    its region ends, a build with no CUDA toolkit, and the host reference device, which is a
-    tessiq device whose memory is host memory.
+    None for a category whose work finishes within its region, a build with no CUDA toolkit, and
+    the CPU reference device.
     """
     if category not in _TIMED_ON_THE_DEVICE or not getattr(_device_detail, "on", False):
         return None
@@ -281,9 +253,8 @@ def measure(
 ) -> Iterator[list[int]]:
     """Time a region and record it. The yielded list takes a byte count, for transfers.
 
-    What is recorded is exclusive time: anything measured inside this region is subtracted, so a
-    host operation does not also count the transfers that fed it. Without that the shares do not
-    add up, and an operation looks expensive when moving its operands was what cost.
+    Records exclusive time: anything measured inside this region is subtracted, so a host
+    operation does not also count the transfers that fed it.
     """
     nbytes: list[int] = []
     timer = _device_timer(category, device)

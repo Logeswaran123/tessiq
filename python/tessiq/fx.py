@@ -16,11 +16,7 @@ def import_graph(graph_module: torch.fx.GraphModule, name: str = "forward") -> s
     """Convert an FX graph into tessiq IR and return its textual form.
 
     The graph is expected to have been through AOTAutograd, which functionalises it and decomposes
-    it to core ATen. The passes assume no operation mutates its operands, which holds for a
-    functionalised graph and not for a raw one.
-
-    Every node is imported, including operations tessiq has no kernel for. Deciding what to keep is
-    partitioning, which runs later over the imported graph.
+    it to core ATen. Every node is imported, including operations tessiq has no kernel for.
 
     Args:
         graph_module: The module a ``torch.compile`` backend receives.
@@ -47,8 +43,9 @@ def partition(
         rewrites: Custom operations whose rewrites to run first. See `tessiq.library.rewrites`.
 
     Returns:
-        The partitioned graph in textual IR, and a map from FX node name to cluster number. A node
-        absent from the map has no kernel and runs on the host.
+        The partitioned graph in textual IR, and a map from each clustered node's first result
+        name to its cluster number. That name is the FX node's, or the getitem's when one reads
+        the result. A node absent from the map runs on the host.
 
     Raises:
         ValueError: If a node carries no shape information.
@@ -61,8 +58,7 @@ def partition(
 def run_passes(ir: str, pipeline: str) -> str:
     """Run a named pass pipeline over textual IR and return the result.
 
-    Text in and text out, for tests and for looking at what a pass did. The compiler itself keeps
-    the graph in memory rather than round-tripping through text.
+    Text in and text out, for tests and for looking at what a pass did.
 
     Args:
         ir: A graph in tessiq's textual IR.
@@ -86,9 +82,7 @@ def pass_names() -> list[str]:
 def default_pipeline() -> list[str]:
     """The passes the backend runs to decide what it takes, in order.
 
-    Read from the compiler rather than written down again here. A second copy of this list is a
-    second thing that can be wrong, and the way it goes wrong is a tool describing a compilation
-    that never happened.
+    Read from the compiler, so it matches what actually runs.
     """
     return str(_C.default_pipeline()).split(",")
 
@@ -99,8 +93,7 @@ def capture(
     """The graph the backend would receive for `model` called with `example`.
 
     Runs Dynamo and AOTAutograd without compiling anything, so the result is the functionalised,
-    decomposed graph the passes actually see. The decompositions are tessiq's own rather than core
-    ATen's, which is what makes a softmax arrive as the five operations it is made of.
+    decomposed graph the passes see, with tessiq's decompositions applied.
 
     Args:
         model: Any module. Put it in eval mode first unless training is what you mean to capture.

@@ -2,24 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Telling a graph with known shapes from one without.
 
-Dynamo captures a graph with concrete shapes the first time it sees a function, and recompiles
-with symbolic ones the second time a dimension changes. That is the default, not an opt-in: a
-model called with two sequence lengths gets a symbolic graph on the second call without anyone
-asking for one.
+Dynamo captures a graph with concrete shapes the first time it sees a function, and by default
+recompiles with symbolic ones the second time a dimension changes.
 
-Symbolic here means more than "unknown". A dimension arrives as its own graph input, shapes are
-expressions over those inputs such as ``(s33, s50, 32)``, strides are expressions too, and there
-are nodes doing arithmetic on them. The compiler takes such a graph: the IR records an extent it
-does not know as ``?``, and a fusion group whose buffers all have the same shape compiles to a
-kernel that is handed its element count at the launch.
+In a symbolic graph a dimension arrives as its own graph input, shapes and strides are expressions
+over those inputs such as ``(s33, s50, 32)``, and some nodes do arithmetic on them. The IR records
+an unknown extent as ``?``. Elementwise loops, reductions and matmuls take their extents at launch.
+A strided broadcast and a convolution need them when the kernel is built, so they run one
+operation at a time.
 
-What it does not take is anything that needs the number while the kernel is being written. A
-broadcast reads a position worked out by dividing by the extents, a reduction folds them into its
-launch, and a matmul into its call, so those keep running one operation at a time until each
-learns to read its extents from the tensors it is given.
-
-This predicate is what tells the two apart for logging and for tests. Nothing decides whether to
-compile by asking it: that answer comes from what the compiler managed to claim.
+This predicate is for logging and tests. Nothing decides whether to compile by asking it.
 """
 
 from __future__ import annotations

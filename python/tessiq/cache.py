@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reusing a recipe the compiler has already produced.
 
-Compiling is not free, and a graph that has been compiled once has the same recipe every time it
-comes back. The cache is keyed on what the recipe actually depends on, which is the structure of
-the graph, the type of every value in it, and the device it was lowered for.
+A graph compiled once has the same recipe every time it comes back. The cache is keyed on what
+the recipe depends on: the structure of the graph, the type of every value in it, the device it
+was lowered for and the rewrites asked for.
 """
 
 from __future__ import annotations
@@ -23,10 +23,8 @@ if TYPE_CHECKING:
 
 #: Recipes kept before the least recently used one is dropped.
 #:
-#: A recipe holds the graph it was built from, so an unbounded cache keeps every graph a process
-#: has ever compiled. Sixty-four is enough that a model's forward and backward graphs at a handful
-#: of shapes all stay resident, and small enough that a long-running server does not grow without
-#: limit.
+#: A recipe holds the graph it was built from, so the cache is bounded. Sixty-four holds a model's
+#: forward and backward graphs at a handful of shapes.
 MAX_ENTRIES = 64
 
 
@@ -109,17 +107,12 @@ def signature(
 ) -> str:
     """A key identifying every graph that would compile to the same recipe.
 
-    Walks FX rather than the IR, which is the point: computing it has to be cheaper than the
-    compilation it is trying to avoid, and importing the graph is most of that cost.
-
-    Shapes and dtypes are in the key because the memory plan is built from them, so the same
-    structure at a different shape is a different recipe. The device is in the key because it
-    decides where the clustered steps run. The rewrites are in the key because they change which
-    operations are there to compile.
+    Walks FX rather than importing to IR, since import is most of the cost being avoided. Shapes and
+    dtypes are in the key because the memory plan is built from them, the device because it decides
+    where clusters run, and the rewrites because they change which operations are compiled.
 
     Returns:
-        A hex digest. Content-addressed, so two graphs share a key exactly when they would compile
-        to the same recipe.
+        A hex digest of all of the above.
     """
     parts = [f"device={device}", f"rewrites={','.join(rewrites)}"]
     for node in graph_module.graph.nodes:
@@ -153,7 +146,6 @@ def cache_stats() -> CacheStats:
 def clear_cache() -> None:
     """Drop every cached recipe and reset the counters.
 
-    Mostly for tests, which need a known starting point. Clearing does not invalidate a recipe
-    something else is already holding.
+    Mostly for tests. A recipe something else already holds stays valid.
     """
     _CACHE.clear()

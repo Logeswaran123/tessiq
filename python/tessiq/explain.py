@@ -2,13 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """One model's whole compilation, in one place.
 
-Everything here is already available one piece at a time. `import_graph` prints the IR,
-`run_passes` runs a pass, `build_recipe` says where each step runs, and `emit_cuda` prints a
-kernel. Answering "why is this operation on the host" means calling four of them and lining the
-answers up by hand, which is enough work that the question usually goes unasked.
-
-This does the lining up. It reports what the compiler saw, what each pass changed, what became a
-kernel, and where every step ends up, in the order the compiler decided them.
+`import_graph`, `run_passes`, `build_recipe` and `emit_cuda` each answer part of "why is this
+operation on the host". This lines their answers up: what the compiler saw, what each pass changed,
+what became a kernel, and where every step ends up.
 """
 
 from __future__ import annotations
@@ -29,10 +25,9 @@ from tessiq.shapes import is_static
 #: Sections a report can hold, in the order they are printed.
 SECTIONS = ("summary", "graph", "passes", "kernels", "schedule")
 
-#: Where a step runs when the recipe does not say. Not `tessiq.cpu`, which is the reference
-#: device and whose type is `tessiq`: defaulting to that reported every unmapped node as running
-#: on the device. A node is missing from the map when its first result was renamed after the
-#: getitem that reads it, which is what happens to anything returning more than one tensor.
+#: Where a step runs when the recipe does not say. Not `tessiq.cpu`, whose type is `tessiq`. A
+#: node is missing from the map when its first result was named after the getitem that reads it,
+#: which happens to anything returning more than one tensor.
 _HOST = torch.device("cpu")
 
 
@@ -40,8 +35,7 @@ _HOST = torch.device("cpu")
 class Report:
     """Everything the sections read, worked out once.
 
-    Passed around as one value because every section wants a different two or three of these, and
-    six positional arguments that each section half ignores is worse than one that names them.
+    One value, because each section reads a different few of these.
     """
 
     graph_module: torch.fx.GraphModule
@@ -72,9 +66,8 @@ class PassChange:
 def pass_by_pass(ir: str, pipeline: list[str] | None = None) -> list[PassChange]:
     """Run each pass on its own and record what it changed.
 
-    The pipeline runs as one thing in the compiler. Running it a pass at a time gives the same
-    result, because each pass takes a graph and returns a graph, and it is the only way to say
-    which of them made a given change.
+    Running the pipeline a pass at a time gives the same result as running it whole, and shows
+    which pass made each change.
 
     Args:
         ir: The graph in textual IR, as the importer produced it.
@@ -95,9 +88,8 @@ def pass_by_pass(ir: str, pipeline: list[str] | None = None) -> list[PassChange]
 def _diff(before: str, after: str) -> str:
     """The lines a pass changed, each old line followed by the new one that replaced it.
 
-    Paired rather than grouped the way a unified diff groups them. Every pass here annotates, so a
-    grouped diff prints the whole graph as removals and then the whole graph again as additions,
-    and the one attribute that changed is invisible between them.
+    Paired rather than grouped as a unified diff would. Every pass here annotates, so a grouped
+    diff prints the whole graph twice and hides the attribute that changed.
     """
     old = before.splitlines()
     new = after.splitlines()
@@ -225,8 +217,7 @@ def _graph(report: Report) -> str:
     return report.imported
 
 
-#: Changed lines to show per pass before summarising the rest. A pass that annotates every node
-#: rewrites every line, and printing the whole graph once per pass buries what changed.
+#: Changed lines to show per pass before summarising the rest.
 _DIFF_LIMIT = 4
 
 
@@ -255,8 +246,7 @@ def _kernels_by_kind(recipe: Recipe) -> list[tuple[str, Any]]:
 def _covered_by_kernels(recipe: Recipe) -> dict[str, str]:
     """The node each kernel computes, mapped to the kernel that computes it.
 
-    A fusion group covers every operation in it, not just the one whose value escapes, which is
-    the whole point of fusing: the others never reach memory.
+    A fusion group covers every operation in it, not only the one whose value escapes.
     """
     return {
         member: name
@@ -291,10 +281,8 @@ def _kernels(report: Report) -> str:
 def _schedule(report: Report) -> str:
     """Every step in the order it runs, and what happens to it.
 
-    Three things can happen and they are easy to confuse. A step can be covered by a kernel. It
-    can be placed on the device with no kernel, which means it is interpreted there and costs
-    almost nothing if it only moves data. Or it can be on the host, which for anything the device
-    was holding costs a transfer each way.
+    A step is covered by a kernel, placed on the device with no kernel (cheap if it only moves
+    data, a host round trip otherwise), or on the host.
     """
     recipe = report.recipe
     covers = _covered_by_kernels(recipe)
