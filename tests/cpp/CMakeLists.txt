@@ -30,6 +30,7 @@ add_executable(tessiq_tests
   test_op_traits.cpp
   test_pack.cpp
   test_passes.cpp
+  test_precompiled.cpp
   test_program.cpp
   test_recipe.cpp
   test_replace_op.cpp
@@ -49,6 +50,14 @@ target_link_libraries(tessiq_tests PRIVATE
 
 target_compile_definitions(tessiq_tests PRIVATE
   TESSIQ_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
+
+# Host code of the tests' own, compiled the way csrc/custom_ops/*/*.nvcc.cu is.
+if(TESSIQ_NVCC)
+  target_sources(tessiq_tests PRIVATE test_scale.nvcc.cu)
+  target_include_directories(tessiq_tests PRIVATE "${PROJECT_SOURCE_DIR}/csrc")
+  target_link_libraries(tessiq_tests PRIVATE CUDA::cudart)
+  target_compile_definitions(tessiq_tests PRIVATE TESSIQ_TEST_PRECOMPILED)
+endif()
 
 tessiq_set_warnings(tessiq_tests)
 tessiq_enable_sanitizers(tessiq_tests)

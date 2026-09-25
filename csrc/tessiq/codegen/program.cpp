@@ -208,6 +208,24 @@ std::size_t loaded_program_count() {
   return programs().size();
 }
 
+Result<bool> is_capturing(Stream stream) {
+  cudaStreamCaptureStatus status = cudaStreamCaptureStatusNone;
+  if (const cudaError_t error =
+          cudaStreamIsCapturing(static_cast<cudaStream_t>(stream.handle), &status);
+      error != cudaSuccess) {
+    return external_error(std::string("cudaStreamIsCapturing: ") + cudaGetErrorName(error));
+  }
+  return status != cudaStreamCaptureStatusNone;
+}
+
+Result<void> synchronize(Stream stream) {
+  if (const cudaError_t error = cudaStreamSynchronize(static_cast<cudaStream_t>(stream.handle));
+      error != cudaSuccess) {
+    return external_error(std::string("cudaStreamSynchronize: ") + cudaGetErrorName(error));
+  }
+  return ok();
+}
+
 Result<const Program*>
 compile_program(std::string_view source, std::string_view entry, int ordinal) {
   TESSIQ_ASSIGN_OR_RETURN(const auto capability, device_capability(ordinal));
@@ -259,6 +277,10 @@ namespace tessiq::codegen {
 bool launcher_available() { return false; }
 
 std::size_t loaded_program_count() { return 0; }
+
+Result<bool> is_capturing(Stream /*stream*/) { return false; }
+
+Result<void> synchronize(Stream /*stream*/) { return ok(); }
 
 Result<std::pair<int, int>> device_capability(int /*ordinal*/) {
   return unsupported("this build has no CUDA toolkit");
