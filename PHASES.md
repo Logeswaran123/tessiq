@@ -312,7 +312,7 @@ kernel people most often write is a hand-written custom operation rather than a 
 cluster. Building the seam first makes a Triton-sourced custom operation a new source language
 rather than a sixth path wired in by hand.
 
-### Phase 13: Precompiled kernels (planned)
+### Phase 13: Precompiled kernels (in progress)
 A custom operation whose kernel is compiled ahead of time with nvcc, so that it can use CUTLASS,
 cuBLAS or anything else that needs host code, which phase 12's run-time compiled source cannot do.
 **Why phase 12 is not enough.** NVRTC compiles device code only. A cuBLAS call is host code with a
@@ -351,6 +351,11 @@ it lives in Python. A kernel built with the extension needs no loader, no versio
 DLPack: it is handed tensors the way phase 12's launch functions are. A library loaded at run time
 is still worth having for a kernel that cannot be built alongside tessiq, and would be a phase of
 its own.
+
+**Progress.** The interface is in: `.precompiled()`, host code in `<name>.nvcc.cu` registered with
+`TESSIQ_PRECOMPILED`, workspace from the allocator, the stream it is handed, and the architecture
+check. `layer_norm` shows it with two launches and workspace between them. The CUTLASS GEMM and the
+cuBLAS operation are next.
 
 **Milestone:**
 1. A CUTLASS GEMM whose epilogue, the stage that runs on each output element before it is written,

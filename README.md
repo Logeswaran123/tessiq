@@ -58,8 +58,9 @@ read a whole axis to write one element and cannot share that loop. Matmuls call 
 convolutions call cuDNN, both float32 only for now. Anything else, an operation of a type its kernel
 does not take included, reaches PyTorch's CPU implementation through the fallback, which costs two
 transfers. [`docs/op_coverage.md`](docs/op_coverage.md) is generated from [`ops.toml`](ops.toml)
-and lists all of them. A custom operation brings a kernel of its own, and can stand in for a torch
-operation or for a computation a model writes out; see [`csrc/custom_ops/`](csrc/custom_ops/).
+and lists all of them. A custom operation brings a kernel of its own, compiled at run time or, as
+host code, when tessiq is built. It can stand in for a torch operation or for a computation a model
+writes out; see [`csrc/custom_ops/`](csrc/custom_ops/).
 
 **A shape that changes costs one compile, not one per shape.** Dynamo captures concrete shapes the
 first time it sees a function and recompiles with symbolic ones the second time a dimension
@@ -203,9 +204,10 @@ ctest --test-dir build
 ```
 
 Python 3.10+, CMake 3.26+, and a compiler with C++20 for the torch-facing code (the core is
-C++17). The extension links libtorch, so PyTorch is needed to import
-tessiq. The C++ core builds and tests without it, which is what keeps the compiler testable on a
-machine with neither torch nor a GPU:
+C++17). With the CUDA toolkit's nvcc, the precompiled custom operations are built for the GPUs in
+the machine; set `CMAKE_CUDA_ARCHITECTURES` to build for others. The extension links libtorch, so
+PyTorch is needed to import tessiq. The C++ core builds and tests without it, which is what keeps
+the compiler testable on a machine with neither torch nor a GPU:
 
 ```bash
 cmake -S . -B build -G Ninja -DTESSIQ_BUILD_PYTHON=OFF

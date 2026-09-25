@@ -14,6 +14,9 @@ custom_ops/
     softmax/
         softmax.cu              the kernel
         softmax.cpp             the same, and it replaces torch's aten::_softmax
+    layer_norm/
+        layer_norm.nvcc.cu      host code and two kernels, which nvcc compiles when tessiq is built
+        layer_norm.cpp          the operation, declared .precompiled()
     fast_gelu/
         fast_gelu.cpp           an elementwise expression the compiler fuses, so no kernel file
         fast_gelu.pattern.tsr   the sigmoid GELU written out
@@ -110,6 +113,91 @@ TESSIQ_CUSTOM_OP(fast_gelu, "(Tensor x) -> Tensor")
 never as a bare `1.702`, which C++ reads as a double and which turns a float32 kernel into double
 arithmetic. The registration refuses the bare form. Every argument of such an operation is a
 tensor, and they broadcast against each other like the operands of torch's own `add`.
+
+## Adding host code
+
+A `.cu` kernel is compiled at run time with NVRTC, which compiles device code only. An operation that
+needs host code puts it in `<name>.nvcc.cu` instead, which nvcc compiles when tessiq is built. Host
+code can launch several kernels, keep workspace between them, call a library, or use a header NVRTC
+does not have. `layer_norm` launches one kernel for each row's statistics and another to apply them,
+with the statistics in workspace between the two.
+
+**1. Declare it** in `layer_norm.cpp`, with `.precompiled()` where a kernel would have `.launch()`:
+
+```cpp
+TESSIQ_CUSTOM_OP(layer_norm, "(Tensor x, Tensor weight, Tensor bias, float eps) -> Tensor")
+    .reference(layer_norm)
+    .precompiled()
+    .dtypes({at::kFloat});
+```
+
+**2. Write the host code** in `layer_norm.nvcc.cu`. It includes `tessiq/codegen/precompiled.h`, which
+has no torch in it, and registers one function with `TESSIQ_PRECOMPILED`:
+
+```cuda
+#include "tessiq/codegen/precompiled.h"
+
+namespace {
+
+void run(tessiq::codegen::Call& call) {
+  const tessiq::codegen::DeviceTensor& x = call.input(0);
+  const tessiq::codegen::DeviceTensor& weight = call.input(1);
+  ...
+  if (weight.numel() != columns || bias.numel() != columns) {
+    call.decline("the kernel reads one weight and one bias per column");
+    return;
+  }
+  auto* statistics = static_cast<float2*>(call.workspace(rows * sizeof(float2)));
+  if (statistics == nullptr) {
+    return;
+  }
+  const auto stream = static_cast<cudaStream_t>(call.stream());
+  row_statistics<<<rows, kThreads, 0, stream>>>(x.as<const float>(), statistics, columns, eps);
+  apply<<<blocks, kThreads, 0, stream>>>(...);
+}
+
+} // namespace
+
+TESSIQ_PRECOMPILED(layer_norm, run)
+```
+
+The `Call` holds:
+
+- **Tensors:** `input(i)`, counting only the tensor arguments, and the result, `output()`. Each is
+  packed and on the call's device, as a data pointer, its sizes and an element type.
+- **Scalars:** `real(i)`, `integer(i)` and `flag(i)` for float, int and bool, counting only the
+  scalar arguments.
+- **The stream:** `stream()`, a `cudaStream_t`. Every launch and library call goes on it; work
+  queued anywhere else can run before its inputs exist.
+- **Workspace:** `workspace(bytes)`, from tessiq's allocator on the call's device, so the memory
+  statistics count it. It stays valid until the work the call queued has finished. It is null,
+  having failed the call, when the device has none to give.
+- **Declining:** `decline(reason)` hands the call to the reference, as `TORCH_CHECK` does in a
+  launch function.
+
+The call's device is current when the function runs, and a launch that fails fails the call with
+CUDA's message.
+
+**3. Rebuild.** nvcc compiles the file for `CMAKE_CUDA_ARCHITECTURES`, which is the GPUs in the
+machine unless the build is told otherwise:
+
+```
+pip install -e . --no-build-isolation
+pip install -e . --no-build-isolation -Ccmake.define.CMAKE_CUDA_ARCHITECTURES="89;120"
+```
+
+On a card it was not built for, the operation is refused before it runs, with both architectures
+named. That happens called directly, from `tessiq.library.check()`, and in `torch.compile`:
+
+```
+RuntimeError: external: tessiq::layer_norm was built for sm_89, and CUDA device 0 is sm_120; rebuild tessiq with CMAKE_CUDA_ARCHITECTURES including 120
+```
+
+The check asks the CUDA runtime whether it can load the file on the card. An architecture listed
+without `-real` also carries PTX, which the driver can compile for a newer card, and that passes.
+
+`tessiq.library.precompiled()` lists the operations whose host code the build compiled. A build
+without nvcc leaves the `.nvcc.cu` files out, and their operations run the reference everywhere.
 
 ## Replacing a torch operation
 
@@ -221,9 +309,9 @@ rewrites and overrides sit among the compiler's other passes.
 - **The result's shape and type** are the reference's. They are found by running the reference on
   tensors that have a shape and no data, so there is nothing else to write for them.
 - **Declining a call.** A launch function can decline arguments its kernel cannot handle with
-  `TORCH_CHECK`, and the call runs the reference instead, counted in `fallbacks()`. `rms_norm` does
-  this for a weight that is not one value per column, which the reference would broadcast and the
-  kernel would read past the end of.
+  `TORCH_CHECK`, and host code with `call.decline()`. The call runs the reference instead, counted
+  in `fallbacks()`. `rms_norm` and `layer_norm` do this for a weight that is not one value per
+  column, which the reference would broadcast and the kernel would read past the end of.
 - **No defaults, no backward.** A schema argument cannot have a default yet, because a compiled
   graph leaves out an argument equal to its default. The operation has no backward, so it is for
   inference until one is registered.
@@ -232,7 +320,7 @@ rewrites and overrides sit among the compiler's other passes.
 
 | called on | runs |
 |---|---|
-| a tessiq GPU tensor, in a declared type | the kernel or expression |
+| a tessiq GPU tensor, in a declared type | the kernel, expression or host code |
 | a tessiq GPU tensor, in another type | the reference, on the host |
 | the CPU reference device, `tessiq.cpu` | the reference |
 | an ordinary CPU tensor | the reference |
@@ -266,6 +354,12 @@ A pattern is checked against the schema:
 ImportError: invalid_argument: custom operation tessiq::rms_norm in csrc/custom_ops/rms_norm: its pattern csrc/custom_ops/rms_norm/rms_norm.pattern.tsr has the inputs (x, w), and its tensor arguments are (x, weight); they have to be the same names
 ```
 
+So is host code that no definition declares:
+
+```
+ImportError: invalid_argument: a .nvcc.cu file registers host code for tessiq::layer_norm, which no .cpp defines with .precompiled()
+```
+
 The same goes for a launch function whose parameters differ from the schema, a schema that does not
-parse, an operation given both a kernel and an expression, or neither, and a replacement of an
-operation torch does not have.
+parse, an operation given more than one of a launch function, an expression and `.precompiled()`,
+or none of them, and a replacement of an operation torch does not have.
