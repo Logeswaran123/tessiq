@@ -14,6 +14,7 @@ kernel, and where every step ends up, in the order the compiler decided them.
 from __future__ import annotations
 
 import difflib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +22,7 @@ import torch
 
 from tessiq.device import DEVICE_NAME, cpu
 from tessiq.fx import capture, default_pipeline, emit_cuda, import_graph, run_passes
+from tessiq.library import rewrite_passes
 from tessiq.recipe import Recipe, build_recipe
 from tessiq.shapes import is_static
 
@@ -49,6 +51,7 @@ class Report:
     target: torch.device
     source: bool
     name: str
+    pipeline: list[str]
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,7 @@ def explain(
     dynamic: bool = False,
     sections: tuple[str, ...] = SECTIONS,
     source: bool = False,
+    rewrites: Sequence[str] = (),
 ) -> str:
     """Report how `model` compiles for `example`.
 
@@ -130,6 +134,8 @@ def explain(
             extents are not known until the call.
         sections: Which parts to include, from `SECTIONS`.
         source: True to print the generated CUDA for each kernel, which is long.
+        rewrites: Custom operations whose rewrites to run, as a compile's ``rewrites`` option
+            names them. See `tessiq.library.rewrites`.
 
     Returns:
         The report, ready to print.
@@ -140,6 +146,7 @@ def explain(
         sections=sections,
         source=source,
         name=type(model).__name__,
+        rewrites=rewrites,
     )
 
 
@@ -150,6 +157,7 @@ def explain_graph(
     sections: tuple[str, ...] = SECTIONS,
     source: bool = False,
     name: str | None = None,
+    rewrites: Sequence[str] = (),
 ) -> str:
     """Report how one already captured graph compiles.
 
@@ -162,15 +170,25 @@ def explain_graph(
 
     target = device if device is not None else cpu
     imported = import_graph(graph_module)
-    changes = pass_by_pass(imported)
-    recipe = build_recipe(graph_module, target, use_cache=False)
+    pipeline = [*rewrite_passes(rewrites), *default_pipeline()]
+    changes = pass_by_pass(imported, pipeline)
+    recipe = build_recipe(graph_module, target, use_cache=False, rewrites=rewrites)
 
     parts: list[str] = []
     for section in SECTIONS:
         if section not in sections:
             continue
         body = _SECTIONS[section](
-            Report(graph_module, imported, changes, recipe, target, source, name or "the graph")
+            Report(
+                graph_module,
+                imported,
+                changes,
+                recipe,
+                target,
+                source,
+                name or "the graph",
+                pipeline,
+            )
         )
         parts.append(f"== {section} ==\n\n{body.rstrip()}")
     return "\n\n".join(parts) + "\n"
@@ -265,7 +283,7 @@ def _kernels(report: Report) -> str:
     body = "\n".join(parts)
 
     if report.source:
-        through = run_passes(report.imported, ",".join(default_pipeline()))
+        through = run_passes(report.imported, ",".join(report.pipeline))
         body += "\n\n" + emit_cuda(through)
     return body
 

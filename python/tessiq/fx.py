@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 
 from tessiq import _C
+from tessiq.library import rewrite_passes
 
 
 def import_graph(graph_module: torch.fx.GraphModule, name: str = "forward") -> str:
@@ -34,13 +37,14 @@ def import_graph(graph_module: torch.fx.GraphModule, name: str = "forward") -> s
 
 
 def partition(
-    graph_module: torch.fx.GraphModule, name: str = "forward"
+    graph_module: torch.fx.GraphModule, name: str = "forward", rewrites: Sequence[str] = ()
 ) -> tuple[str, dict[str, int]]:
     """Import an FX graph and decide what the backend takes.
 
     Args:
         graph_module: The module a ``torch.compile`` backend receives.
         name: The name the resulting graph carries.
+        rewrites: Custom operations whose rewrites to run first. See `tessiq.library.rewrites`.
 
     Returns:
         The partitioned graph in textual IR, and a map from FX node name to cluster number. A node
@@ -50,7 +54,7 @@ def partition(
         ValueError: If a node carries no shape information.
         TypeError: If the graph uses a dtype or node kind the IR cannot represent.
     """
-    ir, clusters = _C.partition_fx(graph_module, name)
+    ir, clusters = _C.partition_fx(graph_module, name, rewrite_passes(rewrites))
     return str(ir), dict(clusters)
 
 

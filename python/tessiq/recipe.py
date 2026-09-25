@@ -10,6 +10,7 @@ those out once rather than per call is the point.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
@@ -17,6 +18,7 @@ import torch
 from tessiq import _C
 from tessiq.cache import lookup, signature, store
 from tessiq.device import cpu, cuda_ordinal
+from tessiq.library import rewrite_passes
 
 #: The cluster of a step the backend does not claim, matching `tessiq::ir::kHost`.
 HOST = -1
@@ -81,6 +83,7 @@ def build_recipe(
     name: str = "forward",
     *,
     use_cache: bool = True,
+    rewrites: Sequence[str] = (),
 ) -> Recipe:
     """Compile an FX graph for `device`.
 
@@ -90,6 +93,8 @@ def build_recipe(
         name: The name the resulting IR graph carries.
         use_cache: Whether to consult the recipe cache. False forces a compile, which is what a
             benchmark measuring compilation wants and what nothing else should.
+        rewrites: Custom operations whose rewrites to run, as ``rms_norm`` or its pass's name.
+            See `tessiq.library.rewrites`.
 
     Returns:
         A recipe that can be run any number of times, from any thread. A cached recipe is shared
@@ -102,27 +107,35 @@ def build_recipe(
     """
     target = device if device is not None else cpu
 
-    key = signature(graph_module, target) if use_cache else ""
+    passes = rewrite_passes(rewrites)
+    key = signature(graph_module, target, passes) if use_cache else ""
     if use_cache:
         cached = lookup(key)
         if cached is not None:
             return cached
 
-    recipe = _compile(graph_module, target, name)
+    recipe = _compile(graph_module, target, name, passes)
     if use_cache:
         store(key, recipe)
     return recipe
 
 
-def _compile(graph_module: torch.fx.GraphModule, target: torch.device, name: str) -> Recipe:
+def _compile(
+    graph_module: torch.fx.GraphModule, target: torch.device, name: str, passes: list[str]
+) -> Recipe:
     host = torch.device("cpu")
-    native = _C.build_recipe_fx(graph_module, name, 512, cuda_ordinal(target))
+    native = _C.build_recipe_fx(graph_module, name, 512, cuda_ordinal(target), passes)
 
     devices: dict[str, torch.device] = {}
     for step in native.recipe.steps:
         if not step.results:
             continue
         devices[step.results[0]] = host if step.cluster == HOST else target
+    # A node a rewrite absorbed is no step of its own: it left the IR, and the kernel standing in
+    # for the rewritten call computes it. It is where that kernel is.
+    for kernel in native.kernels:
+        for member in kernel.members:
+            devices.setdefault(member, devices.get(kernel.output, host))
 
     # A node needs a move only when something it reads is somewhere else. Everything that is not a
     # step is a graph input, which the caller hands us on the host.
