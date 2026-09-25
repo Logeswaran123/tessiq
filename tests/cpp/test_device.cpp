@@ -102,6 +102,15 @@ TEST(BackendTest, RoundTripsDataThroughEveryDevice) {
   }
 }
 
+TEST(BackendTest, EveryDeviceReportsItsMemory) {
+  for (const int index : all_indices()) {
+    const auto info = (*device_at(index))->memory_info();
+    ASSERT_TRUE(info.has_value()) << "index " << index << ": " << info.error().to_string();
+    EXPECT_GT(info->total_bytes, 0U) << "index " << index;
+    EXPECT_LE(info->free_bytes, info->total_bytes) << "index " << index;
+  }
+}
+
 TEST(BackendTest, DeviceToDeviceCopyPreservesData) {
   const std::array<std::uint32_t, 4> source{9, 8, 7, 6};
 

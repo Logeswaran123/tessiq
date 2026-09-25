@@ -148,6 +148,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `torch.accelerator.synchronize()` waits for the device.
 - `torch.save` and `torch.load` work with tessiq tensors, including a `map_location` that names a
   tessiq device. `set_` is native, and `torch.tessiq.device` selects a device for a block.
+- `torch.accelerator`'s memory functions: `memory_allocated`, `max_memory_allocated`,
+  `memory_reserved`, `memory_stats`, the two resets, `empty_cache` and `get_memory_info`.
 
 ### Changed
 

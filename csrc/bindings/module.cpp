@@ -337,7 +337,8 @@ void bind_devices(py::module_& m) {
       .def_readonly("allocation_count", &tessiq::AllocatorStats::allocation_count)
       .def_readonly("deallocation_count", &tessiq::AllocatorStats::deallocation_count)
       .def_readonly("cache_hits", &tessiq::AllocatorStats::cache_hits)
-      .def_readonly("cache_misses", &tessiq::AllocatorStats::cache_misses);
+      .def_readonly("cache_misses", &tessiq::AllocatorStats::cache_misses)
+      .def_readonly("live_blocks", &tessiq::AllocatorStats::live_blocks);
 
   m.def("memory_stats",
         &tessiq::torch_backend::allocator_stats,

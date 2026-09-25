@@ -422,6 +422,51 @@ def test_torch_can_tell_which_device_a_pointer_is_on(device: torch.device) -> No
         _C._device_of_pointer(torch.empty(16).data_ptr())
 
 
+# --- the torch.accelerator memory functions ------------------------------------------------------
+
+
+def test_torch_accelerator_reads_tessiq_s_counters(device: torch.device) -> None:
+    before = torch.accelerator.memory_allocated(device)
+    assert before == tessiq.memory_allocated(device)
+    x = torch.empty(1 << 16, device=device)
+    assert torch.accelerator.memory_allocated(device) == tessiq.memory_allocated(device) > before
+    assert torch.accelerator.memory_reserved(device) == tessiq.memory_reserved(device)
+    peak = torch.accelerator.max_memory_allocated(device)
+    assert peak >= torch.accelerator.memory_allocated(device)
+    del x
+
+
+def test_torch_accelerator_resets_the_peak(device: torch.device) -> None:
+    x = torch.empty(1 << 18, device=device)
+    del x
+    torch.accelerator.reset_peak_memory_stats(device)
+    peak = torch.accelerator.max_memory_allocated(device)
+    assert peak == torch.accelerator.memory_allocated(device)
+
+
+def test_torch_accelerator_resets_the_totals(device: torch.device) -> None:
+    kept = torch.empty(16, device=device)
+    torch.accelerator.reset_accumulated_memory_stats(device)
+    stats = torch.accelerator.memory_stats(device)
+    assert stats["allocation.all.allocated"] == 0
+    assert stats["allocation.all.current"] == tessiq.memory_stats(device).live_blocks
+    del kept
+
+
+def test_torch_accelerator_empties_the_cache(device: torch.device) -> None:
+    x = torch.empty(1 << 16, device=device)
+    del x
+    torch.accelerator.empty_cache()
+    reserved = torch.accelerator.memory_reserved(device)
+    assert reserved == torch.accelerator.memory_allocated(device)
+
+
+def test_torch_accelerator_reports_free_memory(device: torch.device) -> None:
+    free, total = torch.accelerator.get_memory_info(device)
+    assert 0 <= free <= total
+    assert total > 0
+
+
 # --- saving, loading and set_ -------------------------------------------------------------------
 
 

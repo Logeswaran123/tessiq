@@ -15,12 +15,14 @@
 #include <ATen/detail/PrivateUse1HooksInterface.h>
 #include <algorithm>
 #include <c10/core/Allocator.h>
+#include <c10/core/CachingDeviceAllocator.h>
 #include <c10/core/Device.h>
 #include <c10/core/DeviceType.h>
 #include <c10/core/Storage.h>
 #include <c10/core/impl/DeviceGuardImplInterface.h>
 #include <c10/core/impl/alloc_cpu.h>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -45,6 +47,62 @@ constexpr std::string_view kLogModule = "backend";
 
 constexpr c10::DeviceType kDeviceType = c10::DeviceType::PrivateUse1;
 
+/// The allocator for `index` if there is a device there, as torch's calls need.
+CachingAllocator& checked_allocator(c10::DeviceIndex index) {
+  const auto device = device_at(index);
+  TORCH_CHECK(device.has_value(), device.has_value() ? "" : device.error().to_string());
+  return allocator_at(index);
+}
+
+/// tessiq's counters in torch's layout.
+///
+/// There is one pool and a block is never split, so only the "all" figures are filled, and the
+/// split-block counts and requested bytes stay zero.
+c10::CachingDeviceAllocator::DeviceStats device_stats(const AllocatorStats& from) {
+  using c10::CachingAllocator::Stat;
+  constexpr auto kAll = static_cast<std::size_t>(c10::CachingAllocator::StatType::AGGREGATE);
+  const auto set = [](Stat& stat,
+                      std::uint64_t current,
+                      std::uint64_t peak,
+                      std::uint64_t increased,
+                      std::uint64_t decreased) {
+    stat.current = static_cast<std::int64_t>(current);
+    stat.peak = static_cast<std::int64_t>(peak);
+    stat.allocated = static_cast<std::int64_t>(increased);
+    stat.freed = static_cast<std::int64_t>(decreased);
+  };
+
+  c10::CachingDeviceAllocator::DeviceStats stats;
+  set(stats.allocation[kAll],
+      from.live_blocks,
+      from.peak_live_blocks,
+      from.allocation_count,
+      from.deallocation_count);
+  set(stats.allocated_bytes[kAll],
+      from.allocated_bytes,
+      from.peak_allocated_bytes,
+      from.allocated_bytes_total,
+      from.freed_bytes_total);
+  set(stats.segment[kAll],
+      from.reserved_blocks,
+      from.peak_reserved_blocks,
+      from.cache_misses,
+      from.device_frees);
+  set(stats.reserved_bytes[kAll],
+      from.reserved_bytes,
+      from.peak_reserved_bytes,
+      from.reserved_bytes_total,
+      from.released_bytes_total);
+  // A block is active exactly while it is handed out.
+  stats.active = stats.allocation;
+  stats.active_bytes = stats.allocated_bytes;
+  stats.num_device_alloc = static_cast<std::int64_t>(from.cache_misses);
+  stats.num_device_free = static_cast<std::int64_t>(from.device_frees);
+  stats.num_alloc_retries = static_cast<std::int64_t>(from.retries);
+  stats.num_ooms = static_cast<std::int64_t>(from.out_of_memory);
+  return stats;
+}
+
 /// Adapts CachingAllocator to the interface c10 expects.
 ///
 /// c10's interface takes no device. The instance registered with c10 allocates on the current
@@ -52,9 +110,11 @@ constexpr c10::DeviceType kDeviceType = c10::DeviceType::PrivateUse1;
 /// from get_allocator(index) allocate on their own device, so a storage made with one clones onto
 /// that device whatever the current one is.
 ///
+/// It is a DeviceAllocator so that torch.accelerator's memory functions reach tessiq's counters.
+///
 /// c10 reports allocation failure by throwing, so this is one of the few places outside the
 /// bindings where an Error becomes an exception.
-struct TessiqAllocator final : c10::Allocator {
+struct TessiqAllocator final : c10::DeviceAllocator {
   explicit TessiqAllocator(std::optional<int> index = std::nullopt) noexcept : index_(index) {}
 
   c10::DataPtr allocate(std::size_t bytes) override {
@@ -89,6 +149,38 @@ struct TessiqAllocator final : c10::Allocator {
       return;
     }
     allocator_at(forget(ptr)).deallocate(ptr);
+  }
+
+  bool initialized() override { return true; }
+
+  void emptyCache(c10::MempoolId_t /*mempool_id*/) override {
+    for (int index = 0; index < device_count(); ++index) {
+      static_cast<void>(allocator_at(index).empty_cache());
+    }
+  }
+
+  // Nothing to record. Every launch and copy on a device is ordered through the legacy default
+  // stream, so a block freed after its last use is not handed out before that use finishes.
+  void recordStream(const c10::DataPtr& /*ptr*/, c10::Stream /*stream*/) override {}
+
+  c10::CachingDeviceAllocator::DeviceStats getDeviceStats(c10::DeviceIndex device) override {
+    return device_stats(checked_allocator(device).stats());
+  }
+
+  void resetAccumulatedStats(c10::DeviceIndex device) override {
+    checked_allocator(device).reset_accumulated_stats();
+  }
+
+  void resetPeakStats(c10::DeviceIndex device) override {
+    checked_allocator(device).reset_peak_stats();
+  }
+
+  std::pair<std::size_t, std::size_t> getMemoryInfo(c10::DeviceIndex device) override {
+    const auto found = device_at(device);
+    TORCH_CHECK(found.has_value(), found.has_value() ? "" : found.error().to_string());
+    const auto info = (*found)->memory_info();
+    TORCH_CHECK(info.has_value(), info.has_value() ? "" : info.error().to_string());
+    return {info->free_bytes, info->total_bytes};
   }
 
   /// The device index that allocated `ptr`, or nothing if tessiq did not. `ptr` has to be the
@@ -132,8 +224,13 @@ struct TessiqAllocator final : c10::Allocator {
 };
 
 // REGISTER_ALLOCATOR takes a pointer to a mutable allocator, and c10 owns the lifetime from there.
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+// c10 defines DeviceAllocator's constructor out of line without noexcept, which is all the second
+// check sees.
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
+// NOLINTBEGIN(bugprone-throwing-static-initialization)
 TessiqAllocator g_allocator;
+// NOLINTEND(bugprone-throwing-static-initialization)
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 /// Host memory for `pin_memory()` and a DataLoader with `pin_memory=True`.
 ///

@@ -94,6 +94,16 @@ class CudaDevice final : public Device {
     return ok();
   }
 
+  Result<MemoryInfo> memory_info() override {
+    TESSIQ_RETURN_IF_ERROR(activate());
+    MemoryInfo info;
+    if (const cudaError_t status = cudaMemGetInfo(&info.free_bytes, &info.total_bytes);
+        status != cudaSuccess) {
+      return cuda_error(status, "cudaMemGetInfo");
+    }
+    return info;
+  }
+
  private:
   Result<void> activate() {
     if (const cudaError_t status = cudaSetDevice(ordinal_); status != cudaSuccess) {

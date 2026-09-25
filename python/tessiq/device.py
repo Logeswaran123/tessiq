@@ -163,11 +163,8 @@ class MemoryStats:
     deallocation_count: int
     cache_hits: int
     cache_misses: int
-
-    @property
-    def live_blocks(self) -> int:
-        """Blocks handed out and not yet returned. Non-zero at exit means a leak."""
-        return self.allocation_count - self.deallocation_count
+    #: Blocks handed out and not yet returned. Non-zero at exit means a leak.
+    live_blocks: int
 
 
 def device_count() -> int:
@@ -257,6 +254,7 @@ def memory_stats(device: torch.device | str | int | None = None) -> MemoryStats:
         deallocation_count=raw.deallocation_count,
         cache_hits=raw.cache_hits,
         cache_misses=raw.cache_misses,
+        live_blocks=raw.live_blocks,
     )
 
 

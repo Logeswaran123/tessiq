@@ -36,6 +36,7 @@ class AllocatorStats:
     deallocation_count: int
     cache_hits: int
     cache_misses: int
+    live_blocks: int
 
 def memory_stats(index: int) -> AllocatorStats: ...
 

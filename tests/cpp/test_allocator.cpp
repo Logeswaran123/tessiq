@@ -234,6 +234,8 @@ TEST(AllocatorTest, FreesTheCacheAndRetriesWhenTheDeviceIsFull) {
   ASSERT_TRUE(ptr.has_value()) << "should have dropped the cache and retried: "
                                << ptr.error().to_string();
   EXPECT_EQ(allocator.stats().reserved_bytes, CachingAllocator::round_size(std::size_t{64} * 1024));
+  EXPECT_EQ(allocator.stats().retries, 1U);
+  EXPECT_EQ(allocator.stats().out_of_memory, 0U);
   allocator.deallocate(*ptr);
 }
 
@@ -248,6 +250,79 @@ TEST(AllocatorTest, ReportsFailureWhenThereIsNothingLeftToRelease) {
   EXPECT_EQ(ptr.error().code(), ErrorCode::kResourceExhausted);
   EXPECT_NE(ptr.error().message().find("4096"), std::string::npos)
       << "the message should name the size that failed: " << ptr.error().message();
+  EXPECT_EQ(allocator.stats().out_of_memory, 1U);
+}
+
+TEST(AllocatorStatsTest, CountsBlocksAndBytesBothWays) {
+  FakeDevice device;
+  CachingAllocator allocator(&device);
+  const std::size_t size = CachingAllocator::round_size(4096);
+
+  auto first = allocator.allocate(4096);
+  auto second = allocator.allocate(4096);
+  ASSERT_TRUE(first.has_value() && second.has_value());
+  allocator.deallocate(*first);
+
+  AllocatorStats stats = allocator.stats();
+  EXPECT_EQ(stats.live_blocks, 1U);
+  EXPECT_EQ(stats.peak_live_blocks, 2U);
+  EXPECT_EQ(stats.reserved_blocks, 2U);
+  EXPECT_EQ(stats.allocated_bytes_total, 2 * size);
+  EXPECT_EQ(stats.freed_bytes_total, size);
+  EXPECT_EQ(stats.reserved_bytes_total, 2 * size);
+
+  // The cached block goes back to the device; the live one stays.
+  allocator.empty_cache();
+  stats = allocator.stats();
+  EXPECT_EQ(stats.reserved_blocks, 1U);
+  EXPECT_EQ(stats.peak_reserved_blocks, 2U);
+  EXPECT_EQ(stats.device_frees, 1U);
+  EXPECT_EQ(stats.released_bytes_total, size);
+  allocator.deallocate(*second);
+}
+
+TEST(AllocatorStatsTest, ResettingPeaksLowersThemToTheCurrentValues) {
+  FakeDevice device;
+  CachingAllocator allocator(&device);
+
+  auto big = allocator.allocate(std::size_t{64} * 1024);
+  auto small = allocator.allocate(4096);
+  ASSERT_TRUE(big.has_value() && small.has_value());
+  allocator.deallocate(*big);
+
+  allocator.reset_peak_stats();
+  const AllocatorStats stats = allocator.stats();
+  EXPECT_EQ(stats.peak_allocated_bytes, stats.allocated_bytes);
+  EXPECT_EQ(stats.peak_reserved_bytes, stats.reserved_bytes);
+  EXPECT_EQ(stats.peak_live_blocks, 1U);
+  EXPECT_EQ(stats.peak_reserved_blocks, 2U);
+  allocator.deallocate(*small);
+}
+
+TEST(AllocatorStatsTest, ResettingTheTotalsLeavesWhatIsLiveAlone) {
+  FakeDevice device;
+  CachingAllocator allocator(&device);
+
+  auto kept = allocator.allocate(4096);
+  auto freed = allocator.allocate(4096);
+  ASSERT_TRUE(kept.has_value() && freed.has_value());
+  allocator.deallocate(*freed);
+  const AllocatorStats before = allocator.stats();
+
+  allocator.reset_accumulated_stats();
+  const AllocatorStats after = allocator.stats();
+  EXPECT_EQ(after.allocation_count, 0U);
+  EXPECT_EQ(after.deallocation_count, 0U);
+  EXPECT_EQ(after.cache_misses, 0U);
+  EXPECT_EQ(after.allocated_bytes_total, 0U);
+  EXPECT_EQ(after.reserved_bytes_total, 0U);
+  EXPECT_EQ(after.live_blocks, before.live_blocks);
+  EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
+  EXPECT_EQ(after.peak_allocated_bytes, before.peak_allocated_bytes);
+
+  // A block freed after the reset still balances the live count.
+  allocator.deallocate(*kept);
+  EXPECT_EQ(allocator.stats().live_blocks, 0U);
 }
 
 TEST(AllocatorTest, DeallocateIgnoresNull) {
