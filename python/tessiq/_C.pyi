@@ -99,38 +99,22 @@ class ConvKernel(Kernel):
     algorithm: int
     workspace_bytes: int
 
-class Program:
-    def launch(
-        self,
-        tensors: list[Any],
-        arguments: list[tuple[str, int | float]],
-        grid: tuple[int, int, int],
-        block: tuple[int, int, int],
-        shared: int = ...,
-        stream: int = ...,
-    ) -> None: ...
-
-def compile_program(source: str, entry: str, ordinal: int) -> Program: ...
 def register_elementwise(
     name: str, canonical: str, expression: str, arity: int, dtypes: list[str]
-) -> None: ...
-def register_kernel(
-    name: str, canonical: str, arity: int, parameters: list[str], dtypes: list[str]
 ) -> None: ...
 def registered_ops() -> list[str]: ...
 def compile_elementwise(name: str, arity: int, dtype: str, ordinal: int) -> Kernel: ...
 
-class CustomCall:
+class CustomKernel(Kernel):
     op: str
-    output: str
-    has_dynamic_extent: bool
-    inputs: list[str]
-    arguments: list[tuple[str, Any]]
+
+def custom_ops() -> list[str]: ...
+def custom_op_fallbacks(name: str) -> int: ...
+def compile_custom_op(name: str, ordinal: int) -> None: ...
 
 class CompiledGraph:
     recipe: Recipe
     kernels: list[Kernel]
-    calls: list[CustomCall]
 
 def build_recipe_fx(
     graph_module: object, name: str = ..., alignment: int = ..., ordinal: int = ...

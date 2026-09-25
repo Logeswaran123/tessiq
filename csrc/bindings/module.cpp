@@ -155,6 +155,7 @@ void value_or_raise(const tessiq::Result<void>& result) {
 /// the most derived type it knows, so `isinstance` works on what a compiled graph returns.
 void bind_kernels(py::module_& m) {
   using tessiq::torch_backend::ConvKernel;
+  using tessiq::torch_backend::CustomKernel;
   using tessiq::torch_backend::FusedKernel;
   using tessiq::torch_backend::GemmKernel;
   using tessiq::torch_backend::Kernel;
@@ -226,110 +227,9 @@ void bind_kernels(py::module_& m) {
         const auto& plan = kernel.parts().plan;
         return plan == nullptr ? std::size_t{0} : plan->workspace_bytes();
       });
-}
 
-/// One `(kind, value)` pair from Python as the C type the kernel's parameter has.
-tessiq::codegen::KernelArgument argument_from(const std::string& kind, const py::object& value) {
-  if (kind == "i64") {
-    return value.cast<std::int64_t>();
-  }
-  if (kind == "i32") {
-    return value.cast<std::int32_t>();
-  }
-  if (kind == "f32") {
-    return value.cast<float>();
-  }
-  if (kind == "f64") {
-    return value.cast<double>();
-  }
-  raise_from_error(
-      tessiq::invalid_argument("'" + kind + "' is not an argument type; use i64, i32, f32 or f64"));
-}
-
-/// Binds a kernel compiled from source written by hand, and launching it over any shape.
-void bind_programs(py::module_& m) {
-  using tessiq::codegen::Program;
-
-  py::class_<Program, std::unique_ptr<Program, py::nodelete>>(m, "Program")
-      .def(
-          "launch",
-          [](const Program& program,
-             const std::vector<at::Tensor>& tensors,
-             const std::vector<std::pair<std::string, py::object>>& arguments,
-             const std::array<std::uint32_t, 3>& grid,
-             const std::array<std::uint32_t, 3>& block,
-             std::size_t shared,
-             std::uintptr_t stream) {
-            std::vector<void*> buffers;
-            buffers.reserve(tensors.size());
-            for (std::size_t i = 0; i < tensors.size(); ++i) {
-              // The kernel indexes each buffer from its first element, so a tensor laid out any
-              // other way would be read in the wrong order without an error.
-              if (!tensors[i].is_contiguous()) {
-                raise_from_error(tessiq::invalid_argument("tensor " + std::to_string(i) +
-                                                          " handed to a kernel is not packed"));
-              }
-              buffers.push_back(tensors[i].data_ptr());
-            }
-            std::vector<tessiq::codegen::KernelArgument> scalars;
-            scalars.reserve(arguments.size());
-            for (const auto& [kind, value] : arguments) {
-              scalars.push_back(argument_from(kind, value));
-            }
-            tessiq::codegen::LaunchShape shape;
-            shape.grid = grid;
-            shape.block = block;
-            shape.shared_bytes = shared;
-            value_or_raise(program.launch(buffers, scalars, shape, stream_at(stream)));
-          },
-          py::arg("tensors"),
-          py::arg("arguments"),
-          py::arg("grid"),
-          py::arg("block"),
-          py::arg("shared") = 0,
-          py::arg("stream") = kLegacyDefaultStream,
-          "Launches with the tensors' buffers first and the arguments after them, in the order "
-          "the kernel declares its parameters. Asynchronous, like any launch.");
-
-  m.def(
-      "compile_program",
-      [](const std::string& source, const std::string& entry, int ordinal) {
-        return value_or_raise(tessiq::codegen::compile_program(source, entry, ordinal));
-      },
-      py::arg("source"),
-      py::arg("entry"),
-      py::arg("ordinal"),
-      py::return_value_policy::reference,
-      "Compiles CUDA source for one device and loads its entry point. Kept for the process.");
-}
-
-/// A call's arguments as Python sees them: `("tensor", name)` or `("scalar", value)`.
-py::list call_arguments(const tessiq::codegen::CustomCall& call) {
-  py::list arguments;
-  for (const tessiq::codegen::CallArgument& argument : call.arguments) {
-    std::visit(
-        [&arguments](const auto& held) {
-          using Held = std::decay_t<decltype(held)>;
-          if constexpr (std::is_same_v<Held, tessiq::codegen::CallOperand>) {
-            arguments.append(py::make_tuple("tensor", held.name));
-          } else {
-            arguments.append(py::make_tuple("scalar", held));
-          }
-        },
-        argument);
-  }
-  return arguments;
-}
-
-/// Binds the description of a call to a registered kernel, which Python turns into a kernel.
-void bind_calls(py::module_& m) {
-  using tessiq::codegen::CustomCall;
-  py::class_<CustomCall>(m, "CustomCall")
-      .def_readonly("op", &CustomCall::op)
-      .def_readonly("output", &CustomCall::output)
-      .def_readonly("has_dynamic_extent", &CustomCall::has_dynamic_extent)
-      .def_property_readonly("inputs", &CustomCall::inputs)
-      .def_property_readonly("arguments", &call_arguments);
+  py::class_<CustomKernel, Kernel, std::shared_ptr<CustomKernel>>(m, "CustomKernel")
+      .def_property_readonly("op", &CustomKernel::op);
 }
 
 /// Binds adding an operation from Python, and compiling it for the eager path.
@@ -358,30 +258,6 @@ void bind_registry(py::module_& m) {
       py::arg("arity"),
       py::arg("dtypes"),
       "Adds an elementwise operation the compiler claims, fuses and emits like a built-in one.");
-  m.def(
-      "register_kernel",
-      [](const std::string& name,
-         const std::string& canonical,
-         int arity,
-         const std::vector<std::string>& parameters,
-         const std::vector<std::string>& dtypes) {
-        tessiq::passes::OpDefinition definition;
-        definition.name = name;
-        definition.canonical = canonical;
-        definition.category = tessiq::passes::OpCategory::kCustom;
-        definition.arity = arity;
-        definition.parameters = parameters;
-        for (const std::string& dtype : dtypes) {
-          definition.dtypes.push_back(value_or_raise(tessiq::ir::parse_dtype(dtype)));
-        }
-        value_or_raise(tessiq::passes::register_op(definition));
-      },
-      py::arg("name"),
-      py::arg("canonical"),
-      py::arg("arity"),
-      py::arg("parameters"),
-      py::arg("dtypes"),
-      "Adds an operation whose kernel somebody wrote. The compiler places it and never fuses it.");
   m.def("registered_ops",
         &tessiq::passes::registered_op_names,
         "Every operation added with register_elementwise, sorted.");
@@ -398,10 +274,37 @@ void bind_registry(py::module_& m) {
       "A kernel running one elementwise operation over operands of the result's shape.");
 }
 
+/// Binds the custom operations compiled into the extension: listing them, compiling them ahead of
+/// their first call, and counting the calls that ran their reference.
+void bind_custom_ops(py::module_& m) {
+  m.def("custom_ops",
+        &tessiq::torch_backend::custom_op_names,
+        "Every custom operation in csrc/custom_ops, as tessiq::<name>, sorted.");
+  m.def(
+      "custom_op_fallbacks",
+      [](const std::string& name) {
+        return value_or_raise(tessiq::torch_backend::custom_op_fallbacks(name));
+      },
+      py::arg("name"),
+      "How many calls of the operation on a tessiq tensor ran its reference instead.");
+  m.def(
+      "compile_custom_op",
+      [](const std::string& name, int ordinal) {
+        value_or_raise(tessiq::torch_backend::compile_custom_op(name, ordinal));
+      },
+      py::arg("name"),
+      py::arg("ordinal"),
+      "Compiles the operation's kernel, or its expression for every type it declares, now.");
+}
+
 PYBIND11_MODULE(_C, m) {
   m.doc() = "tessiq native core";
 
   m.attr("__version__") = tessiq::kVersion;
+
+  // Every operation in csrc/custom_ops is checked here, so one whose definition does not hold
+  // together fails the import with a message naming it.
+  value_or_raise(tessiq::torch_backend::register_custom_ops());
 
   m.def(
       "version",
@@ -507,13 +410,11 @@ PYBIND11_MODULE(_C, m) {
 
   bind_kernels(m);
   bind_registry(m);
-  bind_programs(m);
-  bind_calls(m);
+  bind_custom_ops(m);
 
   py::class_<tessiq::torch_backend::CompiledGraph>(m, "CompiledGraph")
       .def_readonly("recipe", &tessiq::torch_backend::CompiledGraph::recipe)
-      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels)
-      .def_readonly("calls", &tessiq::torch_backend::CompiledGraph::calls);
+      .def_readonly("kernels", &tessiq::torch_backend::CompiledGraph::kernels);
 
   m.def(
       "build_recipe_fx",

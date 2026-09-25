@@ -162,4 +162,6 @@ add_library(tessiq::codegen ALIAS tessiq_codegen)
 
 if(TESSIQ_BUILD_PYTHON)
   add_subdirectory(bindings)
+  # After bindings, because it adds the operations it finds to the extension that defines.
+  add_subdirectory(custom_ops)
 endif()
