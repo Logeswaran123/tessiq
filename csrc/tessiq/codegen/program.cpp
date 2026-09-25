@@ -33,12 +33,6 @@ namespace {
 
 constexpr std::string_view kLogModule = "program";
 
-/// Threads per block.
-///
-/// 256 is the usual starting point: enough to fill a scheduler, small enough that a block's
-/// registers do not limit how many are resident. Choosing it per kernel needs something to
-/// measure against, so it is one number until there is.
-
 Error driver_error(CUresult status, std::string_view what) {
   const char* name = nullptr;
   const char* description = nullptr;
@@ -50,10 +44,9 @@ Error driver_error(CUresult status, std::string_view what) {
 
 /// Makes the device's primary context current on this thread.
 ///
-/// The driver API acts on whatever context is current, and the runtime API creates and keeps the
-/// primary one. Torch has already used the runtime by the time anything here runs, so the context
-/// exists; setting the device is what binds it to this thread. Without it a launch from a thread
-/// torch has not touched fails with an invalid context, which is a confusing way to learn this.
+/// The driver API acts on the current context, and cudaSetDevice binds the runtime's primary
+/// context to this thread. Without it, a launch from a thread torch has not used fails with an
+/// invalid context.
 Result<void> activate(int ordinal) {
   if (const cudaError_t status = cudaSetDevice(ordinal); status != cudaSuccess) {
     return external_error(std::string("cudaSetDevice: ") + cudaGetErrorName(status));
@@ -90,10 +83,8 @@ Result<void> check_shape(const LaunchShape& shape) {
   return ok();
 }
 
-/// A loaded module is never unloaded. A program lives for the process, and tearing one down
-/// during static destruction races the driver's own teardown, which reports an error nobody can
-/// act on. The module handle is therefore not kept: holding state nothing reads invites somebody
-/// to wonder what it is for.
+/// Modules are never unloaded, so the handle is not kept. Unloading during static destruction
+/// races the driver's own teardown.
 class CudaProgram final : public Program {
  public:
   CudaProgram(CUfunction function, int ordinal) : function_(function), ordinal_(ordinal) {}
@@ -109,9 +100,8 @@ class CudaProgram final : public Program {
     TESSIQ_RETURN_IF_ERROR(check_shape(shape));
     TESSIQ_RETURN_IF_ERROR(activate(ordinal_));
     if (shape.shared_bytes > kSharedWithoutAsking) {
-      // A block gets 48 KB of dynamic shared memory without asking, and a kernel that wants more
-      // has to say so first. The driver refuses an amount the card does not have, which is the
-      // error a caller should see rather than a failed launch.
+      // More than 48 KB has to be opted into. The driver refuses an amount the card does not
+      // have, which is a clearer error than a failed launch.
       if (const CUresult status =
               cuFuncSetAttribute(function_,
                                  CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
@@ -122,9 +112,8 @@ class CudaProgram final : public Program {
       }
     }
 
-    // The kernel takes each buffer and then each argument. cuLaunchKernel wants pointers to the
-    // arguments rather than the arguments, so this is an array of addresses of the entries below,
-    // which is why both vectors are copied and have to outlive the call.
+    // Buffers, then arguments. cuLaunchKernel takes the address of each, so both are copied into
+    // vectors that outlive the call.
     std::vector<void*> values = buffers;
     std::vector<KernelArgument> scalars = arguments;
     std::vector<void*> addresses;
@@ -165,11 +154,8 @@ std::mutex& programs_mutex() {
 
 /// FNV-1a over a cubin's bytes, as sixteen hex digits.
 ///
-/// The loaded-module map is keyed on this rather than on the cubin's length. Every fused kernel is
-/// named tessiq_fused_<group>, so two unrelated graphs routinely produce a kernel with the same
-/// name for the same device, and two such cubins are very often the same number of bytes: the same
-/// loop with one arithmetic instruction changed compiles to the same size. Keying on length made
-/// the second one load the first one's module and launch the wrong kernel, with no error anywhere.
+/// Part of the loaded-module key. Fused kernels are named tessiq_fused_<group>, so two graphs
+/// often produce kernels with the same name, and often the same size, that do different things.
 std::string content_digest(const std::vector<char>& data) {
   constexpr std::uint64_t kOffsetBasis = 1469598103934665603ULL;
   constexpr std::uint64_t kPrime = 1099511628211ULL;

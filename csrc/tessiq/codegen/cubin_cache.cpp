@@ -37,9 +37,8 @@ CubinCacheStats& stats() {
 
 /// FNV-1a over the inputs that decide what the compiler produces.
 ///
-/// Not cryptographic, and it does not need to be: the contents are ours rather than an attacker's,
-/// and a collision would have to be between two kernels this process compiled. Sixty-four bits is
-/// far past that.
+/// Not cryptographic, which is fine: the inputs are kernels tessiq compiles, not untrusted data,
+/// and 64 bits makes an accidental collision negligible.
 std::string
 digest(std::string_view source, std::string_view architecture, std::string_view version) {
   constexpr std::uint64_t kOffset = 1469598103934665603ULL;
@@ -65,15 +64,13 @@ digest(std::string_view source, std::string_view architecture, std::string_view 
 }
 
 const char* environment(const char* name) {
-  // NOLINTNEXTLINE(concurrency-mt-unsafe): read once at start of day, before threads matter.
+  // NOLINTNEXTLINE(concurrency-mt-unsafe): tessiq never writes the environment.
   return std::getenv(name);
 }
 
 /// Reads the whole file by size rather than through a stream iterator.
 ///
-/// The iterator form is shorter and GCC 13 reports a null dereference inside libstdc++ for it
-/// under -O2, which is a false positive in a header nobody here wrote. Sizing the buffer first is
-/// what a binary read should do anyway.
+/// GCC 13 at -O2 reports a false null dereference inside libstdc++ for the iterator form.
 Result<Cubin> read_file(const std::filesystem::path& path, std::string architecture) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
@@ -96,9 +93,8 @@ Result<Cubin> read_file(const std::filesystem::path& path, std::string architect
 
 /// Writes through a temporary and renames, so a reader never sees a half-written file.
 ///
-/// Two processes compiling the same kernel is ordinary, and without this one of them can read what
-/// the other is still writing. Rename is atomic within a directory, so a reader sees either the
-/// old file or the whole new one.
+/// Two processes may compile the same kernel at once. Rename is atomic within a directory, so a
+/// reader sees either no file or a whole one.
 bool write_file(const std::filesystem::path& path, const std::vector<char>& data) {
   std::error_code code;
   std::filesystem::create_directories(path.parent_path(), code);
@@ -164,7 +160,7 @@ Result<Cubin> compile_cached(std::string_view source, std::string_view name, int
     }
   }
   if (!written) {
-    // Worth saying once rather than silently recompiling on every run forever.
+    // Otherwise every run would recompile without saying why.
     TESSIQ_LOG(kWarn, kLogModule) << "could not write " << path.string()
                                   << "; kernels will be recompiled every run";
   }

@@ -38,21 +38,17 @@ bool is_floating(ir::DType dtype) { return dtype == ir::DType::kF32 || dtype == 
 
 /// What a thread's accumulator starts at, as an expression the kernel body can use.
 ///
-/// A sum starts at zero, which is its identity and correct for a thread that is given no elements
-/// to add. A max has no such constant: the lowest representable value is one per type, and
-/// `-INFINITY` needs math.h, which NVRTC does not include the way nvcc does. Starting from the
-/// slice's first element avoids the question. Every thread can read it, max and min are
-/// idempotent so combining it more than once changes nothing, and it is a real value from the
-/// data, so a NaN in the slice still propagates.
+/// A sum starts at zero. Max and min start at the slice's first element rather than a per-type
+/// lowest value, since `-INFINITY` needs math.h, which NVRTC does not include. Every thread can
+/// read that element, max and min are idempotent, and a NaN there still propagates.
 std::string_view accumulator_start(ReduceOp op) {
   return op == ReduceOp::kSum || op == ReduceOp::kMean ? "(scalar_t)0" : "base[0]";
 }
 
 /// How two values combine, as an expression in `a` and `b`.
 ///
-/// max and min test for a NaN first. torch.amax of data containing a NaN is a NaN, and both
-/// `fmax` and a plain `a > b ? a : b` return the other operand instead, so neither is the
-/// operation torch performs.
+/// max and min test for NaN first, because torch.amax propagates it. `fmax` drops a NaN, and
+/// `a > b ? a : b` keeps one only when it is `b`.
 std::string combine(ReduceOp op, ir::DType dtype) {
   switch (op) {
   case ReduceOp::kSum:
@@ -68,8 +64,8 @@ std::string combine(ReduceOp op, ir::DType dtype) {
 
 /// Substitutes `$0` and `$1` in an expression with the arguments.
 ///
-/// A value argument becomes the variable holding it, which is the IR name because SSA makes it
-/// unique. A constant becomes itself.
+/// A value argument becomes the variable holding it, named after the IR value. A constant is
+/// written at the element type.
 std::string substitute(std::string_view expression, const std::vector<Argument>& args) {
   std::string out;
   for (std::size_t i = 0; i < expression.size(); ++i) {
@@ -84,24 +80,14 @@ std::string substitute(std::string_view expression, const std::vector<Argument>&
       out += expression[i];
       continue;
     }
-    // A constant is constructed at the element type rather than written bare. `v * 0.1` is a
-    // double multiply narrowed afterwards, and for a constant that is not exactly representable
-    // in float that is not the same number as a float multiply. The compiler folds the harmless
-    // cases either way, so this costs nothing and removes the ones it cannot.
+    // Cast rather than written bare: `v * 0.1` on a float would be a double multiply narrowed
+    // afterwards, which can differ from the float multiply torch does.
     out += args[index].is_value ? "v_" + args[index].text : "scalar_t(" + args[index].text + ")";
     ++i;
   }
   return out;
 }
 
-/// Emits CUDA C++ for NVRTC.
-///
-/// One thread per element, with a bounds check rather than a launch shaped to divide exactly,
-/// because a grid that assumes divisibility is a grid somebody eventually launches wrongly.
-///
-/// The kernel takes raw pointers and an element count. It knows nothing about strides, which is
-/// the contract fusion already enforces: every buffer in a group has the same shape, so walking
-/// one index is walking all of them.
 /// Whether this operand's index needs a number the source cannot hold.
 bool needs_divisor(const FusedKernel& kernel, const KernelInput& input) {
   return kernel.has_dynamic_extent() && !input.read.is_known();
@@ -126,14 +112,18 @@ std::string read_index(const FusedKernel& kernel, const KernelInput& input) {
   return {};
 }
 
+/// Emits CUDA C++ for NVRTC.
+///
+/// One thread per element with a bounds check, so the grid need not divide the count exactly. The
+/// kernel takes packed buffers and an element count, and reads each operand at the index its
+/// `KernelInput` gives.
 class CudaEmitter final : public Emitter {
  public:
   [[nodiscard]] std::string_view name() const override { return "cuda"; }
 
   [[nodiscard]] bool supports(const FusedKernel& kernel) const override {
-    // A dynamic count is allowed: it reaches the kernel as the argument `n` either way, and the
-    // source below holds no extent of its own once every index is `i`, which is the only shape a
-    // fusion group gets when its extents are not known.
+    // A dynamic count is allowed: the count is always the argument `n`, and a divisor not known
+    // here becomes a parameter.
     const bool sized = kernel.elements > 0 || kernel.has_dynamic_extent();
     if (c_type(kernel.dtype).empty() || !sized || kernel.body.empty()) {
       return false;
@@ -153,18 +143,16 @@ class CudaEmitter final : public Emitter {
   }
 
   [[nodiscard]] bool supports(const ReductionKernel& kernel) const override {
-    // c_type covers the half and boolean types, which have no scalar_t spelling here.
+    // No C spelling for the half and boolean types yet.
     if (c_type(kernel.dtype).empty()) {
       return false;
     }
-    // The three extents reach the kernel as arguments, so a shape that is not known yet is no
-    // obstacle to writing the source. What it must not be is empty or malformed.
+    // The extents are kernel arguments, so they only have to be positive or not yet known.
     const auto usable = [](std::int64_t extent) { return extent > 0 || extent == ir::kDynamic; };
     if (!usable(kernel.reduce) || !usable(kernel.outer) || !usable(kernel.inner)) {
       return false;
     }
-    // An integer mean would be an integer division, which is not what torch computes. torch
-    // refuses it outright, so this is unreachable rather than a limitation worth working around.
+    // torch refuses a mean over integers, so this declines nothing a real graph contains.
     return kernel.op != ReduceOp::kMean || is_floating(kernel.dtype);
   }
 
@@ -189,8 +177,8 @@ class CudaEmitter final : public Emitter {
     source += "    long long inner) {\n";
 
     if (kernel.shape == ReductionShape::kThreadPerOutput) {
-      // One thread per output. Consecutive threads differ in the kept axis that follows the
-      // reduced one, so they read consecutive addresses on every step of the loop.
+      // One thread per output. Adjacent threads differ in the kept axis after the reduced one, so
+      // they read adjacent addresses on every step.
       source += "  long long o = blockIdx.x * (long long)blockDim.x + threadIdx.x;\n";
       source += "  if (o >= outer * inner) return;\n\n";
       source += "  const scalar_t* base = p_in + (o / inner) * reduce * inner + (o % inner);\n\n";
@@ -201,9 +189,8 @@ class CudaEmitter final : public Emitter {
       return source;
     }
 
-    // One block per output, its threads walking the reduced axis together and combining what
-    // they found through shared memory. The reduced axis is last here, so the elements one block
-    // reads sit next to each other.
+    // One block per output, combining through shared memory. The reduced axis is last, so one
+    // block reads adjacent elements.
     source += "  long long o = blockIdx.x;\n";
     source += "  if (o >= outer * inner) return;\n\n";
     source += "  const scalar_t* base = p_in + (o / inner) * reduce * inner + (o % inner);\n\n";
@@ -236,9 +223,8 @@ class CudaEmitter final : public Emitter {
     }
     source += "    scalar_t* __restrict__ p_" + kernel.output + ",\n";
     source += "    long long n";
-    // A kernel written for a shape nobody knows yet cannot fold a broadcast's divisor into the
-    // source, so it takes it beside the element count. One parameter per operand that needs one,
-    // in operand order, which is the order the launch fills them in.
+    // Divisors not known here follow the count as parameters, one per operand that needs one, in
+    // operand order.
     for (const KernelInput& input : kernel.inputs) {
       if (needs_divisor(kernel, input)) {
         source += ",\n    long long d_" + input.name;
@@ -249,9 +235,7 @@ class CudaEmitter final : public Emitter {
     source += "  if (i >= n) return;\n\n";
 
     for (const KernelInput& input : kernel.inputs) {
-      // Almost always `i`. An operand with fewer elements than the result, such as the per-row
-      // mean a layer norm subtracts, reads a position worked out from the shapes when the kernel
-      // was written, or from a divisor passed in when they were not known then.
+      // Usually `i`. A broadcast operand reads at the index `read_index` gives.
       source += "  scalar_t v_" + input.name + " = p_" + input.name + "[" +
                 read_index(kernel, input) + "];\n";
     }

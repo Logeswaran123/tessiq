@@ -25,7 +25,7 @@ Error nvrtc_error(nvrtcResult status, std::string_view what) {
   return external_error(std::string(what) + ": " + nvrtcGetErrorString(status));
 }
 
-/// The compiler's log, which is where a failure in generated source becomes locatable.
+/// NVRTC's log for `program`.
 std::string compile_log(nvrtcProgram program) {
   std::size_t size = 0;
   if (nvrtcGetProgramLogSize(program, &size) != NVRTC_SUCCESS || size <= 1) {
@@ -39,8 +39,7 @@ std::string compile_log(nvrtcProgram program) {
   return log;
 }
 
-/// Destroys the program however the function exits, including the error paths, of which there are
-/// several.
+/// Destroys the program on every exit path.
 class ProgramGuard {
  public:
   explicit ProgramGuard(nvrtcProgram program) : program_(program) {}
@@ -81,9 +80,8 @@ Result<Cubin> compile_cuda(std::string_view source, std::string_view name, int m
   }
   const ProgramGuard guard(program);
 
-  // Compiling straight to a cubin rather than to PTX skips the driver's own compile on every
-  // load, which is the cost a disk cache exists to avoid. The price is that the result only loads
-  // on this architecture, which is why the architecture is part of the cubin's identity.
+  // Straight to a cubin rather than PTX, so loading does not JIT. The result loads only on this
+  // architecture, which is why the architecture is part of the cache key.
   const std::string architecture = "sm_" + std::to_string(major) + std::to_string(minor);
   const std::string arch_flag = "--gpu-architecture=" + architecture;
   const std::array<const char*, 2> options{{arch_flag.c_str(), "--std=c++17"}};

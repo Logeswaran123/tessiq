@@ -13,13 +13,10 @@ namespace tessiq::codegen {
 
 /// A convolution with its descriptors built and its algorithm chosen, ready to run.
 ///
-/// Built once per compiled convolution and kept, because the expensive part of calling cuDNN is
-/// not the call. It is describing the problem and choosing among the algorithms that could solve
-/// it, and neither depends on the values being convolved. Doing that per call would cost more
-/// than most of the convolutions it describes.
+/// Built once per compiled convolution and kept. Building the descriptors and choosing an algorithm
+/// costs more than most convolutions, and neither depends on the data.
 ///
-/// Abstract so that no cuDNN type reaches this header, which is included by code that has to
-/// compile without the library.
+/// Abstract so that no cuDNN type reaches this header, which code built without cuDNN includes.
 class ConvPlan {
  public:
   virtual ~ConvPlan() = default;
@@ -29,15 +26,14 @@ class ConvPlan {
   ConvPlan(ConvPlan&&) = delete;
   ConvPlan& operator=(ConvPlan&&) = delete;
 
-  /// Runs it on `stream`. `bias` is null when the convolution has none. Asynchronous, like a
-  /// kernel launch.
+  /// Runs it asynchronously on `stream`. `bias` is null when the convolution has none.
   [[nodiscard]] virtual Result<void> launch(const void* input,
                                             const void* weight,
                                             const void* bias,
                                             void* output,
                                             Stream stream) const = 0;
 
-  /// The algorithm cuDNN chose, for reports and tests. Its own enumeration, as an integer.
+  /// The `cudnnConvolutionFwdAlgo_t` cuDNN chose, for reports and tests.
   [[nodiscard]] virtual int algorithm() const = 0;
 
   /// Scratch bytes the chosen algorithm asked for.
@@ -52,11 +48,9 @@ class ConvPlan {
 
 /// Describes `kernel` to cuDNN on device `ordinal` and chooses how to run it.
 ///
-/// The arithmetic is kept in fp32. torch lets cuDNN use TF32 tensor cores for convolutions by
-/// default, which is faster and agrees with fp32 to about three decimal places. This does not,
-/// because the answer is checked against the host and the host does not round that way. The
-/// consequence is that a timing against eager CUDA compares an fp32 convolution with a TF32 one,
-/// and says so where it is reported.
+/// Uses fp32 math, not TF32. torch lets cuDNN use TF32 by default, which is faster but agrees
+/// with fp32 to only about three digits, and results here are checked against the host. A timing
+/// against eager CUDA therefore compares fp32 with TF32.
 Result<std::unique_ptr<ConvPlan>> make_conv_plan(const ConvKernel& kernel, int ordinal);
 
 } // namespace tessiq::codegen

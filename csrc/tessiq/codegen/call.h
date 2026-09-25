@@ -22,10 +22,9 @@ using CallArgument = std::variant<CallOperand, std::int64_t, double, bool>;
 
 /// A node that calls a kernel somebody registered, described so the kernel can be launched.
 ///
-/// The compiler compiles nothing for it. The kernel's source and how to lay its launch out were
-/// registered with it, so all the compiler adds is which values the call reads and which scalars
-/// it was given, in the order the schema declares them. That is the order the registered code
-/// expects its arguments in.
+/// The compiler builds nothing for it; the kernel came with its registration. This records which
+/// values the call reads and which scalars it was given, in schema order, which is the order the
+/// kernel takes them in.
 struct CustomCall {
   /// The operation, as a graph spells it.
   std::string op;
@@ -48,10 +47,8 @@ struct CustomCall {
 
 /// Every node the backend claims whose operation is a registered kernel, in graph order.
 ///
-/// A node whose arguments cannot be put back in order is left out, which is not a failure: it is
-/// still placed on the device, and it runs there one call at a time through the operation's own
-/// device implementation. That covers a scalar that is a list or a string, which the launch has no
-/// type for.
+/// A node with a scalar the launch has no type for, such as a list or a string, is left out. It
+/// still runs on the device, through the operation's own device implementation.
 [[nodiscard]] std::vector<CustomCall> custom_calls(const ir::Graph& graph);
 
 } // namespace tessiq::codegen

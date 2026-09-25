@@ -43,8 +43,7 @@ std::optional<ReduceOp> combiner(std::string_view canonical) {
 
 /// The product of `dims[from, to)`, or `ir::kDynamic` when one of them is not known.
 ///
-/// An empty range is 1, which is what an axis position with nothing outside it means, and is why
-/// "not known" has to be its own answer rather than a placeholder of 1.
+/// An empty range is 1, so "not known" cannot also be 1.
 std::int64_t product(const std::vector<std::int64_t>& dims, std::size_t from, std::size_t to) {
   std::int64_t total = 1;
   for (std::size_t i = from; i < to; ++i) {
@@ -94,8 +93,7 @@ Result<std::optional<ReductionKernel>> extract_reduction(const ir::Node& node) {
     return invalid_argument(node.op() + " takes one operand and produces one result");
   }
 
-  // Checked rather than assumed. A node holding a null operand is a malformed graph, and reading
-  // through it would be a crash in the compiler rather than a message about the graph.
+  // A null operand is a malformed graph; report it rather than crash.
   const ir::Value* source = node.operand(0);
   const ir::Value* target = node.result(0);
   if (source == nullptr || target == nullptr) {
@@ -141,17 +139,15 @@ Result<std::optional<ReductionKernel>> extract_reduction(const ir::Node& node) {
   // executor makes the same copy by packing, and the shape read below is that packed one.
   kernel.input = held_value(source)->name();
   kernel.output = target->name();
-  // Consecutive threads have to read consecutive addresses. With no kept axis after the reduced
-  // one, a block's threads walking the reduced axis do that; with a kept axis after it, the
-  // threads of one output are `inner` apart and it is the outputs that sit next to each other.
+  // See `ReductionShape`: block per output when the reduced axes are last, thread per output
+  // when kept axes follow them.
   kernel.shape =
       kernel.inner == 1 ? ReductionShape::kBlockPerOutput : ReductionShape::kThreadPerOutput;
   kernel.name = "tessiq_reduce_" + kernel.output;
 
   if (kernel.reduce == 0 || kernel.outer == 0 || kernel.inner == 0) {
-    // An empty reduction has a defined answer for sum and mean and no answer for max and min, and
-    // the fallback already knows which. Not worth a kernel either way. An extent that is not
-    // known is not empty: it is a number the launch will be told.
+    // An empty reduction is left to the fallback, which knows sum and mean have an answer and
+    // max and min do not. An unknown extent is not empty.
     return std::optional<ReductionKernel>{};
   }
   return std::optional<ReductionKernel>{std::move(kernel)};

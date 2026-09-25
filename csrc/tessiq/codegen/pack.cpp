@@ -15,8 +15,8 @@ namespace {
 
 /// An unsigned integer of exactly this many bytes, which is how a copy sees an element.
 ///
-/// Empty for a size no integer type has, which is what makes a dtype the rest of the compiler
-/// cannot spell still packable: only its width matters here.
+/// Empty for a size with no such type. Only the width matters, so a dtype the emitter cannot
+/// spell still packs.
 std::string_view word_type(std::size_t element_bytes) {
   switch (element_bytes) {
   case 1:
