@@ -135,7 +135,7 @@ def test_the_two_backends_agree() -> None:
     assert torch.allclose(on_cpu.relu().sum().cpu(), on_gpu.relu().sum().cpu(), atol=1e-4)
 
 
-# --- ops, which reach the host through the fallback until the kernel library exists ------------
+# --- eager ops, most of which run on the host through the fallback --------------------------
 
 
 @pytest.mark.parametrize(
@@ -259,9 +259,8 @@ VIEWS = [
 
 
 def test_a_view_shares_its_storage(device: torch.device) -> None:
-    # The whole contract of a view. Before these were registered, a view fell back to the host,
-    # which copies, so what came back was a different buffer and writing through it reached
-    # nothing. torch warns about exactly this, and the result was wrong rather than slow.
+    # A view shares its base's storage, so a write through it reaches the base. Through the
+    # fallback it would be a copy and the write would be lost.
     base = torch.zeros(4, 4, device=device)
     view = base.view(16)
     assert view.untyped_storage().data_ptr() == base.untyped_storage().data_ptr()
@@ -282,9 +281,8 @@ def test_a_movement_operation_aliases_rather_than_copies(
 def test_a_view_round_trips_through_the_host(
     device: torch.device, take: Callable[[torch.Tensor], torch.Tensor]
 ) -> None:
-    # A view starts partway into its storage, and the elements before that offset belong to the
-    # tensor it was taken from. Staging it means moving the whole storage and taking the same view
-    # of the copy, not moving from the offset.
+    # A view starts partway into its storage, so staging it moves the whole storage and takes the
+    # same view of the copy.
     host = torch.randn(4, 4)
     assert torch.equal(take(host.to(device)).cpu(), take(host))
 
@@ -301,8 +299,7 @@ def test_a_view_round_trips_through_the_host(
 def test_writing_through_a_view_reaches_the_base(
     device: torch.device, write: Callable[[torch.Tensor], object]
 ) -> None:
-    # The read-modify-write half. Writing a view touches part of a storage the rest of which
-    # belongs to something else, so the untouched part has to come back unchanged.
+    # Writing into a view must leave the rest of its storage unchanged.
     host = torch.zeros(4, 4)
     staged = host.to(device)
     write(host)
@@ -311,10 +308,9 @@ def test_writing_through_a_view_reaches_the_base(
 
 
 def test_registering_the_backend_makes_it_the_accelerator() -> None:
-    # PyTorch has one accelerator per process and registering a PrivateUse1 backend takes the
-    # title. Pinned here because it is load-bearing and invisible: the autograd engine looks for a
-    # tensor's stream among the accelerator's devices, so a CUDA backward pass in a process that
-    # has imported tessiq fails inside the engine. See docs/design_notes/0003.
+    # PyTorch has one accelerator per process, and registering a PrivateUse1 backend takes it. The
+    # autograd engine looks for a tensor's stream among the accelerator's devices, so a CUDA
+    # backward pass fails once tessiq is imported. See docs/design_notes/0003.
     current = torch.accelerator.current_accelerator()
     assert current is not None
     assert current.type == tessiq.DEVICE_NAME, current

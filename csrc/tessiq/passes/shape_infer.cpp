@@ -13,11 +13,8 @@ namespace tessiq::passes {
 
 namespace {
 
-/// True when `recorded` says everything `inferred` says, or less.
-///
-/// A recorded dimension of `?` is a claim of ignorance, so replacing it with a known size is a
-/// refinement. A recorded dimension that disagrees with a known one is a contradiction, and the
-/// two cannot both describe the same value.
+/// Whether `recorded` and `inferred` can describe the same value: the same dtype and rank, and
+/// each dimension equal or `?` on either side.
 bool refines(const ir::TensorType& recorded, const ir::TensorType& inferred) {
   if (recorded.dtype() != inferred.dtype()) {
     return false;
@@ -35,8 +32,7 @@ bool refines(const ir::TensorType& recorded, const ir::TensorType& inferred) {
   return true;
 }
 
-/// Combines what the graph recorded with what the rule derived, keeping the more precise of each
-/// dimension. A rule that cannot determine a dimension must not erase one the graph already knew.
+/// Combines the recorded and inferred types, keeping the known size of each dimension.
 ir::TensorType merge(const ir::TensorType& recorded, const ir::TensorType& inferred) {
   std::vector<std::int64_t> dims;
   dims.reserve(recorded.shape().rank());
@@ -44,8 +40,8 @@ ir::TensorType merge(const ir::TensorType& recorded, const ir::TensorType& infer
     const std::int64_t have = recorded.shape().dims()[i];
     dims.push_back(have == ir::kDynamic ? inferred.shape().dims()[i] : have);
   }
-  // The recorded layout survives. A shape rule says what an operation computes, not how the
-  // result is laid out, so inferring a shape must not quietly make a strided value contiguous.
+  // Keeps the recorded layout. Shape rules do not compute layouts, so a strided value must not
+  // become contiguous here.
   return {recorded.dtype(), ir::Shape(std::move(dims)), recorded.strides()};
 }
 
@@ -55,9 +51,8 @@ ir::TensorType merge(const ir::TensorType& recorded, const ir::TensorType& infer
 /// Postcondition: every node with a shape rule has result types consistent with its operands, and
 /// no dimension is dynamic where the rule could determine it.
 ///
-/// Ops with no rule are skipped rather than rejected. The importer records a type for every node
-/// from the tracing metadata, so an op this pass has never heard of still carries a usable type,
-/// and refusing the graph would make the pass unusable on any real model.
+/// Ops with no rule are skipped. The importer records every node's type from the trace metadata,
+/// so they already have one.
 class ShapeInference final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "shape-infer"; }

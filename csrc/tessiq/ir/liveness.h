@@ -38,9 +38,8 @@ struct LiveRange {
 
 /// Live ranges for every value in the graph, parameters first and then node results in order.
 ///
-/// Precondition: the graph verifies, so every operand is defined before it is used and every use
-/// list agrees with the operands that exist. Liveness reads use lists directly and would silently
-/// shorten a range if one were stale.
+/// Precondition: the graph verifies. Liveness reads use lists directly, and a stale one would
+/// shorten a range.
 Result<std::vector<LiveRange>> compute_liveness(const Graph& graph);
 
 } // namespace tessiq::ir

@@ -25,11 +25,10 @@ namespace tessiq::torch_backend {
 
 /// A kernel running registered elementwise operation `op` on its own, for the eager path.
 ///
-/// Built by the compiler itself rather than beside it: a one-node graph of `arity` operands of
-/// `dtype` with every extent unknown goes through the same passes and the same emitter a compiled
-/// graph does. So a call made outside `torch.compile` runs exactly the code a compiled graph would
-/// fuse, and the one kernel serves every shape, because it takes its element count at the launch.
-/// Every operand has to be the result's shape, which the caller arranges by broadcasting first.
+/// Built by running a one-node graph of `arity` operands of `dtype`, every extent unknown, through
+/// the same passes and emitter as a compiled graph. So an eager call runs the code a compiled
+/// graph would fuse, and one kernel serves every shape. Every operand has to be the result's
+/// shape, which the caller arranges by broadcasting first.
 ///
 /// Refused when `op` is not an elementwise operation the compiler knows, and when there is no
 /// kernel for `dtype`, which includes a build with no CUDA toolkit.
@@ -74,8 +73,8 @@ struct CustomOverride {
 /// How many calls of custom operation `name` on a tessiq tensor ran the reference.
 ///
 /// A call runs the reference on the CPU reference device, and on a GPU for an element type the
-/// operation was not written for. The answer is the same either way, which is why this is counted:
-/// nothing else says that a model is running the slow path.
+/// operation was not written for. The result is the same either way, so this count is the only
+/// sign that a model is on the slow path.
 [[nodiscard]] Result<std::int64_t> custom_op_fallbacks(std::string_view name);
 
 /// Compiles custom operation `name` for CUDA device `ordinal` now, rather than on its first call.
@@ -89,9 +88,8 @@ struct RegisteredOp;
 
 /// A call to a custom operation with a kernel of its own, in a compiled graph.
 ///
-/// The compiler described the call: which values it reads, where its scalars go among them, and
-/// whether its extents are known before it runs. The rest, the kernel and how to lay its launch
-/// out, comes from the operation's definition. The executor runs this like any other kernel.
+/// The compiler supplies which values the call reads and where its scalars go among them. The
+/// kernel and its launch come from the operation's definition.
 class CustomKernel final : public Kernel {
  public:
   CustomKernel(codegen::CustomCall call,

@@ -1,26 +1,23 @@
 # Operations tessiq knows about.
 #
-# One row per operation, which is the point: whether it is elementwise, how many arguments it
-# takes, what it computes and whether a kernel exists all come from the same place. Two tables
-# holding overlapping facts is how an operation gets half-added, and that has happened here once
-# already.
+# One row per operation, so whether it is elementwise, how many arguments it takes, what it
+# computes and whether a kernel exists all come from one place.
 #
 # `tools/gen_ops.py` turns this into the C++ table and into docs/op_coverage.md. Both are checked
-# in and a test asserts regenerating changes nothing, so editing the generated files by hand
-# fails rather than drifts.
+# in, and a test fails if regenerating would change them.
 #
 # Fields:
 #   name        the short spelling, used in hand-written IR
 #   aten        the spellings torch emits, which is what an imported graph carries
-#   category    elementwise | matmul. Decides what a pass may do with it, not whether it runs
+#   category    elementwise | reduction | movement | matmul | copy | convolution. Decides what a
+#               pass may do with it, not whether it runs
 #   arity       arguments including constants that arrived as attributes
 #   expression  the scalar computation, $0 and $1 for the arguments. Elementwise only
 #   kernel      whether the backend can run it. An operation without one falls back to the host
+#   dtypes      optional: the element types it runs on, such as ["f32"]. Absent means every type
 #
-# TOML rather than YAML. On 3.11 and later the parser is in the standard library, and on 3.10,
-# which this project still supports, it is tomli: the same parser under its original name, listed
-# in requirements-dev.txt and needed only to regenerate. PyYAML would be a dependency on every
-# version.
+# TOML because the parser is in the standard library from 3.11. On 3.10 it is tomli, the same
+# parser, listed in requirements-dev.txt and needed only to regenerate.
 
 [[op]]
 name = "abs"
@@ -346,17 +343,12 @@ kernel = true
 #
 # These rearrange indices and compute nothing. On a tessiq tensor they are metadata: as_strided,
 # view and _reshape_alias are registered on the device, and everything here is written in terms of
-# one of them, so the result shares its input's storage and costs about a microsecond.
+# one of them, so the result shares its input's storage. They have no expression and no generated
+# code.
 #
-# They have no expression and no generated code. What makes the backend able to run one is the
-# device registration, not a kernel, which is why the category exists rather than folding them in
-# with the elementwise rows.
-#
-# A copy is its own category. It computes nothing, which makes it look like a movement operation,
-# and it is not one: a movement operation hands back a different view of the same storage, while a
-# copy costs a pass over the data to produce storage of its own. Clustering turns on that
-# difference. A unit holding nothing but views is not worth moving to a device, because it would
-# arrive, take a different view, and go back. A unit holding a copy is, because the copy is work.
+# A copy is its own category. A movement operation returns a view of the same storage, while a copy
+# makes a pass over the data into storage of its own. Clustering leaves a unit of nothing but views
+# on the host, and places a unit with a copy in it.
 #
 # `aten::clone` is registered against the dispatch key, over a kernel that steps through whatever
 # layout it is handed, so there is nothing to generate for the row below.
@@ -426,16 +418,14 @@ kernel = true
 
 # --- matmul -------------------------------------------------------------------------------------
 
-# Reads positions it is not writing, so it can never join an elementwise loop however many kernels
-# it eventually has.
+# Reads positions other than the one it writes, so it never joins an elementwise loop.
 [[op]]
 name = "mm"
 aten = ["aten.mm.default"]
 category = "matmul"
 arity = 2
 kernel = true
-# The cuBLAS call is float32 only for now. Any other type is left on the host rather than claimed
-# and then refused when it runs.
+# cuBLAS is called for float32 only; other types stay on the host.
 dtypes = ["f32"]
 
 # The form nn.Linear produces: a bias row added to every row of the product. Its weight arrives
@@ -463,13 +453,13 @@ category = "copy"
 arity = 1
 kernel = true
 
-# Convolution is a binding, the way a matrix multiply is. cuDNN chooses among several algorithms
-# by the shapes and the card, and that choice is the reason to call it rather than write one.
+# A cuDNN call, the way a matmul is a cuBLAS one. cuDNN picks the algorithm for the shapes and the
+# card.
 [[op]]
 name = "convolution"
 aten = ["aten.convolution.default"]
 category = "convolution"
 arity = 3
 kernel = true
-# The cuDNN plan is float32 only for now, for the same reason as the matmuls.
+# float32 only, like the matmuls.
 dtypes = ["f32"]

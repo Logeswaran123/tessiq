@@ -28,29 +28,12 @@ const std::int64_t* cluster_of(const ir::Node* node) {
   return attribute == nullptr ? nullptr : std::get_if<std::int64_t>(attribute);
 }
 
-/// Whether the value `producer` computes may be consumed in a register by its single reader,
-/// instead of being written to memory and read back.
+/// Whether a loop over `node`'s result can read every one of its operands.
 ///
-/// Every condition here is a reason the value would have to be materialised anyway:
-///
-///  - Both ends must be elementwise, or they do not agree on which positions they touch.
-///  - Both must be in the same cluster, since a cluster is what becomes one unit of execution.
-///  - The types must match exactly. Broadcasting means the two operations write different numbers
-///    of elements, so one loop cannot serve both.
-///  - The producer must have exactly one reader. Two readers means fusing into either one leaves
-///    the other needing the value from memory, so it has to be written out regardless.
-///  - The producer's result must not be returned by the graph, which is the same condition: a
-///    caller reading it needs it in memory.
-/// Whether a loop over `node`'s result can reach every one of its operands.
-///
-/// An operand the same shape as the result is read at the loop's own index, which is what almost
-/// all of them are. One with fewer elements is read somewhere else, and the emitter works out
-/// where from the shapes, so the question here is whether such an expression exists rather than
-/// whether the shapes match. `x - mean` with one mean per row is the common case and arrives from
-/// every softmax and layer norm.
-///
-/// It asks the code generator rather than deciding for itself, because a group this pass allows
-/// and the emitter then declines is a group that silently does not become a kernel.
+/// Most operands have the result's shape and are read at the loop index. A smaller one, such as
+/// the per-row mean in `x - mean` from softmax and layer norm, is read at an index the emitter
+/// derives from the shapes. This asks the emitter through `operand_read` instead of repeating its
+/// rules, because a group the emitter then refused would silently get no kernel.
 bool every_operand_is_reachable(const ir::Node* node) {
   const ir::TensorType& result = node->result(0)->type();
   for (const ir::Value* operand : node->operands()) {
@@ -61,6 +44,17 @@ bool every_operand_is_reachable(const ir::Node* node) {
   return true;
 }
 
+/// Whether `producer`'s result can stay in a register for `consumer` instead of going through
+/// memory. Both must:
+///
+///  - be elementwise with one result, so they cover the same positions;
+///  - have every operand reachable from the loop;
+///  - be in the same cluster, since a cluster is one unit of execution;
+///  - have the same result type. With broadcasting they would write different numbers of
+///    elements, and one loop cannot serve both.
+///
+/// The value must also have exactly one reader and not be a graph result. Anything else reading it
+/// needs it in memory, so it would be written out regardless.
 bool can_fuse(const ir::Graph& graph, const ir::Node* producer, const ir::Node* consumer) {
   if (!is_elementwise(producer->op()) || !is_elementwise(consumer->op())) {
     return false;
@@ -90,11 +84,9 @@ bool can_fuse(const ir::Graph& graph, const ir::Node* producer, const ir::Node* 
   return std::find(results.begin(), results.end(), value) == results.end();
 }
 
-/// Whether a node the group could not grow around is still worth a kernel by itself.
-///
-/// Anything the emitter can write a loop for, which is an elementwise operation the backend
-/// claims and whose operands it can reach. The alternative for such a node is the fallback, which
-/// moves its operands to the host and its result back.
+/// Whether a node left in a group of one should still get a kernel: an elementwise node in a
+/// cluster whose operands the loop can reach. Otherwise it runs through the fallback, which copies
+/// its operands to the host and its result back.
 bool runs_alone_as_a_kernel(const ir::Node* node) {
   if (!is_elementwise(node->op()) || node->result_count() != 1) {
     return false;
@@ -108,16 +100,13 @@ bool runs_alone_as_a_kernel(const ir::Node* node) {
 /// Groups chains of elementwise operations that can run as one kernel.
 ///
 /// Precondition: `cluster` has run, so the nodes the backend claims carry `tessiq.cluster`.
-/// Postcondition: every node that becomes a kernel carries `tessiq.fusion`, including one that
-/// fused with nothing. A group of one is still a kernel, because the alternative is not "a kernel
-/// per operation" but no kernel: a node without the attribute reaches the fallback.
+/// Postcondition: every node that becomes a kernel carries `tessiq.fusion`, including a group of
+/// one. A node without it has no kernel and runs through the fallback.
 ///
-/// Legality is argued per condition in `can_fuse`. The structural part is worth stating separately:
-/// unlike clustering, this cannot create a cycle, so it needs no check for one. Fusing happens only
-/// along an edge whose producer has exactly one reader, so the only edge leaving the producer goes
-/// to the consumer. A cycle through the merged pair would need an edge out of it and back in, and
-/// the only way back in is through an operand of the producer, which is defined before it. That is
-/// why this pass is a union-find and `cluster` is not.
+/// The conditions on each edge are in `can_fuse`. Unlike clustering, merging cannot create a
+/// cycle, so a union-find is enough. Every node in a group but the last has its only reader inside
+/// the group, so values leave a group only from its last node, and every node in the group reaches
+/// that one. A path from it back into the group would be a cycle in the original graph.
 class ElementwiseFusion final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "fuse-elementwise"; }
@@ -135,9 +124,7 @@ class ElementwiseFusion final : public Pass {
       position.emplace(nodes[i], i);
     }
 
-    // Groups are indexed by position rather than keyed by node pointer. Relabelling then walks a
-    // vector in a fixed order, so the same graph fuses the same way on every run, which iterating
-    // a map of pointers would not guarantee.
+    // Indexed by position rather than keyed by pointer, so the numbering is the same every run.
     std::vector<std::size_t> group(nodes.size());
     for (std::size_t i = 0; i < nodes.size(); ++i) {
       group[i] = i;
@@ -162,8 +149,8 @@ class ElementwiseFusion final : public Pass {
   }
 
  private:
-  /// Writes `tessiq.fusion` on every node in a group of two or more, numbered from zero in the
-  /// order the groups first appear.
+  /// Writes `tessiq.fusion` on every node in a group of two or more, and on a node alone that
+  /// `runs_alone_as_a_kernel`. Groups are numbered from zero in the order they first appear.
   static Result<bool> annotate(const std::vector<ir::Node*>& nodes,
                                const std::vector<std::size_t>& group) {
     std::vector<std::size_t> sizes(nodes.size(), 0);
@@ -174,10 +161,6 @@ class ElementwiseFusion final : public Pass {
     bool changed = false;
     std::unordered_map<std::size_t, std::int64_t> numbering;
     for (std::size_t i = 0; i < nodes.size(); ++i) {
-      // A group of one still gets a kernel. It used to be skipped, on the reasoning that not
-      // fusing already means a kernel per operation, and that was wrong: a node with no fusion
-      // group has no kernel at all, so it reached the fallback and cost a round trip. A lone
-      // relu on the device was a transfer to the host and back.
       if (sizes[group[i]] < 2 && !runs_alone_as_a_kernel(nodes[i])) {
         continue;
       }

@@ -14,10 +14,8 @@ namespace tessiq::codegen {
 
 /// Turns a fused kernel into source for one target.
 ///
-/// The interface exists so that fusion produces a description and something else decides what code
-/// that becomes. Keeping those apart is what lets a second target be a second class rather than a
-/// second path through the same function, and it is what makes two targets comparable: point them
-/// at the same `FusedKernel` and the only difference is the code.
+/// Fusion produces a description and an emitter decides what code it becomes, so a second target
+/// is a second class.
 ///
 /// Thread-compatible. An emitter holds no state between calls, so one instance may be shared.
 class Emitter {
@@ -42,8 +40,7 @@ class Emitter {
   /// Source text for `kernel`. Only called when `supports` is true.
   [[nodiscard]] virtual Result<std::string> emit(const FusedKernel& kernel) const = 0;
 
-  /// The source for one reduction. A reduction is its own kernel rather than a step in a fused
-  /// loop, so it is a separate call rather than another kind of step.
+  /// Source text for a reduction, which is its own kernel rather than a step in a fused loop.
   [[nodiscard]] virtual Result<std::string> emit(const ReductionKernel& kernel) const = 0;
 
  protected:

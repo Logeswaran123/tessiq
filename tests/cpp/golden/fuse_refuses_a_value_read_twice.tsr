@@ -1,6 +1,5 @@
 // RUN: mark-supported,cluster,fuse-elementwise
-// %m is read by two operations. Fusing it into either still leaves the other needing it from
-// memory, so it has to be written out regardless and stays out of the group.
+// %m is read by two operations, so it has to be written to memory either way and is not fused.
 graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {
   %m = aten.mul.Tensor(%a, %b) : f32[8]
   %x = aten.relu.default(%m) : f32[8]

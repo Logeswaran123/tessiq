@@ -24,23 +24,20 @@ struct GemmBuffers {
 
 /// Writes `bytes` zero bytes at `data` on device `ordinal`, queued on `stream`.
 ///
-/// What a plain matmul accumulates into. A device memset rather than a tensor operation, because
-/// zeroing a tessiq tensor through torch reaches the fallback and costs a host round trip. It goes
-/// on the same stream as the multiply that reads it, which is what orders the two.
+/// Clears a plain matmul's output before the multiply adds into it. A device memset, since
+/// zeroing through torch would reach the fallback. Queued on the multiply's stream, which orders
+/// the two.
 Result<void> zero_fill(void* data, std::size_t bytes, int ordinal, Stream stream);
 
 /// Runs `kernel` at `extents` on device `ordinal`, writing into `buffers.output`.
 ///
-/// The extents are passed rather than read off `kernel`, because a description built for a graph
-/// traced at more than one shape does not hold them. The caller works them out from the tensors
-/// it was handed; `kernel` still says which operand is transposed and what the element type is,
-/// neither of which changes with the shape.
+/// The extents are passed separately because a description of a graph traced at more than one
+/// shape does not hold them. `kernel` supplies the transpose flags and the element type.
 ///
-/// The output must already hold what the multiply is added to: zero for a plain matmul, the bias
-/// broadcast over every row for an addmm. BLAS scales the destination by beta and adds, which is
-/// the only way it takes an accumulator, so filling it is the caller's job.
+/// The output must already hold what the product is added to: zero for a plain matmul, the bias
+/// broadcast over every row for an addmm.
 ///
-/// Queued on `stream`, and asynchronous like a kernel launch. Nothing here synchronises.
+/// Asynchronous on `stream`.
 Result<void> launch_gemm(const GemmKernel& kernel,
                          const GemmExtents& extents,
                          const GemmBuffers& buffers,

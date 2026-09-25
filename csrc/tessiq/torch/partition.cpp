@@ -27,23 +27,19 @@ namespace {
 
 constexpr std::string_view kLogModule = "partition";
 
-/// The pipeline that decides what the backend takes.
-///
-/// Named here rather than passed in: what the backend can run is a property of the backend, not
-/// something a caller should be choosing per graph.
-// layout-assign sits after mark-supported because it only cares about what the backend claims,
-// and before cluster because a materialisation it inserts is a node clustering has to see.
+/// The passes that decide what the backend takes. Fixed here, since that is a property of the
+/// backend rather than a per-graph choice. layout-assign follows mark-supported because it acts
+/// only on claimed nodes, and precedes cluster so the copies it inserts are clustered around.
 constexpr std::string_view kPipeline = "mark-supported,layout-assign,cluster,fuse-elementwise";
 
-/// Imports and runs the pipeline. Shared by both entry points so they cannot disagree about what
-/// the backend claims.
+/// Imports and runs the pipeline. Shared by both entry points so they agree on what the backend
+/// claims.
 Result<std::unique_ptr<ir::Graph>> prepare(const pybind11::object& graph_module,
                                            std::string name,
                                            const std::vector<std::string>& rewrites) {
   TESSIQ_ASSIGN_OR_RETURN(auto graph, import_fx(graph_module, std::move(name)));
 
-  // A rewrite runs first, so the passes that decide what the backend claims see the operation it
-  // put in, and never the ones it took out.
+  // Rewrites run first, so the later passes see the operation a rewrite put in.
   std::string pipeline;
   for (const std::string& rewrite : rewrites) {
     pipeline += rewrite;
@@ -58,8 +54,7 @@ Result<std::unique_ptr<ir::Graph>> prepare(const pybind11::object& graph_module,
 } // namespace
 
 std::string default_pipeline() {
-  // A custom operation that replaces a torch one is swapped in first, so that deciding what the
-  // backend claims, and everything after it, sees the custom operation.
+  // Overrides run before mark-supported, so it sees the custom operation.
   std::string pipeline;
   for (const std::string& pass : override_passes()) {
     pipeline += pass;
@@ -85,8 +80,7 @@ Result<PartitionResult> partition_fx(const pybind11::object& graph_module,
     if (cluster == nullptr) {
       return internal_error("tessiq.cluster is not an integer on '" + node->op() + "'");
     }
-    // One result per node today. When an op produces several, the name of the first still
-    // identifies the node, which is what the caller keys on.
+    // Keyed by the first result's name.
     if (node->result_count() > 0) {
       result.clusters.emplace(node->result(0)->name(), static_cast<int>(*cluster));
     }

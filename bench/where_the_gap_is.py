@@ -3,14 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Why a compiled call is slower than eager CUDA, split into parts that can be acted on.
 
-`where_the_time_goes.py` reports the host's view of one call: how much went on kernels, transfers
-and steps with no kernel. That view has a known bias, because the clock is the host's and a launch
-returns before the work does.
-
-This adds the other half. Each kernel is launched many times between one pair of stream marks, so
-the cost of marking divides away and what is left is what the generated code costs the device with
-nothing in its way. Put next to the call's own duration, that says how much of the gap is the code
-we generate and how much is everything around it.
+`where_the_time_goes.py` reports the host's view of one call, in which a launch returns before
+the work does. This adds the device's view: each kernel is launched many times between one pair of
+stream marks, which gives what the generated code costs the device. Next to the call's duration,
+that splits the gap into the generated code and everything around it.
 
 Run with: python bench/where_the_gap_is.py
 """
@@ -77,16 +73,14 @@ def main() -> None:
     ]:
         print(f"  {name:<16}{median_ms(run, sync=sync):6.2f} ms")
 
-    # What the kernels cost with nothing in the way. Compiled from the same graph the call above
-    # runs, so these are the same kernels rather than a reconstruction of them.
+    # What the kernels cost on an idle device, compiled from the same graph as the call above.
     recipe = tessiq.build_recipe(tessiq.capture(block, example), tessiq.gpu, use_cache=False)
     costs = kernel_costs(recipe)
     device_total = sum(cost.microseconds for cost in costs)
 
     call = median_ms(lambda: ours(example)) * 1000
 
-    # Warmed up again first, because measuring the kernels above left the device busy and a cold
-    # call profiles as a slow one.
+    # Warmed up again, since a cold call profiles as a slow one.
     with torch.no_grad():
         for _ in range(10):
             ours(example)
@@ -101,15 +95,13 @@ def main() -> None:
         counts[event.category] += 1
     measured = sum(host.values())
 
-    # The two numbers below are not parts of one whole. The call's duration is host time from end
-    # to end; the device figure happens inside it, concurrently. A device busy for well under the
-    # call spent the difference waiting for the host to feed it.
+    # Not parts of one whole: the device time overlaps the call's host time. A device busy for well
+    # under the call spent the difference waiting for work.
     print(f"\nthe call takes      {call:7.0f} us on the host")
     print(f"the device is busy  {device_total:7.0f} us of that, across {len(costs)} kernels")
     print(f"so the device idles {100 * (1 - device_total / call):6.0f}% of the call")
 
-    # Shares rather than microseconds. Profiling inflates the call, so the absolute numbers below
-    # describe the profiled call and not the one above; what carries across is the proportion.
+    # Shares rather than microseconds, because profiling inflates the call.
     print(f"\nwhat the host spends it on, from a profiled call of {profiled:.0f} us")
     for category, micros in host.most_common():
         print(

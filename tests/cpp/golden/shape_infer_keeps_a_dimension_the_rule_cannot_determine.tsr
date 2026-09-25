@@ -1,6 +1,6 @@
 // RUN: shape-infer
-// The operand's batch size is unknown, so the rule cannot determine the result's. The graph
-// already knew it, and a rule that cannot tell must not erase what is there.
+// The operand's batch size is unknown, so the rule cannot determine the result's. The recorded
+// size is kept.
 graph @g(%a: f32[?,8]) -> f32[4,8] {
   %r = relu(%a) : f32[4,8]
   return %r

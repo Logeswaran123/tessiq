@@ -3,9 +3,8 @@
 //
 // Eager kernels, registered against the dispatch key from backend.cpp.
 //
-// These exist for two reasons: they are the fallback for anything the compiler declines to take,
-// and they are what makes tensors usable at all -- allocation, transfers and enough arithmetic to
-// check the plumbing. Breadth arrives with the op generator (PHASES.md, phase 7).
+// They make tessiq tensors usable outside a compiled graph (allocation, transfers, views) and
+// route everything else through the host fallback.
 
 #include <ATen/EmptyTensor.h>
 #include <ATen/core/Tensor.h>
@@ -41,8 +40,8 @@ constexpr c10::DispatchKey kDispatchKey = c10::DispatchKey::PrivateUse1;
 
 /// The device index a factory op should allocate on.
 ///
-/// An absent or negative index means "wherever this thread already is", which is what PyTorch
-/// passes when the caller did not name a device.
+/// An absent or negative index, which PyTorch passes when the caller named no index, means the
+/// current device.
 int index_for(const std::optional<at::Device>& device) {
   if (!device.has_value() || device->index() < 0) {
     return current_device_index();
@@ -84,9 +83,8 @@ at::Tensor empty_strided(at::IntArrayRef size,
 /// True when two tensors have byte-identical layouts, so one raw copy of the storage moves the
 /// data correctly whether or not either is contiguous.
 ///
-/// This is the case that matters: `.to(device)` and `.cpu()` allocate the destination with the
-/// source's own strides, so transferring a transposed or sliced tensor arrives here rather than
-/// in the staging path.
+/// The common case: `.to(device)` and `.cpu()` allocate the destination with the source's strides,
+/// so a transposed or sliced tensor is copied directly rather than staged.
 bool same_layout(const at::Tensor& a, const at::Tensor& b) {
   return a.scalar_type() == b.scalar_type() && a.sizes() == b.sizes() &&
          a.strides() == b.strides() && a.storage_offset() == b.storage_offset() &&
@@ -115,10 +113,8 @@ void copy_storage_from_host(Device& device, const void* src, const at::Tensor& d
 
 /// A host tensor holding a whole storage's worth of elements, uninitialised.
 ///
-/// Sized from the storage rather than from the tensor, because a view starts partway into its
-/// storage and the elements before that offset belong to whatever it was taken from. Copying only
-/// from the offset would put the data at the wrong place in the buffer, and every stride would
-/// then read the wrong element.
+/// Sized from the storage rather than the tensor, so a view's storage offset and strides still
+/// address the right elements.
 at::Tensor host_buffer_for(const at::Tensor& self) {
   const std::size_t bytes = self.storage().nbytes();
   const auto width = static_cast<std::size_t>(self.element_size());
@@ -142,9 +138,8 @@ at::Tensor to_host(const at::Tensor& self) {
 void from_host(const at::Tensor& host_src, const at::Tensor& dst) {
   at::Tensor buffer = host_buffer_for(dst);
 
-  // Read, modify, write. The destination may be a view, in which case the rest of its storage
-  // belongs to another tensor and has to come back unchanged; writing only the view's own
-  // elements is not something one storage-sized transfer can do.
+  // Read, modify, write: when the destination is a view, the rest of its storage belongs to
+  // another tensor and must come back unchanged.
   if (dst.storage_offset() != 0 || !dst.is_contiguous() || buffer.numel() != dst.numel()) {
     copy_storage_to_host(backing_device(dst), dst, buffer.storage().mutable_data());
   }
@@ -156,10 +151,8 @@ void from_host(const at::Tensor& host_src, const at::Tensor& dst) {
 
 /// Backs `.to()` in both directions, and copies between tessiq devices.
 ///
-/// Layout and dtype changes are done on the host with PyTorch's own kernels. Reimplementing
-/// striding and type promotion here would mean maintaining a second copy of those rules, and the
-/// second copy is always the wrong one. A device-side cast and a strided copy kernel take over
-/// once the kernel library exists.
+/// Matching layouts copy the storage directly. Anything else is converted on the host with
+/// PyTorch's own kernels rather than a second copy of its striding and type promotion rules.
 at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blocking) {
   TORCH_CHECK(self.sizes() == dst.sizes(),
               "tessiq copy requires matching shapes, got ",
@@ -176,9 +169,8 @@ at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blo
       src_on_device && dst_on_device && self.device().index() != dst.device().index();
 
   if (across_backends) {
-    // Two tessiq devices with no shared address space. cudaMemcpyDeviceToDevice cannot reach
-    // across them and the CPU reference is not addressable from a GPU at all, so the bytes go
-    // through the host. A peer-to-peer path would belong with the kernels, not here.
+    // Two tessiq devices with no shared address space (the CPU reference is not addressable from
+    // a GPU at all), so the bytes go through the host.
     from_host(to_host(self), dst);
   } else if (same_layout(self, dst)) {
     Device& device = src_on_device ? backing_device(self) : backing_device(dst);
@@ -237,13 +229,11 @@ void grow_storage(at::TensorImpl* impl, std::size_t new_bytes) {
   storage.set_nbytes(new_bytes);
 }
 
-/// Native resize_, which the CPU fallback depends on.
+/// Native resize_, which the CPU fallback depends on. Through the fallback, resizing a tessiq
+/// tensor would copy back by calling resize_ again, and recurse.
 ///
-/// Left to the fallback, resizing a tessiq tensor moves it to the host, resizes it there, and
-/// copies back by calling resize_ again. That recursion crashed rather than erroring, which is
-/// why this one is native.
-/// The schema returns Tensor(a!) -- the same tensor, aliased -- so the return type has to be a
-/// const reference to the parameter.
+/// The schema returns Tensor(a!), the same tensor aliased, so this returns a const reference to
+/// the parameter.
 const at::Tensor& resize(const at::Tensor& self,
                          at::IntArrayRef size,
                          std::optional<at::MemoryFormat> memory_format) {
@@ -258,16 +248,14 @@ const at::Tensor& resize(const at::Tensor& self,
                 "tessiq resize_ does not accept MemoryFormat::Preserve");
     impl->empty_tensor_restride(*memory_format);
   }
-  // Returning the parameter by const reference can dangle when the caller passed a temporary.
-  // Here the dispatcher owns the tensor and outlives the call, and the schema requires it.
+  // The dispatcher owns the tensor, so the reference outlives the call.
   // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
   return self;
 }
 
 /// Copies into `dst`, resizing it to match `self` first.
 ///
-/// The CPU fallback calls this to bring results back, so without it every fallback op fails at
-/// the point of returning rather than at the point of dispatch.
+/// The CPU fallback calls this to bring results back.
 at::Tensor copy_from_and_resize(const at::Tensor& self, const at::Tensor& dst) {
   if (dst.sizes() != self.sizes()) {
     resize(dst, self.sizes(), std::nullopt);
@@ -275,16 +263,12 @@ at::Tensor copy_from_and_resize(const at::Tensor& self, const at::Tensor& dst) {
   return copy_from(self, dst, /*non_blocking=*/false);
 }
 
-/// Runs an unimplemented op by moving its tensors to the host, calling PyTorch's own kernel, and
-/// moving results back.
+/// Runs an op with no tessiq kernel by moving its tensors to the host, calling PyTorch's own
+/// kernel, and moving the results back.
 ///
-/// This is what makes the backend usable before the kernel library exists, and it stays useful
-/// afterwards: no backend implements all two thousand ATen ops, so there is always a tail that has
-/// to land somewhere. It is slow by construction -- two transfers per op -- which is the point.
-/// Anything hot shows up immediately in a profile as fallback traffic.
-///
-/// The compiler path treats the same question as partitioning: ops without a
-/// kernel are cut out of the graph and left on the host.
+/// No backend implements every ATen op, so there is always a tail that lands here. Each call costs
+/// a transfer each way, so a hot op stands out in a profile. In a compiled graph, partitioning
+/// leaves such ops on the host instead.
 void cpu_fallback(const c10::OperatorHandle& op, torch::jit::Stack* stack) {
   TESSIQ_LOG(kDebug, kLogModule) << "cpu fallback for " << op.schema().operator_name().name;
   at::native::cpu_fallback(op, stack);
@@ -292,14 +276,9 @@ void cpu_fallback(const c10::OperatorHandle& op, torch::jit::Stack* stack) {
 
 /// `clone`, and with it `.contiguous()`, which torch routes through the same operation.
 ///
-/// This is the one operation whose fallback is pure waste. Everything else that reaches the host
-/// does so because there is no kernel for the arithmetic. A clone has no arithmetic: it reads a
-/// view and writes it packed, which the device can do to itself. Sending it across costs the
-/// whole tensor each way to produce a rearrangement of bytes that never had to leave.
-///
-/// Only the packed result is handled here. `preserve_format` on a view asks for the layout torch
-/// would suggest, which is not always the packed one, and guessing wrong would return a tensor
-/// whose strides lie about its contents.
+/// A clone does no arithmetic, so the device packs the view itself instead of sending it through
+/// the fallback. Only a packed result is handled here. `preserve_format` on a non-contiguous view
+/// may ask for another layout, and that goes to the fallback.
 at::Tensor clone(const at::Tensor& self, std::optional<at::MemoryFormat> memory_format) {
   const at::MemoryFormat format = memory_format.value_or(at::MemoryFormat::Preserve);
   const bool packed_result = format == at::MemoryFormat::Contiguous ||
@@ -318,15 +297,9 @@ at::Tensor clone(const at::Tensor& self, std::optional<at::MemoryFormat> memory_
 
 /// The convolution every backend other than CPU and CUDA is routed to.
 ///
-/// PyTorch sends `aten::convolution` on an unfamiliar device to this one rather than to the
-/// catch-all fallback, and the fallback cannot help anyway: it would move the tensors to the host
-/// and call this same operation there, where it does not exist either. So a convolution on a
-/// tessiq tensor raised, and nothing noticed until the compiler started placing convolutions on a
-/// device, including the host reference, which has no cuDNN to run them.
-///
-/// This is the reference implementation, not the fast one. It computes on the host through the
-/// ordinary CPU convolution and hands the result back. The fast one is the cuDNN plan the compiler
-/// builds; this is what runs when there is no plan, and it is correct.
+/// The catch-all fallback cannot handle it: it would call this same operation on the host, where
+/// it does not exist. So this runs the ordinary CPU convolution on host copies and copies the
+/// result back. The fast path is the cuDNN plan the compiler builds.
 at::Tensor convolution_overrideable(const at::Tensor& input,
                                     const at::Tensor& weight,
                                     const std::optional<at::Tensor>& bias,
@@ -363,18 +336,10 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("clone", &clone);
   m.impl("convolution_overrideable", &convolution_overrideable);
 
-  // A view operation returns a tensor sharing its input's storage. The fallback cannot do that:
-  // it copies to the host, runs there, and copies back, so what comes back is a different buffer.
-  // torch warns about it, and the result is wrong rather than slow, because writing through the
-  // view does not reach the tensor it was taken from.
-  //
-  // These three are the whole set that has to be here. Everything else that rearranges indices,
-  // permute and transpose and squeeze and the rest, is written in terms of as_strided, and gets
-  // it right once as_strided does. They need explicit entries only because the catch-all
-  // fallback above shadows the implementations they would otherwise reach.
-  //
-  // The implementations are ATen's own. All three change sizes, strides and an offset and touch
-  // no data, so there is nothing device-specific for tessiq to supply.
+  // A view has to share its input's storage, and the fallback would return a copy, so writes
+  // through the view would be lost. Other view operations (permute, transpose, squeeze, ...) are
+  // built on as_strided, so these three are enough. They need entries only because the catch-all
+  // fallback above shadows them. ATen's implementations touch no data, so they work as they are.
   m.impl("as_strided", at::native::as_strided_tensorimpl);
   m.impl("view", at::native::view);
   m.impl("_reshape_alias", at::native::_reshape_alias);

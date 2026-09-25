@@ -40,9 +40,8 @@ constexpr std::string_view kLogModule = "fused";
 
 /// The number a broadcast's index expression divides or wraps by, worked out from the buffers.
 ///
-/// Both kinds are a relation between two element counts, which is why the launch can supply them
-/// without knowing a single extent: an operand read in runs holds one element per run, and one
-/// read over and over holds exactly a cycle.
+/// Both follow from the element counts alone: an operand read in runs holds one element per run,
+/// and one read in cycles holds exactly one cycle.
 std::int64_t
 divisor_for(codegen::OperandRead::Kind kind, std::int64_t operand, std::int64_t count) {
   return kind == codegen::OperandRead::Kind::kRepeated ? count / operand : operand;
@@ -69,9 +68,8 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
 
   /// Whether operand `i` of this many elements can be read for a result of `count`.
   ///
-  /// An operand read at `i` has to match exactly. One that broadcasts has to divide the result,
-  /// because the index expression steps through it in whole runs or whole cycles and a remainder
-  /// would send the last of them past the end.
+  /// An operand read at `i` has to match exactly. One that broadcasts has to divide the result
+  /// evenly, or the last run or cycle would read past the end.
   const auto reaches = [&reads](std::size_t i, std::int64_t operand, std::int64_t count) {
     if (i >= reads.size() || reads[i].kind == codegen::OperandRead::Kind::kSameShape) {
       return operand == count;
@@ -88,16 +86,12 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
                             std::to_string(tensors.size()));
   }
 
-  // A kernel compiled for a graph whose extents were not known takes its count from the output it
-  // is handed. The check below is then the only thing standing between a wrong size and a kernel
-  // reading past a buffer, because the IR records every unknown extent as the same `?` and cannot
-  // tell two of them apart. Every input has to match exactly: a broadcast operand reads a
-  // position worked out from the extents, which is why those groups are not compiled at all.
+  // A dynamic kernel takes its count from the output it is handed. The IR cannot tell two `?`
+  // extents apart, so the checks below are what keep it from reading past a buffer.
   const bool dynamic = has_dynamic_extent();
   const std::int64_t count = dynamic ? out.numel() : parts_.elements;
   if (count == 0) {
-    // An extent that turned out to be zero, which only a dynamic kernel meets: a group of no
-    // elements is never compiled in the first place. There is nothing to launch.
+    // Only a dynamic kernel meets this; an empty static group is never compiled.
     return ok();
   }
 
@@ -105,15 +99,12 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
   buffers.reserve(tensors.size() + 1);
   for (std::size_t i = 0; i < tensors.size(); ++i) {
     const at::Tensor& tensor = tensors[i];
-    // The kernel walks one index across every buffer, which is only the same elements when the
-    // layouts agree, so a non-contiguous input would be read in the wrong order silently.
+    // The kernel indexes every buffer as packed.
     if (!tensor.is_contiguous()) {
       return invalid_argument("fusion group " + group + " input " + std::to_string(i) +
                               " is not contiguous");
     }
-    // Not every input has as many elements as the result. One that broadcasts, such as the
-    // per-row mean a layer norm subtracts, has fewer, and the kernel was written knowing where to
-    // read it. More than the result is always wrong.
+    // A broadcast input has fewer elements than the result; none may have more.
     const bool fits = dynamic ? reaches(i, tensor.numel(), count) : tensor.numel() <= count;
     if (!fits || tensor.numel() <= 0) {
       return invalid_argument("fusion group " + group + " was given an input of " +
@@ -132,8 +123,7 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
     return parts_.program->launch(buffers, count, stream);
   }
 
-  // The element count, then one divisor per operand that needs one, in operand order. That is
-  // the order the emitter wrote the parameters in.
+  // The count, then one divisor per operand that needs one, in the emitter's parameter order.
   std::vector<std::int64_t> scalars{count};
   for (std::size_t i = 0; i < tensors.size(); ++i) {
     if (i < reads.size() && !reads[i].is_known()) {
@@ -159,8 +149,8 @@ std::int64_t ReductionKernel::blocks() const {
 
 /// The three extents this launch walks, taken from the tensor it was handed.
 ///
-/// The axes folded are the same on every call; only how many elements they hold changes. So the
-/// split is redone here rather than carried, and checked against what the description knew.
+/// The reduced axes are fixed; only their extents change. Checked against what the description
+/// knew.
 Result<codegen::ReductionExtents> ReductionKernel::extents_for(const at::Tensor& in) const {
   if (std::cmp_not_equal(in.dim(), parts_.rank)) {
     return invalid_argument("reduction " + parts_.output + " was compiled for rank " +
@@ -174,9 +164,7 @@ Result<codegen::ReductionExtents> ReductionKernel::extents_for(const at::Tensor&
     return invalid_argument("reduction " + parts_.output + " was handed a shape it cannot walk");
   }
 
-  // Known extents are still checked. A description that disagrees with the tensor means the
-  // compiler decided something about a shape that the tensor does not have, and the kernel would
-  // read past the buffer rather than say so.
+  // Known extents are checked too; a mismatch would read past the buffer.
   const std::array<std::pair<std::int64_t, std::int64_t>, 3> pairs{
       {{parts_.outer, found.outer}, {parts_.reduce, found.reduce}, {parts_.inner, found.inner}}};
   for (const auto& [described, actual] : pairs) {
@@ -193,8 +181,7 @@ ReductionKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
   if (tensors.size() != 1) {
     return invalid_argument("reduction " + parts_.output + " reads one tensor");
   }
-  // The kept axes in order, which is what the reduction writes. Whether the folded axes stay as
-  // ones is the graph's business: the node's own type says so, and a keepdim reshape follows.
+  // The kept axes in order, with the reduced ones as 1 when `keeps_dims`.
   std::vector<std::int64_t> kept;
   const at::Tensor& in = tensors.front();
   for (std::size_t axis = 0; axis < parts_.rank; ++axis) {
@@ -222,8 +209,7 @@ Result<void> ReductionKernel::launch(const std::vector<at::Tensor>& tensors,
   TESSIQ_ASSIGN_OR_RETURN(const codegen::ReductionExtents extents, extents_for(in));
   const std::int64_t reads = extents.elements();
   const std::int64_t writes = extents.outputs();
-  // The kernel indexes both buffers arithmetically from their first element, so a layout other
-  // than contiguous would have it read and write the wrong positions without failing.
+  // The kernel indexes both buffers as packed.
   if (!in.is_contiguous() || in.numel() != reads) {
     return invalid_argument("reduction " + parts_.output + " expects " + std::to_string(reads) +
                             " contiguous input elements, got " + std::to_string(in.numel()));
@@ -242,23 +228,20 @@ Result<void> ReductionKernel::launch(const std::vector<at::Tensor>& tensors,
 
 /// The step between rows of `tensor` as stored, which BLAS calls the leading dimension.
 ///
-/// Which of the two strides that is depends on how the library was told to read the matrix, and
-/// that was settled when the description was built: a transposed operand is the same bytes read
-/// the other way round, so its rows are the stored columns.
+/// For a transposed operand the rows BLAS reads are the stored columns, so the other stride.
 std::int64_t leading_of(const at::Tensor& tensor, bool transposed) {
   const auto rank = tensor.dim();
   const std::int64_t rows = tensor.size(rank - 2);
   const std::int64_t columns = tensor.size(rank - 1);
-  // An axis of extent one has a meaningless step: there is no second element along it, so torch
-  // is free to report anything and often reports one. The packed value is what BLAS needs, and
-  // it is the extent of the other axis.
+  // The stride of an axis of extent 1 is arbitrary (torch often reports 1). BLAS needs the packed
+  // value, which is the other axis's extent.
   if (transposed) {
     return columns == 1 ? rows : tensor.stride(rank - 1);
   }
   return rows == 1 ? columns : tensor.stride(rank - 2);
 }
 
-/// Whether the description's idea of an extent survives contact with the tensor.
+/// Whether an extent the description knew matches the tensor's.
 Result<void> agrees(const std::string& gemm,
                     std::string_view what,
                     std::int64_t described,
@@ -270,13 +253,10 @@ Result<void> agrees(const std::string& gemm,
   return ok();
 }
 
-/// The six numbers the BLAS call needs, read off the tensors this call was handed.
+/// The numbers the BLAS call needs, read off the tensors this call was handed.
 ///
-/// A graph traced for more than one shape has nothing to read them from on the description, so
-/// the tensors are the only place they exist. They are read even when the description does hold
-/// them, and checked against it. A disagreement means the compiler decided something about a
-/// shape or a layout that the tensor does not have, which is how a matmul reads the wrong bytes
-/// and returns numbers nobody can explain.
+/// A dynamic description does not hold them. When it does, they are checked against the tensors,
+/// since a mismatch would make the multiply read the wrong bytes.
 Result<codegen::GemmExtents> extents_for(const codegen::GemmKernel& description,
                                          const at::Tensor& lhs,
                                          const at::Tensor& rhs,
@@ -353,9 +333,8 @@ Result<void> GemmKernel::launch(const std::vector<at::Tensor>& tensors,
   TESSIQ_ASSIGN_OR_RETURN(const codegen::GemmExtents extents,
                           extents_for(description, tensors[0], tensors[1], out));
 
-  // cuBLAS scales the destination and adds, so what the multiply accumulates into has to be there
-  // first: zeros for a plain matmul, the bias repeated down every row for an addmm. Both are one
-  // write of the output, which is small beside the multiply.
+  // The product is added to the output, so write zeros for a plain matmul or the bias in every row
+  // for an addmm first.
   const std::int64_t total = extents.output_elements();
   if (description.bias.has_value()) {
     const at::Tensor& bias = tensors.back();
@@ -410,8 +389,7 @@ Result<void> ConvKernel::launch(const std::vector<at::Tensor>& tensors,
                             std::to_string(tensors.size()));
   }
 
-  // cuDNN was told every tensor is packed NCHW of exactly these extents, and it reads them that
-  // way whatever they actually are. A mismatch reads the right buffer in the wrong order.
+  // The plan describes packed NCHW tensors of exactly these extents.
   const auto matches = [](const at::Tensor& tensor, const std::array<std::int64_t, 4>& shape) {
     return tensor.is_contiguous() && tensor.dim() == 4 &&
            std::equal(shape.begin(), shape.end(), tensor.sizes().begin());
@@ -449,8 +427,7 @@ Result<void> compile_fused(const ir::Graph& graph, int ordinal, Kernels& compile
 
     const codegen::Emitter& emitter = codegen::cuda_emitter();
     if (!emitter.supports(description)) {
-      // Not a failure. The operations run one at a time, which always works, and a group the
-      // emitter declines is the reason `supports` exists.
+      // Not a failure; the operations run one at a time.
       TESSIQ_LOG(kDebug, kLogModule) << "no cuda code for group " << group << ", leaving it alone";
       continue;
     }
@@ -492,9 +469,6 @@ Result<void> compile_fused(const ir::Graph& graph, int ordinal, Kernels& compile
 }
 
 /// Compiles one reduction, or nothing when it has no kernel shape or no code the emitter writes.
-///
-/// Its own function because `compile_reductions` is otherwise a loop with four ways to decline
-/// and three ways to fail, which is more branching than one function should carry.
 Result<std::shared_ptr<Kernel>>
 compile_one(const ir::Node& node, std::pair<int, int> capability, int ordinal) {
   TESSIQ_ASSIGN_OR_RETURN(const auto description, codegen::extract_reduction(node));
@@ -532,9 +506,8 @@ compile_one(const ir::Node& node, std::pair<int, int> capability, int ordinal) {
 
 /// Whether `mark-supported` claimed `node`.
 ///
-/// A node it did not claim is placed on the host, so a kernel for it would be launched with host
-/// pointers. Every kind below asks, rather than taking every node of its kind: a node can be of a
-/// kind that has kernels and still be declined, such as a matmul of a type cuBLAS does not take.
+/// An unclaimed node runs on the host, and a kernel for it would be launched with host pointers.
+/// A node can be declined even when its kind has kernels, such as a float64 matmul.
 bool claimed(const ir::Node& node) {
   const ir::Attribute* supported = node.attribute("tessiq.supported");
   const auto* flag = supported == nullptr ? nullptr : std::get_if<bool>(supported);

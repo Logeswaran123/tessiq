@@ -71,10 +71,7 @@ std::int64_t product_or_dynamic(const std::vector<std::int64_t>& sizes, std::siz
   return total;
 }
 
-/// Whether an extent is either a usable number or an honest `?`.
-///
-/// Zero and the negative values other than `kDynamic` are neither, and multiplying them together
-/// is how an unknown batch would quietly become 1.
+/// Whether an extent is positive or `kDynamic`. Anything else would multiply out to a wrong batch.
 bool is_extent(std::int64_t value) { return value > 0 || value == ir::kDynamic; }
 
 std::optional<Dims> matrix_dims(const ir::TensorType& type) {

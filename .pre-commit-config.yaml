@@ -1,18 +1,15 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Local gates that mirror CI. Anything enforced here is also enforced in CI:
-# a hook that CI does not also run is a hook people learn to skip.
+# Local gates that mirror CI. Anything enforced here is also enforced in CI.
 #
 #   pip install -r requirements-dev.txt
 #   pre-commit install --install-hooks
 #   pre-commit install --hook-type commit-msg
 #
 # The linters and formatters run as `language: system`, from the environment, rather than from
-# pre-commit's own pinned hook environments. This is deliberate: pre-commit would otherwise install
-# its own version of ruff and clang-format, and two versions of a formatter disagree about what
-# correct formatting is. The versions are pinned once, in requirements-dev.txt, which CI installs
-# from as well.
+# pre-commit's own hook environments, so they are the versions pinned in requirements-dev.txt,
+# which CI installs too. Two versions of a formatter disagree.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -49,10 +46,8 @@ repos:
         name: ruff (format)
         entry: ruff format --force-exclude
         language: system
-        # markdown is in the list because `ruff format` also formats python blocks inside it, and
-        # CI runs `ruff format --check .` over the whole tree. Without it the hook passes on a
-        # snippet in the README that CI then rejects, which is exactly the drift these hooks exist
-        # to prevent.
+        # markdown because `ruff format` also formats Python blocks inside it, and CI runs
+        # `ruff format --check .` over the whole tree.
         types_or: [python, pyi, markdown]
         require_serial: true
 

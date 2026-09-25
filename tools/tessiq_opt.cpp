@@ -3,9 +3,8 @@
 //
 // Reads textual IR, runs a named pass pipeline, prints the result.
 //
-// This is what makes the pass suite testable: a pass is a file in and a file out, with no PyTorch,
-// no GPU and no fixture. It is also the fastest way to see what a pass does to a graph you wrote
-// by hand.
+// A file in and a file out, with no PyTorch or GPU: the quickest way to see what a pass does to a
+// graph written by hand. The golden files in tests/cpp/golden use the same format.
 
 #include <algorithm>
 #include <cstddef>
@@ -103,8 +102,7 @@ tessiq::Result<std::string> read_input(const std::string& path) {
 
 void print_pass_list() {
   const std::vector<std::string> names = tessiq::passes::PassRegistry::instance().names();
-  // Padded to the widest name plus a gap, so adding a longer pass name does not collapse the
-  // column.
+  // Padded to the widest name plus a gap.
   std::size_t widest = 0;
   for (const std::string& name : names) {
     widest = std::max(widest, name.size());
@@ -145,9 +143,8 @@ tessiq::Result<std::string> render(const tessiq::ir::Graph& graph, bool memory_p
   if (!memory_plan) {
     return tessiq::ir::print(graph);
   }
-  // 512 is the alignment every Device promises, which is what lets a kernel assume an aligned
-  // pointer rather than testing for one. The planner takes it as an argument because the IR does
-  // not know what hardware it is planning for, so the number belongs to whoever does.
+  // runtime::kDeviceAlignment. The IR does not depend on the runtime, so the planner takes the
+  // alignment as an argument.
   constexpr std::size_t kDeviceAlignment = 512;
   TESSIQ_ASSIGN_OR_RETURN(const tessiq::ir::MemoryPlan plan,
                           tessiq::ir::plan_memory(graph, kDeviceAlignment));
@@ -230,8 +227,8 @@ int run(const std::vector<std::string_view>& args) {
 } // namespace
 
 int main(int argc, char** argv) {
-  // main may not let an exception escape. Nothing here is expected to throw, but Result's
-  // accessors can if a precondition is violated, and a terminate with no message helps nobody.
+  // Nothing here should throw, but a violated precondition in a Result accessor can, and a message
+  // beats a bare terminate.
   try {
     std::vector<std::string_view> args;
     args.reserve(static_cast<std::size_t>(argc > 0 ? argc - 1 : 0));

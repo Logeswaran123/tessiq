@@ -108,7 +108,7 @@ def fallbacks(name: str) -> int:
     """How many calls of `name` on a tessiq tensor ran its reference instead of its kernel.
 
     A call runs the reference on the CPU reference device, and on a GPU for an element type the
-    operation was not written for. The answer is the same either way, which is why this is counted:
-    nothing else says that a model is running the slow path.
+    operation was not written for. The result is the same either way, so this count is the only
+    sign that a model is on the slow path.
     """
     return _C.custom_op_fallbacks(name)

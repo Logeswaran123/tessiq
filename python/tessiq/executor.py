@@ -2,11 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Running a recipe.
 
-Everything that can be decided without seeing the tensors was decided when the recipe was built,
-so a call is a walk over the graph doing only what the recipe says. Until kernels exist, a tessiq
-operation reaches PyTorch's CPU kernel through the fallback, so this is slower than not compiling
-at all. What it buys is that the whole path is exercised and checked against eager, which is the
-agreement a lowered recipe will have to keep.
+Everything that can be decided without seeing the tensors was decided when the recipe was built.
+A call walks the graph, launching a kernel for each compiled group and running every other node
+through PyTorch's dispatcher on the device the recipe chose.
 """
 
 from __future__ import annotations
@@ -22,12 +20,9 @@ import torch
 from tessiq import profiler
 from tessiq.recipe import Recipe
 
-#: The stream every launch goes to: the legacy default stream, whose handle is zero.
-#:
-#: The transfers the runtime does go to the device's own stream, which is a blocking stream, and the
-#: legacy default stream orders itself against those. So a kernel queued here after the copy that
-#: fills its input waits for it, and a copy issued after the kernel waits for the kernel, without
-#: an explicit synchronise anywhere. A kernel given any other stream loses that ordering.
+#: The stream every launch goes to: the legacy default stream, whose handle is zero. It
+#: synchronises with the blocking stream the runtime copies on, so kernels and transfers are
+#: ordered without explicit synchronisation.
 LEGACY_DEFAULT_STREAM = 0
 
 
@@ -44,10 +39,7 @@ def _move(value: Any, device: torch.device, resident: ResidentInputs | None = No
         if value.device == device:
             return value
 
-        # Asked before anything is measured. A tensor already on the device from an earlier call
-        # does not cross, so it is not a transfer and is not recorded as one. Recording it counted
-        # a module's weights as moved on every call, which on an encoder block was twelve
-        # megabytes a call that never went anywhere.
+        # Checked before anything is measured, so a reused copy is not recorded as a transfer.
         if resident is not None:
             kept = resident.lookup(value, device)
             if kept is not None:
@@ -69,17 +61,14 @@ def _move(value: Any, device: torch.device, resident: ResidentInputs | None = No
 class ResidentInputs:
     """Device copies of graph inputs that have not changed since the last call.
 
-    AOTAutograd lifts a module's parameters to graph inputs, so a compiled transformer block takes
-    its twelve megabytes of weights as ordinary arguments and the executor moved all of them across
-    on every call. They are the same tensors each time.
+    AOTAutograd lifts a module's parameters to graph inputs, so without this every call would copy
+    the weights to the device again.
 
     Keyed on the host tensor's identity and checked against its version counter, so a parameter an
-    optimizer step writes to is copied again rather than read stale. The weak reference is what
-    makes the identity safe: a freed tensor's address can be handed to the next allocation, and a
-    dead reference misses rather than matching the wrong tensor.
+    optimizer step writes to is copied again. The weak reference makes the identity safe: a freed
+    tensor's id can be reused, and a dead reference misses rather than matching the wrong tensor.
 
-    Bounded by dropping dead entries on insert. The one argument that genuinely changes between
-    calls is a new tensor each time, so without that the table would grow by one per call.
+    Dead entries are dropped on insert, so inputs that are new tensors each call do not accumulate.
     """
 
     def __init__(self) -> None:
@@ -96,8 +85,7 @@ class ResidentInputs:
     def lookup(self, value: torch.Tensor, device: torch.device) -> torch.Tensor | None:
         """The device copy kept from an earlier call, or None when there is none still valid.
 
-        Separate from `move` so a caller can tell a reuse from a copy. The profiler needs exactly
-        that distinction: a reuse moves nothing and must not be reported as a transfer.
+        Separate from `move` so the profiler can tell a reuse, which moves nothing, from a copy.
         """
         key = (id(value), str(device))
         with self._lock:
@@ -137,12 +125,9 @@ def _output_for(
 ) -> torch.Tensor:
     """Allocates the tensor a kernel writes.
 
-    The shape usually comes from the fake tensor AOTAutograd left on the node, which is the same
-    answer torch would give. In a graph traced for more than one shape that fake tensor holds
-    symbolic extents and has no size, so the kernel is asked instead. It is asked rather than
-    told because what relates the result's shape to the operands' differs by kernel: a fusion
-    group writes the shape every one of its buffers has, and a matmul writes the left operand's
-    rows against the right operand's columns.
+    The shape comes from the fake tensor AOTAutograd left on the node. In a graph traced for more
+    than one shape that fake tensor has symbolic sizes, so the kernel works the shape out from its
+    inputs instead.
     """
     if getattr(kernel, "has_dynamic_extent", False):
         return torch.empty(kernel.output_shape(inputs), dtype=inputs[0].dtype, device=device)
@@ -168,10 +153,8 @@ class RecipeExecutor(torch.fx.Interpreter):
     """
 
     def __init__(self, recipe: Recipe, resident: ResidentInputs | None = None) -> None:
-        # Values are kept for the whole call rather than dropped once FX thinks they are dead. A
-        # fused group reads its inputs at the node that writes the group's output, which is later
-        # than the last use FX can see, since the uses in between belong to nodes the kernel
-        # subsumes. With collection on, an input is freed before the kernel asks for it.
+        # Values are kept for the whole call. A fused group reads its inputs at the node that
+        # writes its output, later than the last use FX can see, so FX would free them too early.
         super().__init__(recipe.graph_module, garbage_collect_values=not recipe.kernels)
         self._devices = recipe.devices
         self._needs_move = recipe.needs_move
@@ -180,36 +163,30 @@ class RecipeExecutor(torch.fx.Interpreter):
         self._fused_away = recipe.fused_away
         self._nodes = {node.name: node for node in recipe.graph_module.graph.nodes}
         self._host = torch.device("cpu")
-        # Shared with the other calls of the same compiled graph, which is what makes a weight
-        # stay on the device rather than crossing again.
+        # Shared across calls of the same compiled graph, so weights stay on the device.
         self._resident = resident if resident is not None else ResidentInputs()
         self._node: torch.fx.Node | None = None
 
     def run_node(self, n: torch.fx.Node) -> Any:
         if n.name in self._fused_away:
-            # A kernel computes this on its way to the group's output, so running it here would
-            # compute the same value twice. Nothing reads what this returns: every consumer is
-            # inside the same group, which is the condition that let it fuse.
+            # The group's kernel computes this. Nothing reads the result, since every consumer is
+            # inside the group.
             return None
 
         kernel = self._kernels.get(n.name)
         if kernel is not None:
             return self._run_kernel(kernel, n)
 
-        # Recorded because call_function is handed the target and the arguments, not the node, and
-        # where a step runs is a property of the node.
+        # call_function gets the target and arguments but not the node, which decides placement.
         self._node = n
 
         collecting = profiler.current()
         if collecting is None or n.op != "call_function":
             return super().run_node(n)
 
-        # Anything without a kernel runs one operation at a time through PyTorch's dispatcher,
-        # wherever the recipe placed it. That is not the same as running on the host: a movement
-        # operation placed on the device is interpreted there and costs almost nothing, while an
-        # operation the device cannot run reaches the fallback and a round trip. The event carries
-        # the device so the two are told apart, and is named after the operation rather than the
-        # node, since what a reader wants is which operation is costing them.
+        # Anything without a kernel runs through PyTorch's dispatcher on the device the recipe
+        # chose. On a tessiq device that is a view for a movement operation and a host round trip
+        # for anything else. The event records the device and is named after the operation.
         device = self._devices.get(n.name, self._host)
         with profiler.measure(collecting, str(n.target), "interpreted", device):
             return super().run_node(n)
@@ -217,10 +194,7 @@ class RecipeExecutor(torch.fx.Interpreter):
     def _run_kernel(self, kernel: Any, node: torch.fx.Node) -> torch.Tensor:
         """Runs a whole fusion group as one launch."""
         device = self._devices.get(node.name, self._host)
-        # Most kernels walk one index across every buffer, which is only the same elements when
-        # the layouts agree, so their inputs are packed first. A matmul is the exception: it reads
-        # the layout it was given, and packing a transposed operand would move the data and leave
-        # the transpose flag describing something that is no longer there.
+        # Packed first unless the kernel reads layouts itself, as a matmul does.
         moved = [
             _move(self.env[self._nodes[name]], device, self._resident) for name in kernel.inputs
         ]
@@ -240,8 +214,7 @@ class RecipeExecutor(torch.fx.Interpreter):
     def call_function(self, target: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         name = self._node.name if self._node is not None else ""
         if name not in self._needs_move:
-            # Everything this reads is already where it has to be, which is the common case in the
-            # middle of a cluster. Moving again would be two transfers that cancel out.
+            # Everything is already on the right device, as in the middle of a cluster.
             return super().call_function(target, args, kwargs)
 
         device = self._devices.get(name, self._host)

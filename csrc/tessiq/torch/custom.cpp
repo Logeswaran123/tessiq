@@ -489,7 +489,7 @@ Result<bool> launch_kernel(RegisteredOp& op,
                            int ordinal,
                            codegen::Stream stream) {
   if (out.numel() == 0) {
-    // Nothing to compute, and a launch over no blocks is not something to ask the driver for.
+    // Nothing to compute, and a launch of no blocks is an error.
     return true;
   }
   custom_ops::Launch launch;

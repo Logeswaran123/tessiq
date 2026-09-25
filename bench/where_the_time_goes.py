@@ -4,11 +4,11 @@
 """What a compiled call actually spends its time on.
 
 `against_torch.py` says how far behind PyTorch a whole block is. This says why: how much of a call
-is kernels, how much is moving data across PCIe, and how much is steps that have no kernel and go
-one operation at a time through PyTorch's dispatcher.
+is kernels, how much is moving data across PCIe, and how much is steps with no kernel going one
+operation at a time through PyTorch's dispatcher.
 
-The clock is the host's and every region is drained before it stops, so the total here is longer
-than the call it describes. The proportions are the point.
+The clock is the host's, so a kernel's share is what issuing it cost. `where_the_gap_is.py` adds
+the device's side.
 
 Run with: python bench/where_the_time_goes.py [trace.json]
 """
@@ -44,8 +44,7 @@ def main() -> None:
     )
 
     with torch.no_grad():
-        # Warm up past compilation and let the weights settle on the device, so what is measured is
-        # a steady-state call rather than the first one.
+        # Warm up past compilation and let the weights settle on the device.
         for _ in range(8):
             compiled(example)
         with tessiq.profile() as collected:

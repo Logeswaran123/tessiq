@@ -3,10 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """How much of a real model the backend runs itself.
 
-`docs/op_coverage.md` says what the operation table holds. That is the wrong number to quote on
-its own: a table can list forty operations and still leave most of a model on the host, because
-what matters is how often the operations a model actually uses appear. This imports the blocks
-from the test suite and counts.
+`docs/op_coverage.md` says what the operation table holds, which does not say how much of a model
+runs on the device. This imports the blocks from the test suite and counts.
 
 Run with: python tools/model_coverage.py
 """
@@ -31,10 +29,9 @@ from test_models import EncoderBlock, ResidualBlock, capture  # noqa: E402
 class Coverage:
     """What the backend could run, against what it actually will.
 
-    The two differ, and the difference is the point. `claimable` counts operations the backend has
-    an implementation for. `placed` counts the ones partitioning puts on the device, which is
-    fewer: a cluster holding nothing but movement operations is left on the host, because moving a
-    tensor across to take a different view of it and moving it back is two transfers for no work.
+    `claimable` counts operations the backend has an implementation for. `placed` counts the ones
+    partitioning puts on the device, which can be fewer: a cluster of nothing but movement
+    operations is left on the host.
     """
 
     claimable: int

@@ -9,16 +9,9 @@ namespace tessiq::codegen {
 
 /// When the device started and finished a piece of work.
 ///
-/// A launch returns long before the work does, so timing one with a host clock measures the cost
-/// of asking. The obvious fix is to wait for the device before stopping the clock, and that is
-/// what this project did until now. It measures the right thing and it changes the program while
-/// measuring it: waiting after every kernel turns a pipeline the device would overlap into a
-/// serial one, and on a transformer block it more than doubled the call.
-///
-/// Marking the stream costs the host almost nothing, because the mark is a command in the queue
-/// like any other. The reading waits, and it happens once at the end of a run when the work has
-/// finished anyway. So the program keeps its own shape while being measured, which is the only
-/// way the proportions mean anything.
+/// A launch returns before the work finishes, so a host clock measures only the launch, and
+/// synchronising after each kernel serialises the pipeline. Events are recorded into the stream
+/// instead and read once at the end of a run, so timing does not change how the program runs.
 ///
 /// Not thread-safe. One timer belongs to one region of one thread.
 class DeviceTimer {
@@ -44,9 +37,8 @@ class DeviceTimer {
 
   /// Microseconds the device spent between the two marks.
   ///
-  /// Waits for the second mark, so a caller reads after the run rather than during it. Fails if
-  /// the marks were never recorded, which is what distinguishes a region that ran no device work
-  /// from one that ran some and took no time.
+  /// Waits for the second mark. Fails if the marks were never recorded, so a region with no device
+  /// work is not reported as taking no time.
   [[nodiscard]] Result<double> microseconds() const;
 
  private:

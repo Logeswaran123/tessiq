@@ -18,10 +18,8 @@ namespace tessiq::passes {
 
 /// One transformation over one graph.
 ///
-/// Every pass states three things in its documentation: what it assumes on entry, what it
-/// guarantees on exit, and why the rewrite preserves meaning. A fusion or rewrite pass without a
-/// written legality argument is a latent wrong-results bug, and the argument is the part that
-/// cannot be recovered from the code.
+/// Every pass documents what it assumes on entry, what it guarantees on exit, and why its rewrite
+/// preserves meaning. The last is the part that cannot be recovered from the code.
 class Pass {
  public:
   virtual ~Pass() = default;
@@ -37,17 +35,15 @@ class Pass {
   /// One line, for `tessiq-opt --list`.
   [[nodiscard]] virtual std::string_view description() const = 0;
 
-  /// Runs the pass. Returns whether it changed anything, which is what drives fixpoint iteration.
+  /// Runs the pass. Returns whether it changed anything.
   virtual Result<bool> run(ir::Graph& graph) = 0;
 
  protected:
   Pass() = default;
 };
 
-/// Passes by name, so a pipeline can be named on the command line rather than compiled in.
-///
-/// A registry rather than a switch: adding a pass should not mean editing a dispatcher, and
-/// `tessiq-opt --list` should not be able to drift from what exists.
+/// Passes by name, so a pipeline is a string rather than code. Adding a pass does not mean editing
+/// a dispatcher, and `tessiq-opt --list` shows what exists.
 class PassRegistry {
  public:
   using Factory = std::function<std::unique_ptr<Pass>()>;
@@ -71,8 +67,8 @@ class PassRegistry {
 /// Registers a pass at static initialisation.
 ///
 ///   TESSIQ_REGISTER_PASS(DeadNodeElimination);
-// NOLINTBEGIN(bugprone-throwing-static-initialization): registering allocates, and a failure
-// here means the binary has no passes, which is not a state worth recovering into.
+// NOLINTBEGIN(bugprone-throwing-static-initialization): registering allocates; failing here means
+// the process is out of memory at load, which is not worth recovering from.
 #define TESSIQ_REGISTER_PASS(PassType)                                                             \
   namespace {                                                                                      \
   const bool k_registered_##PassType = [] {                                                        \
@@ -93,8 +89,8 @@ struct PassReport {
 
 /// Runs passes in order over one graph.
 ///
-/// Verifies the graph after each pass in debug builds. A pass that corrupts the IR should fail in
-/// its own test rather than three passes later, where the trail has gone cold.
+/// Verifies the graph after each pass in debug builds, so a pass that corrupts the IR fails in its
+/// own test.
 class PassManager {
  public:
   void add(std::unique_ptr<Pass> pass);

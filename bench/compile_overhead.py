@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """What the recipe cache and the move analysis save.
 
-Two separate questions, both about overhead rather than arithmetic, because no kernels exist yet
-and every operation still reaches PyTorch's CPU implementation through the fallback.
+Two questions about overhead rather than arithmetic, measured on the CPU reference device, where
+every operation reaches PyTorch's CPU implementation through the fallback.
 
   compile   How long building a recipe takes against answering from the cache.
   call      How long a call takes when only the edges of a cluster move, against moving at every
-            step, which is what the executor did before recipes.
+            step.
 
 Run with: python bench/compile_overhead.py
 """
@@ -78,8 +78,8 @@ def report(label: str, timing: tuple[float, float, float]) -> None:
 def moves_everywhere(recipe: Recipe) -> Recipe:
     """The same recipe with the move analysis switched off.
 
-    Every node claims it has to move its arguments, which is what the executor assumed before it
-    had a recipe to consult. Nothing else differs, so the gap is the analysis and nothing else.
+    Every node claims it has to move its arguments. Nothing else differs, so the gap is the
+    analysis.
     """
     return Recipe(
         graph_module=recipe.graph_module,
@@ -94,9 +94,8 @@ def moves_everywhere(recipe: Recipe) -> Recipe:
 def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Twenty elementwise layers, which is long enough for the overheads to separate.
 
-    A five-node graph is not: compiling one takes about as long as computing its cache key, and
-    the difference between moving once and moving five times is lost in the noise. Both effects
-    are about the number of nodes, so the graph has to have some.
+    Both effects grow with the number of nodes. On a five-node graph, compiling takes about as long
+    as computing the cache key, and moving once against five times is lost in the noise.
     """
     x = a + b
     for _ in range(20):

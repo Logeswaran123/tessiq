@@ -17,11 +17,9 @@ namespace tessiq::codegen {
 
 /// One operand of a matrix multiply, as the library needs to see it.
 ///
-/// A row-major matrix is either laid out with its rows contiguous or with its columns contiguous,
-/// and the second is the transpose of the first over the same bytes. BLAS takes that as a flag,
-/// so a transposed operand costs nothing rather than a copy. `nn.Linear` produces one every time:
-/// it stores its weight as [out, in] and computes with [in, out], so every weight arrives here
-/// transposed.
+/// A matrix stored with its columns contiguous is the transpose of a row-major one over the same
+/// bytes, and BLAS takes that as a flag instead of a copy. `nn.Linear` stores its weight as
+/// [out, in] and multiplies by its transpose, so every weight arrives transposed.
 struct GemmOperand {
   /// The IR name of the value read.
   std::string name;
@@ -33,12 +31,8 @@ struct GemmOperand {
   std::int64_t leading = 0;
 };
 
-/// The numbers one BLAS call needs.
-///
-/// Separate from the description because a description is built once and a call happens many
-/// times. When the shapes were known these are the description's own; when they were not, they
-/// are read off the tensors the call is handed. Either way the library sees the same six numbers,
-/// so there is one BLAS path rather than two.
+/// The numbers one BLAS call needs: the description's own when the shapes were known, otherwise
+/// read from the tensors at the call.
 struct GemmExtents {
   std::int64_t batch = 1;
   std::int64_t m = 0;
@@ -51,7 +45,7 @@ struct GemmExtents {
 
   [[nodiscard]] std::int64_t output_elements() const { return batch * m * n; }
 
-  /// Whether the six numbers describe a multiply that can actually be made.
+  /// Whether these describe a multiply BLAS can run.
   [[nodiscard]] bool are_usable() const;
 };
 
@@ -61,9 +55,8 @@ struct GemmExtents {
 /// bias is present only for addmm, where it is a row of `n` values added to every row of the
 /// result.
 ///
-/// An extent is `ir::kDynamic` when the graph was traced for more than one shape. Which operand
-/// is transposed is not: that follows from the layout, which torch settles before the graph is
-/// captured, and it is what decides how the library reads the bytes.
+/// An extent is `ir::kDynamic` when the graph was traced for more than one shape. The transpose
+/// flags are always known, since they follow from the layout.
 struct GemmKernel {
   std::int64_t batch = 1;
   std::int64_t m = 0;
@@ -99,16 +92,14 @@ struct GemmKernel {
 
 /// Describes `node` as a matrix multiply, or nothing if it cannot be one.
 ///
-/// Nothing is not a failure: an operation that is not a matmul, or one whose operands are laid out
-/// in a way BLAS cannot name with a transpose flag, has no GEMM and runs elsewhere. An error means
-/// the node claims to be a matmul and contradicts itself.
+/// Nothing when the node is not a matmul or an operand's layout is not one a transpose flag
+/// describes; it then runs elsewhere. An error means the node is malformed.
 Result<std::optional<GemmKernel>> extract_gemm(const ir::Node& node);
 
 /// Source for the kernel that fills an addmm's result with its bias before the multiply.
 ///
-/// BLAS scales the destination and adds, which is the only way it takes an accumulator, so a bias
-/// has to be in the output already. Doing that with torch operations costs a host round trip per
-/// multiply, which on a transformer block is more than the multiplies.
+/// BLAS adds `beta * C` to the product, so the bias has to be in the output before the call.
+/// Doing that with torch operations would cost a host round trip per multiply.
 [[nodiscard]] std::string broadcast_row_source(ir::DType dtype, std::string_view name);
 
 /// The nodes a GEMM could be built from, in graph order.

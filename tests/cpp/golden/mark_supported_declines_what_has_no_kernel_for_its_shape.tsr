@@ -1,9 +1,8 @@
 // RUN: mark-supported
-// Support is normally a property of the operation alone. An extent that is not known until the
-// call is the one case where it is not, and what decides it is whether the numbers can arrive
-// with the tensors. A reduction takes its three as arguments beside its buffers, and a loop whose
-// buffers share a shape needs none at all. Stepping through a permuted operand cannot: that needs
-// an extent per axis written into the source, and there are none to write.
+// With unknown extents, a node is claimed only if its kernel can take them at launch. A reduction
+// takes its three extents as arguments and a loop over same-shaped buffers takes its element
+// count. A loop stepping through a permuted operand needs every extent in the source, so it is
+// declined.
 graph @g(%a: f32[?,4,8], %b: f32[?,4,8], %t: f32[4,8:1,4]) -> f32[?,4] {
   %m = aten.mul.Tensor(%a, %b) : f32[?,4,8]
   %x = aten.add.Tensor(%m, %t) : f32[?,4,8]

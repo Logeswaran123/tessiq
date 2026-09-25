@@ -16,9 +16,8 @@ namespace tessiq::passes {
 
 namespace {
 
-/// kOps comes from ops.toml, by way of tools/gen_ops.py. Sorted by name there, so a lookup could
-/// binary search; it walks instead, because the table is small enough that the search would be the
-/// more complicated half of this file.
+/// kOps is generated from ops.toml by tools/gen_ops.py. It is sorted by name, but small enough
+/// that lookups scan it.
 #include "tessiq/passes/op_table.inc"
 
 std::vector<std::string> names_where(bool (*keep)(const OpInfo&)) {

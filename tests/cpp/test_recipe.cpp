@@ -1,8 +1,8 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Lowering a graph into a recipe. A recipe outlives the graph it came from, so the tests care as
-// much about what it does not hold as about what it does.
+// Lowering a graph into a recipe. A recipe outlives the graph it came from, so it must hold no
+// pointers into it.
 
 #include <algorithm>
 #include <cstddef>
@@ -84,7 +84,7 @@ TEST(RecipeTest, ClusterAssignmentIsCarriedThrough) {
 }
 
 TEST(RecipeTest, AnUnpartitionedGraphIsAllHost) {
-  // Not an error. A backend that claims nothing has a correct recipe, and it is the slow one.
+  // A backend that claims nothing still has a correct recipe.
   auto graph = parsed(R"(graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
   %x = aten.add.Tensor(%a, %b) : f32[4]
   return %x
@@ -98,8 +98,7 @@ TEST(RecipeTest, AnUnpartitionedGraphIsAllHost) {
 }
 
 TEST(RecipeTest, BuffersAreNamedNotPointed) {
-  // The recipe has to survive the graph, because it is cached and reused long after. Building one
-  // and then destroying the graph must leave everything readable.
+  // Recipes are cached, so one has to stay readable after its graph is destroyed.
   auto graph = parsed(R"(graph @g(%x: f32[1024]) -> f32[1024] {
   %a = relu(%x) : f32[1024]
   %b = neg(%a) : f32[1024]
@@ -144,9 +143,8 @@ TEST(RecipeTest, ADynamicShapeStillGetsARecipe) {
 )");
   ASSERT_NE(graph, nullptr);
 
-  // Where each step runs does not depend on how big the tensors are, so a graph whose extents
-  // arrive at run time gets the same answer to that question as any other. Only the arena is
-  // empty, because nothing here can be sized ahead of the call.
+  // Placement does not depend on sizes, so unknown extents change nothing but the arena, which is
+  // empty.
   const auto recipe = build_recipe(*graph, kAlignment);
   ASSERT_TRUE(recipe.has_value()) << recipe.error().to_string();
   EXPECT_EQ(recipe->steps.size(), 2U);

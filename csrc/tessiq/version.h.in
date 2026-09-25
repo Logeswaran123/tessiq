@@ -3,9 +3,8 @@
 //
 // Generated from version.h.in by CMake. Do not edit the generated copy.
 //
-// The version is defined once, in the top-level CMakeLists.txt, and flows from there into both the
-// native module and the Python package. A test asserts the two agree, so a release cannot ship a
-// wheel whose Python and native versions disagree.
+// The version is set once, in the top-level CMakeLists.txt. A test checks that the Python package
+// reports the same one.
 
 #pragma once
 

@@ -2,16 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """tessiq: a from-scratch PyTorch accelerator backend.
 
-The public surface is intentionally small at this stage. See PHASES.md for
-the phase plan; the device API, the ``torch.compile`` backend and the debug tooling arrive in
-later phases.
+Importing it registers the ``tessiq`` device and the custom operations. Compile a model with
+``torch.compile(model, backend="tessiq")``; the functions here cover devices, memory, graph
+inspection and profiling.
 """
 
 from __future__ import annotations
 
-# Imported before the extension module: _C links libtorch, and importing torch first puts those
-# libraries in the process regardless of how this package was installed. The extension also
-# carries an RPATH, but that only covers layouts where torch sits next to us.
+# Before the extension module, which links libtorch. Its RPATH only covers layouts where torch
+# is installed next to tessiq.
 import torch as _torch  # noqa: F401
 
 from tessiq import _C, library
@@ -83,8 +82,7 @@ __all__ = [
     "set_log_level",
 ]
 
-#: The package version. Sourced from the native module so that the two cannot drift apart;
-#: ``tests/python/test_version.py`` asserts they agree.
+#: The package version, read from the native module.
 __version__: str = _C.version()
 
 

@@ -64,8 +64,8 @@ TEST(BroadcastTest, AScalarBroadcastsAgainstAnything) {
 }
 
 TEST(BroadcastTest, AnUnknownDimensionStaysUnknown) {
-  // Even against a 1. A dimension nobody knows cannot be proven to be 1, and claiming a size that
-  // turns out to be wrong puts a false type on a value every later pass trusts.
+  // Even against a 1: an unknown dimension cannot be proven to be 1, and a wrong size would put a
+  // false type on the value.
   const auto result = broadcast_shapes(shape({ir::kDynamic}), shape({1}));
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->dims(), (std::vector<std::int64_t>{ir::kDynamic}));
@@ -81,7 +81,7 @@ TEST(BroadcastTest, IncompatibleDimensionsAreRejectedWithBothSizes) {
 TEST(ShapeRuleTest, TheTableKnowsWhatItKnows) {
   EXPECT_TRUE(has_shape_rule("aten.relu.default"));
   EXPECT_TRUE(has_shape_rule("relu"));
-  // Asking about an op with no rule is the caller's job to avoid, so the question comes first.
+  // Callers ask this before asking for a rule.
   EXPECT_FALSE(has_shape_rule("aten.convolution.default"));
 }
 
@@ -99,8 +99,7 @@ TEST(ShapeRuleTest, BinaryElementwiseBroadcasts) {
 }
 
 TEST(ShapeRuleTest, BinaryElementwiseAcceptsTheScalarAttributeForm) {
-  // The importer turns a Python scalar argument into an attribute, so `x * 2.0` arrives here with
-  // one operand rather than two.
+  // The importer turns a Python scalar into an attribute, so `x * 2.0` has one operand.
   const auto result = infer("aten.mul.Tensor", {f32({4, 8})});
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->front(), f32({4, 8}));
@@ -127,7 +126,7 @@ TEST(ShapeRuleTest, MatmulRejectsDisagreeingInnerDimensions) {
 }
 
 TEST(ShapeRuleTest, MatmulAcceptsAnUnknownInnerDimension) {
-  // Unknown is not a contradiction, so this has to pass rather than guess.
+  // Unknown is not a contradiction.
   const auto result = infer("aten.mm.default", {f32({4, ir::kDynamic}), f32({16, 2})});
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result->front(), f32({4, 2}));
@@ -199,7 +198,7 @@ TEST(ReductionShapeTest, AKeptDimensionStaysUnknownIfItWas) {
 }
 
 TEST(ReductionShapeTest, AnUnknownDimensionCanStillBeReduced) {
-  // The extent is not needed to know the shape of the answer, only to run the kernel.
+  // The result shape does not need the reduced extent.
   const auto result = reduce("aten.sum.dim_IntList", f32({4, ir::kDynamic}), {1});
   ASSERT_TRUE(result.has_value()) << result.error().to_string();
   EXPECT_EQ(result->front(), f32({4}));
@@ -212,7 +211,7 @@ TEST(ReductionShapeTest, ADimensionOutOfRangeIsAnError) {
 }
 
 TEST(ReductionShapeTest, TheSameDimensionTwiceIsAnError) {
-  // Reducing it twice would drop two axes and leave a shape the operation cannot produce.
+  // 1 and -2 name the same axis. Reducing it twice would drop two axes, so it is an error.
   const auto result = reduce("aten.sum.dim_IntList", f32({4, 8, 3}), {1, -2});
   ASSERT_FALSE(result.has_value());
   EXPECT_NE(result.error().message().find("twice"), std::string::npos) << result.error().message();
@@ -224,19 +223,14 @@ TEST(ReductionShapeTest, TheWrongOperandCountIsAnError) {
 }
 
 TEST(ShapeRuleTest, EveryComputingOperationHasARule) {
-  // The rules are derived from the table rather than listed beside it, so this holds by
-  // construction. It is here because it did not used to: the two were separate lists, and an
-  // operation could be fusable, have a kernel, and still have no idea what shape it produced.
-  //
-  // Movement operations are the exception and are checked the other way below. Each reads its
-  // attributes differently and changes layout as well as shape, so there is no rule to derive.
+  // The rules are derived from the op table, so this holds by construction; the test keeps it
+  // that way. Movement operations are the exception, checked the other way below.
   for (const std::string& name : op_names()) {
     const OpInfo* info = find_op(name);
     ASSERT_NE(info, nullptr) << name;
     if (info->category == OpCategory::kMovement || info->category == OpCategory::kConvolution) {
-      // A convolution's spatial extents come from stride, padding and dilation, and imported
-      // graphs carry the answer, so there is nothing to derive that ATen has not already worked
-      // out. The same reasoning as movement, for a different reason.
+      // No rule: the extents depend on stride, padding and dilation, and imported graphs
+      // already carry the result type.
       continue;
     }
     EXPECT_TRUE(has_shape_rule(name)) << name << " is in the table with no shape rule";
@@ -244,8 +238,8 @@ TEST(ShapeRuleTest, EveryComputingOperationHasARule) {
 }
 
 TEST(ShapeRuleTest, AMovementOperationHasNoRuleAndSaysSo) {
-  // Deliberate, not missing. shape-infer skips an operation with no rule, which is what these
-  // need until something computes both the shape and the layout they produce.
+  // Deliberate: each reads its attributes differently and changes layout as well as shape, so
+  // shape-infer skips them.
   for (const std::string& name : op_names()) {
     const OpInfo* info = find_op(name);
     ASSERT_NE(info, nullptr) << name;

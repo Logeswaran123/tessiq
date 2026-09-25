@@ -286,8 +286,8 @@ Result<const OpInfo*> register_op(const OpDefinition& definition) {
   const OpInfo* info = &entry->info;
   entries.emplace(owned.name, std::move(entry));
 
-  // Claimed from here on, exactly like a generated operation with a kernel. Whether a particular
-  // node is claimed still depends on its types, which mark-supported checks against `dtypes`.
+  // Claimed from here on, like a generated operation with a kernel. mark-supported still checks
+  // each node's types against `dtypes`.
   default_op_support().add(definition.name);
   return info;
 }

@@ -3,17 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Print how one model compiles.
 
-The compiler already answers every part of this one call at a time. This runs them together and
-lines the answers up, so that "why is this operation on the host" is one command rather than four
-and a text editor.
+Runs `tessiq.explain` on one of the test suite's blocks, so "why is this operation on the host"
+is one command.
 
     python tools/tessiq_explain.py encoder --device tessiq:1
     python tools/tessiq_explain.py encoder --sections schedule
     python tools/tessiq_explain.py encoder --dynamic --sections summary,kernels --source
     python tools/tessiq_explain.py rmsnorm --device tessiq:1 --rewrites rms_norm,fast_gelu
 
-The models are the blocks the test suite uses, because they are the ones the rest of the project
-quotes numbers for. `tessiq.explain(model, example)` takes any module.
+`tessiq.explain(model, example)` takes any module.
 """
 
 from __future__ import annotations

@@ -1,9 +1,8 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Compiling generated source at run time, and keeping the result between runs. Everything here
-// needs the CUDA toolkit and skips without it, because a machine with no toolkit is an ordinary
-// machine rather than a failure.
+// Compiling generated source at run time, and caching the result between runs. Skips without the
+// CUDA toolkit.
 
 #include <unistd.h>
 
@@ -24,8 +23,8 @@
 namespace tessiq::codegen {
 namespace {
 
-/// Every device this project targets is at least this, and the cubin only has to load somewhere
-/// for these tests, not on the card in the machine.
+/// Every device this project targets is at least this. These tests only compile; nothing is
+/// loaded on the card in the machine.
 constexpr int kMajor = 8;
 constexpr int kMinor = 0;
 
@@ -63,8 +62,7 @@ class ScopedCacheDir {
   ScopedCacheDir()
       : path_(std::filesystem::temp_directory_path() /
               ("tessiq-test-" + std::to_string(::getpid()))) {
-    // Read once into a local. Calling getenv twice puts the null check on a different call than
-    // the use, which the analyser objects to and is also just true.
+    // Read once, so the null check and the use see the same value.
     const char* current = std::getenv("TESSIQ_CACHE_DIR");
     previous_ = current == nullptr ? std::string{} : std::string(current);
     ::setenv("TESSIQ_CACHE_DIR", path_.c_str(), 1);
@@ -103,9 +101,7 @@ TEST(NvrtcTest, CompilesAGeneratedKernel) {
 TEST(NvrtcTest, ACompileErrorCarriesTheCompilersOwnLog) {
   TESSIQ_SKIP_WITHOUT_CUDA();
 
-  // The source is generated, so nobody has a file to look at. The compiler's line and column are
-  // the only thing that makes a failure locatable, and summarising them away would be the one
-  // mistake this wrapper must not make.
+  // The source is generated, so the compiler's line and column are what locate a failure.
   const auto cubin =
       compile_cuda("__global__ void k() { this_does_not_exist(); }", "broken", kMajor, kMinor);
   ASSERT_FALSE(cubin.has_value());
@@ -150,8 +146,7 @@ TEST(CubinCacheTest, DifferentArchitectureIsADifferentEntry) {
   TESSIQ_SKIP_WITHOUT_CUDA();
   const ScopedCacheDir cache;
 
-  // A cubin only loads on the architecture it was built for, so the architecture has to be part
-  // of the key rather than a detail of how it was produced.
+  // The architecture is part of the cache key.
   const std::string source = chain_source();
   ASSERT_TRUE(compile_cached(source, "k", 8, 0).has_value());
   ASSERT_TRUE(compile_cached(source, "k", 8, 9).has_value());
@@ -174,7 +169,7 @@ TEST(CubinCacheTest, AnUnwritableDirectoryStillCompiles) {
     ::setenv("TESSIQ_CACHE_DIR", previous.c_str(), 1);
   }
 
-  // A read-only home directory should make compilation slower, not stop it.
+  // An unwritable cache makes compilation slower, not impossible.
   ASSERT_TRUE(cubin.has_value()) << (cubin.has_value() ? "" : cubin.error().to_string());
   EXPECT_FALSE(cubin->data.empty());
   EXPECT_EQ(cubin_cache_stats().write_failures, 1U);

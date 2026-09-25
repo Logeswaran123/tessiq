@@ -3,8 +3,7 @@
 
 include(FetchContent)
 
-# Pinned to an exact tag: a test framework that moves under you turns an unrelated CI failure into
-# an afternoon of debugging.
+# Pinned to an exact tag, so an upstream change cannot break CI.
 FetchContent_Declare(
   googletest
   GIT_REPOSITORY https://github.com/google/googletest.git

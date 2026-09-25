@@ -15,12 +15,11 @@ namespace tessiq::passes {
 
 /// Makes every node of operation `from` a node of operation `to`, where `to` has the types for it.
 ///
-/// This is how a custom operation that replaces a torch one takes its place: each such operation
-/// gets a pass of its own, named in the pipeline ahead of `mark-supported`, so the rest of the
-/// compiler sees the custom operation and never the torch one it stands in for.
+/// A custom operation that replaces a torch one gets one of these, ahead of `mark-supported`, so
+/// the rest of the pipeline sees the custom operation.
 ///
-/// Precondition: `to` takes the same operands and attributes as `from`, in the same order, and has
-/// one result as `from` does. The custom operation's registration checks both schemas for that.
+/// Precondition: `to` takes the same operands and attributes as `from`, in the same order, with one
+/// result. The custom operation's registration checks the two schemas.
 /// Postcondition: no node of `from` is left whose operands and result all have a type in `dtypes`.
 /// Every other node, and every value name, is as it was.
 ///

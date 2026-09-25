@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """What each kernel costs the device, measured by replay.
 
-A per-kernel reading taken inside a real call carries a mark's worth of bias, and on this card a
-mark costs about what a small kernel costs. Replaying a kernel many times under one pair of marks
-divides that away. These check the replay is measuring the kernels the recipe holds, rather than
-something adjacent to them.
+A per-kernel reading inside a real call carries the cost of a stream mark, which is about what a
+small kernel costs. Replaying a kernel many times under one pair of marks spreads that cost out.
+These check that the replay measures the kernels the recipe holds.
 """
 
 from __future__ import annotations
@@ -35,8 +34,7 @@ def encoder_recipe() -> tessiq.Recipe:
 
 
 def test_every_kernel_is_measured(encoder_recipe: tessiq.Recipe) -> None:
-    # A kernel left out would make the total read low, and the total is the number this exists to
-    # produce. Silence about a kernel is worse than a wrong figure for it.
+    # Every kernel is measured; one left out would make the total read low.
     costs = kernel_costs(encoder_recipe, repeats=20)
     assert {cost.name for cost in costs} == set(encoder_recipe.kernels)
 
@@ -58,8 +56,8 @@ def test_the_slowest_comes_first(encoder_recipe: tessiq.Recipe) -> None:
 
 
 def test_replaying_more_does_not_change_the_answer(encoder_recipe: tessiq.Recipe) -> None:
-    # The whole point of replaying. If the cost of marking were still in the number, measuring
-    # over twenty launches and over four hundred would disagree by roughly the mark.
+    # If the cost of marking were still in the number, twenty launches and four hundred would
+    # disagree by roughly one mark.
     few = {cost.name: cost.microseconds for cost in kernel_costs(encoder_recipe, repeats=20)}
     many = {cost.name: cost.microseconds for cost in kernel_costs(encoder_recipe, repeats=400)}
 
@@ -70,9 +68,8 @@ def test_replaying_more_does_not_change_the_answer(encoder_recipe: tessiq.Recipe
 
 
 def test_a_matmul_keeps_the_layout_it_was_compiled_for(encoder_recipe: tessiq.Recipe) -> None:
-    # A matmul reads the layout it is given rather than requiring a packed one, so replaying it
-    # against packed operands would be measuring a different call. The transposed weights in a
-    # Linear are the case: every one of them arrives here transposed.
+    # A matmul reads the layout it is given, so it has to be replayed with its transposed weights
+    # still transposed.
     from tessiq import _C
 
     gemms = {cost.name for cost in kernel_costs(encoder_recipe, repeats=20) if cost.kind == "gemm"}
@@ -86,8 +83,8 @@ def test_a_matmul_keeps_the_layout_it_was_compiled_for(encoder_recipe: tessiq.Re
 
 
 def test_a_host_recipe_is_refused() -> None:
-    # The reference device has no kernels and no clock. Saying so beats returning an empty list,
-    # which reads as a model with nothing to measure.
+    # The reference device has no kernels and no clock, which is an error rather than an empty
+    # list.
     torch.manual_seed(0)
     block = EncoderBlock().eval()
     graph = tessiq.capture(block, torch.randn(4, 16, 32))

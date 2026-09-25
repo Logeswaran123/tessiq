@@ -15,14 +15,12 @@ namespace {
 
 /// Replaces a node with an earlier identical one.
 ///
-/// Precondition: values are in SSA form, so a name identifies one definition for the whole graph.
-/// Postcondition: no two remaining nodes have the same op, operands, attributes and result types.
+/// Precondition: values are in SSA form, so a name identifies one definition.
+/// Postcondition: no two nodes that are still used have the same op, operands, attributes and
+/// result types.
 ///
-/// Legality: two nodes with the same op, the same operands and the same attributes compute the
-/// same function of the same inputs, so either result can stand for the other. This depends on ops
-/// being pure. The dead duplicate is left for dead-node-elimination rather than erased here, which
-/// keeps this pass to one job and means a duplicate whose results are still referenced elsewhere is
-/// not lost.
+/// Legality: two nodes with the same op, operands and attributes compute the same thing, provided
+/// the op is pure. The duplicate is left with no users for dead-node-elimination to remove.
 class CommonSubexpressionElimination final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "cse"; }
@@ -35,8 +33,7 @@ class CommonSubexpressionElimination final : public Pass {
     bool changed = false;
     std::unordered_map<std::string, ir::Node*> seen;
 
-    // Forwards, so the node kept is the earliest one, which keeps every use dominated by its
-    // definition without reordering anything.
+    // Forwards, so the earliest node is kept and every use still follows its definition.
     for (ir::Node* node : graph.nodes()) {
       const std::string key = signature(node);
       const auto it = seen.find(key);
@@ -47,9 +44,8 @@ class CommonSubexpressionElimination final : public Pass {
 
       ir::Node* original = it->second;
       for (std::size_t i = 0; i < node->result_count(); ++i) {
-        // Only a replacement that moved a use counts as a change. The duplicate node is left for
-        // dead-node-elimination, so a second run sees it again; reporting a change for it every
-        // time would keep a fixpoint loop spinning on a graph that has stopped moving.
+        // A change only if it moved a use. The duplicate stays until dead-node-elimination, so
+        // running this again finds it again and must not report a change.
         if (is_used(graph, node->result(i))) {
           changed = true;
         }
@@ -70,11 +66,9 @@ class CommonSubexpressionElimination final : public Pass {
     return std::find(results.begin(), results.end(), value) != results.end();
   }
 
-  /// Everything that decides whether two nodes compute the same thing.
-  ///
-  /// Operand identity comes from the defining value's name, which SSA makes unique. Result types
-  /// are included because two nodes can share an op and operands and still differ, once shape
-  /// inference has annotated them differently.
+  /// Everything that decides whether two nodes compute the same thing. Operands are keyed by name,
+  /// which SSA makes unique. Result types are included so that nodes typed differently are never
+  /// merged.
   static std::string signature(const ir::Node* node) {
     std::string key = node->op();
     key += '(';

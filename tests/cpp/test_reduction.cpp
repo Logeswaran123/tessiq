@@ -1,8 +1,8 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Describing a reduction as [outer, reduce, inner], which is the decision that says whether it
-// gets a kernel at all. Needs no GPU: it is arithmetic on shapes.
+// Describing a reduction as [outer, reduce, inner], which decides whether it gets a kernel. Needs
+// no GPU.
 
 #include <cstdint>
 #include <gtest/gtest.h>
@@ -30,9 +30,8 @@ std::string sum_over(std::string_view shape, std::string_view result, std::strin
 
 /// The one reduction `text` describes, as a value.
 ///
-/// Returns a default-constructed kernel when there is none, having already failed the test that
-/// there is. Returning a value rather than an optional keeps every assertion below reading the
-/// fields directly, which is the thing each test is about.
+/// Fails the test and returns a default-constructed kernel when there is none, so callers can read
+/// fields directly.
 ReductionKernel extract(std::string_view text) {
   auto graph = ir::parse(text);
   EXPECT_TRUE(graph.has_value()) << (graph.has_value() ? "" : graph.error().to_string());
@@ -86,8 +85,8 @@ TEST(ReductionTest, TheLastAxisIsContiguous) {
 }
 
 TEST(ReductionTest, AnInputLayoutAssignCopiedIsAskedForUnderItsSourcesName) {
-  // The executor packs a reduction's input itself, which is the copy layout-assign recorded, so
-  // the kernel asks for the value the copy was made from and reads it with the packed shape.
+  // The executor packs a reduction's input itself, so the kernel names the value layout-assign's
+  // copy was made from and reads it packed.
   const ReductionKernel parsed = extract(R"(graph @g(%a: f32[4,8:1,4]) -> f32[4] {
   %a.contiguous = tessiq.contiguous(%a) {tessiq.supported = false} : f32[4,8]
   %s = aten.sum.dim_IntList(%a.contiguous) {arg1 = [1]} : f32[4]
@@ -125,8 +124,7 @@ TEST(ReductionTest, EveryAxisCollapsesToOneOutput) {
 }
 
 TEST(ReductionTest, ARangeOfAxesGoesAtOnce) {
-  // Two adjacent axes are one reduced extent, which is why the shape is three numbers and not one
-  // per axis.
+  // Two adjacent axes fold into one reduced extent.
   const ReductionKernel parsed = extract(sum_over("[4,8,3]", "[4]", "[1, 2]"));
   EXPECT_EQ(parsed.outer, 4);
   EXPECT_EQ(parsed.reduce, 24);
@@ -135,13 +133,13 @@ TEST(ReductionTest, ARangeOfAxesGoesAtOnce) {
 
 TEST(ReductionTest, AxesThatAreNotAdjacentHaveNoKernel) {
   // Reducing the first and last axis leaves the kept axis in the middle, which [outer, reduce,
-  // inner] cannot describe. Not an error: it runs on the host and the answer is still right.
+  // inner] cannot describe. It runs on the host instead.
   EXPECT_FALSE(has_kernel_shape(sum_over("[4,8,3]", "[8]", "[0, 2]")));
 }
 
 TEST(ReductionTest, AnUnknownExtentLeavesItsProductUnknown) {
-  // The three extents reach the kernel as arguments, so a shape that is not known yet still has
-  // one. What the description carries is the axes folded; the numbers come from the tensor.
+  // The extents are kernel arguments, so an unknown shape still gets a kernel. The description
+  // carries the reduced axes; the numbers come from the tensor.
   const ReductionKernel kernel = extract("graph @g(%a: f32[4,?]) -> f32[4] {\n"
                                          "  %s = aten.sum.dim_IntList(%a) {arg1 = [1]} : f32[4]\n"
                                          "  return %s\n}\n");
@@ -152,13 +150,12 @@ TEST(ReductionTest, AnUnknownExtentLeavesItsProductUnknown) {
   EXPECT_EQ(kernel.first_axis, 1U);
   EXPECT_EQ(kernel.last_axis, 1U);
   EXPECT_EQ(kernel.rank, 2U);
-  // Still block-per-output: the folded axis is last, so one block's threads read addresses that
-  // sit next to each other, which does not depend on how many there are.
+  // Still block-per-output, since the reduced axis is last.
   EXPECT_EQ(kernel.shape, ReductionShape::kBlockPerOutput);
 }
 
 TEST(ReductionTest, TheExtentsAreWorkedOutFromTheSizesTheLaunchIsGiven) {
-  // What the launch does with a tensor once it has one. The same split, over real numbers.
+  // The split the launch does once it has a tensor.
   const ReductionExtents extents = split_axes({8, 4, 64, 16}, 2, 2);
   EXPECT_EQ(extents.outer, 32);
   EXPECT_EQ(extents.reduce, 64);
@@ -196,8 +193,7 @@ TEST(ReductionTest, AnElementwiseOperationIsNotOne) {
 }
 
 TEST(ReductionTest, TheShapeFollowsWhetherAKeptAxisComesAfter) {
-  // Which kernel is written is decided here rather than in the emitter, because the launch has to
-  // agree with it: one shape wants a block per output and the other a thread per output.
+  // Decided here rather than in the emitter, because the launch has to agree with it.
   EXPECT_EQ(extract(sum_over("[4,8]", "[4]", "[1]")).shape, ReductionShape::kBlockPerOutput);
   EXPECT_EQ(extract(sum_over("[4,8]", "[8]", "[0]")).shape, ReductionShape::kThreadPerOutput);
   EXPECT_EQ(extract(sum_over("[4,8,3]", "[4,3]", "[1]")).shape, ReductionShape::kThreadPerOutput);
@@ -205,8 +201,8 @@ TEST(ReductionTest, TheShapeFollowsWhetherAKeptAxisComesAfter) {
 }
 
 TEST(ReductionTest, TheBlockCountFollowsTheShape) {
-  // A block per output launches one block each. A thread per output packs kBlockSize of them
-  // into a block, so it launches far fewer and has to round up.
+  // A block per output launches one block each. A thread per output fits kBlockSize outputs in a
+  // block and rounds up.
   const ReductionKernel per_block = extract(sum_over("[4,8]", "[4]", "[1]"));
   EXPECT_EQ(per_block.blocks(), 4);
 
@@ -222,8 +218,8 @@ TEST(ReductionTest, TheBlockCountFollowsTheShape) {
 // --- the emitted source ---------------------------------------------------------------------
 
 TEST(ReductionEmitterTest, ASumStartsFromZeroAndAMaxFromTheData) {
-  // A sum's identity is a constant. A max has none that works for every type without math.h, so
-  // it starts from an element instead, which is idempotent under max and propagates a NaN.
+  // A sum starts at zero. A max starts from an element, since there is no per-type lowest value
+  // without math.h.
   const std::string sum = source_for(sum_over("[4,8]", "[4]", "[1]"));
   EXPECT_NE(sum.find("scalar_t acc = (scalar_t)0;"), std::string::npos) << sum;
 
@@ -243,17 +239,14 @@ TEST(ReductionEmitterTest, AMeanDividesByWhatItSummed) {
 }
 
 TEST(ReductionEmitterTest, TheSourceNeedsNoIncludes) {
-  // It goes to NVRTC, which does not include the CUDA headers the way nvcc does. INFINITY and
-  // HUGE_VALF are both undefined there, and finding that out at run time is a compile error
-  // inside a model.
+  // NVRTC does not include math.h, so INFINITY and HUGE_VALF are undefined there.
   const std::string source = source_for(sum_over("[4,8]", "[4]", "[1]"));
   EXPECT_EQ(source.find("#include"), std::string::npos) << source;
   EXPECT_EQ(source.find("INFINITY"), std::string::npos) << source;
 }
 
 TEST(ReductionEmitterTest, AThreadPerOutputKernelHasNoSharedMemory) {
-  // Each thread finishes its own output, so there is nothing to combine between threads and no
-  // __syncthreads at all. A shared buffer here would be a sign the wrong template was chosen.
+  // Each thread finishes its own output, so there is no shared buffer and no __syncthreads.
   const std::string source = source_for(sum_over("[4,8]", "[8]", "[0]"));
   EXPECT_EQ(source.find("__shared__"), std::string::npos) << source;
   EXPECT_EQ(source.find("__syncthreads"), std::string::npos) << source;
@@ -262,8 +255,7 @@ TEST(ReductionEmitterTest, AThreadPerOutputKernelHasNoSharedMemory) {
 }
 
 TEST(ReductionEmitterTest, TheSharedBufferMatchesTheBlockSize) {
-  // The block is launched with kBlockSize threads and each one writes its own slot, so a buffer
-  // declared at a different size would be written past.
+  // The block has kBlockSize threads, each writing its own slot.
   const std::string source = source_for(sum_over("[4,8]", "[4]", "[1]"));
   EXPECT_NE(source.find("__shared__ scalar_t scratch[" + std::to_string(kBlockSize) + "]"),
             std::string::npos)

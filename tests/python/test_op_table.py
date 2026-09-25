@@ -3,8 +3,7 @@
 """The operation table and the files generated from it.
 
 The generated files are checked in, so they can be edited by hand. These make that fail rather
-than drift, which is the whole reason for generating them: an operation defined in one place
-cannot disagree with itself.
+than drift.
 """
 
 from __future__ import annotations
@@ -43,8 +42,7 @@ def test_the_generated_files_are_up_to_date() -> None:
 
 def test_every_operation_is_named_the_same_way_twice() -> None:
     # The short name is for hand-written IR and the ATen names are what torch emits. A row missing
-    # one of them does not error, it quietly stops a chain fusing, which is how aten.tanh.default
-    # went missing once.
+    # one does not error; it stops a chain fusing.
     for op in operations():
         assert op["aten"], f"{op['name']} has no ATen spelling"
         for aten in op["aten"]:
@@ -63,8 +61,8 @@ def test_elementwise_operations_say_what_they_compute() -> None:
 
 
 def test_only_elementwise_operations_have_an_expression() -> None:
-    # An expression describes one element computed from the inputs at that position. An operation
-    # that reads elsewhere has no such thing, and carrying one would invite a pass to use it.
+    # An expression computes one element from the inputs at the same position, so only an
+    # elementwise operation can have one.
     for op in operations():
         if op["category"] != "elementwise":
             assert not op.get("expression"), f"{op['name']} is not elementwise but has one"
@@ -80,9 +78,8 @@ def test_the_backend_claims_what_the_table_says() -> None:
     # partition marks what the backend can run, so this is the table reaching a real graph.
     for name in sorted(claimed):
         if not name.startswith("aten.") or name == "aten.convolution.default":
-            # Convolution is the one row whose support depends on the shape as well as the name:
-            # cuDNN is given a two dimensional one, so a rank-one graph like this is correctly not
-            # claimed. It has its own test below with a shape it can run.
+            # Convolution support also depends on the shape: only 2-D convolutions get a cuDNN
+            # plan. It has its own test below.
             continue
         graph = f"graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {{\n  %x = {name}(%a, %b) : f32[4]\n  return %x\n}}\n"
         marked = tessiq.run_passes(graph, "mark-supported")
@@ -90,9 +87,8 @@ def test_the_backend_claims_what_the_table_says() -> None:
 
 
 def test_an_operation_the_table_has_never_heard_of_is_not_claimed() -> None:
-    # Every row in the table is claimed now, so there is nothing in it to point at. The rule that
-    # still has teeth is the other direction: an operation with no row is declined by not being
-    # there rather than by a list somewhere saying so.
+    # Every row in the table is claimed, so this checks the other direction: an operation with no
+    # row is declined.
     for name in (
         "aten.hypot.default",
         "aten.native_layer_norm.default",
@@ -104,9 +100,8 @@ def test_an_operation_the_table_has_never_heard_of_is_not_claimed() -> None:
 
 
 def test_a_convolution_is_claimed_only_when_cudnn_would_have_a_plan() -> None:
-    # A two dimensional convolution has four dimensional tensors, and that is the one cuDNN is
-    # handed. A one dimensional convolution is in the table under the same name and has no plan,
-    # so claiming it would place it on the device with nothing to run it.
+    # A 2-D convolution has 4-D tensors and gets a cuDNN plan. A 1-D one has the same name and no
+    # plan, so it is not claimed.
     two_d = (
         "graph @g(%a: f32[1,3,8,8], %w: f32[4,3,3,3]) -> f32[1,4,6,6] {\n"
         "  %c = aten.convolution.default(%a, %w) : f32[1,4,6,6]\n  return %c\n}\n"
@@ -138,9 +133,8 @@ def test_every_category_is_one_the_generator_knows(category: str) -> None:
 
 
 def test_reductions_have_kernels_but_no_expression() -> None:
-    # A reduction has a kernel, and it is not an expression. An elementwise row says what one
-    # element computes and the emitter drops it into a shared loop; a reduction is a whole kernel
-    # of its own, so the table says which operation it is and the emitter writes the rest.
+    # A reduction has a kernel but no expression: it is a whole kernel of its own, which the
+    # emitter writes.
     reductions = [op for op in operations() if op["category"] == "reduction"]
     assert reductions, "the reduction category is empty"
     for op in reductions:

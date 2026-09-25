@@ -2,11 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Generated CUDA source, compiled.
 
-The C++ tests check what the emitter writes. These check that what it writes is accepted by the
-CUDA compiler, which is a different question and the one that matters: source that reads correctly
-and does not compile is worth nothing.
+The C++ tests check what the emitter writes. These check that nvcc accepts it.
 
-Skipped when no CUDA toolkit is present, which is most machines and the CI runner.
+Skipped when no CUDA toolkit is present, as on the CI runner.
 """
 
 from __future__ import annotations
@@ -60,9 +58,9 @@ def test_the_generated_kernel_compiles(dtype: str, tmp_path: Path) -> None:
 
 @needs_nvcc
 def test_a_float_kernel_uses_no_double_arithmetic(tmp_path: Path) -> None:
-    # The maths functions are spelled without a float suffix so one expression serves every
-    # element type. That only works if overload resolution picks the float form: if it promoted to
-    # double, a consumer GPU would run this at a fraction of the speed and nothing would say so.
+    # The math functions are spelled without a float suffix so one expression serves every element
+    # type. Overload resolution has to pick the float form, or a float kernel silently runs in
+    # double.
     cu = tmp_path / "kernel.cu"
     cu.write_text(tessiq.emit_cuda(tessiq.run_passes(CHAIN.format(t="f32"), PIPELINE)))
     ptx = tmp_path / "kernel.ptx"
@@ -78,9 +76,8 @@ def test_a_float_kernel_uses_no_double_arithmetic(tmp_path: Path) -> None:
 def chain_over_every_kernel(dtype: str = "f32", count: int = 64) -> tuple[str, int]:
     """A single chain applying every operation that claims a kernel, and how many there are.
 
-    Built from ops.toml rather than written out, so an operation added to the table is compiled
-    here without anyone remembering to add it. Unary operations take the previous result, binary
-    ones take the previous result and a second input.
+    Built from ops.toml, so every operation added to the table is compiled here. Unary operations
+    take the previous result, binary ones the previous result and a second input.
     """
     lines = []
     previous = "%a"
@@ -100,8 +97,8 @@ def chain_over_every_kernel(dtype: str = "f32", count: int = 64) -> tuple[str, i
 
 @needs_nvcc
 def test_every_supported_operation_compiles(tmp_path: Path) -> None:
-    # Every operation the emitter has an expression for, in one group. A malformed expression is a
-    # compile error rather than a wrong number, so this is the cheapest way to check all of them.
+    # Every operation the emitter has an expression for, in one group, so one compile checks every
+    # expression.
     graph, length = chain_over_every_kernel()
     assert length > 20, f"only {length} operations claim a kernel, which looks wrong"
 
@@ -112,8 +109,7 @@ def test_every_supported_operation_compiles(tmp_path: Path) -> None:
 
 
 def test_a_graph_with_no_groups_says_so() -> None:
-    # Nothing the backend claims, so there is nothing to write. A lone elementwise operation is
-    # not this case: it gets a kernel of its own rather than reaching the fallback.
+    # A convolution on rank-1 tensors is not claimed, so there is nothing to write.
     graph = "graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {\n  %s = aten.convolution.default(%a, %b) : f32[8]\n  return %s\n}\n"
     assert "no fusion groups" in tessiq.emit_cuda(tessiq.run_passes(graph, PIPELINE))
 

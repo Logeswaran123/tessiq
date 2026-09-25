@@ -26,10 +26,9 @@ struct PatternShape {
 
 /// Checks that `pattern` is something a `Rewrite` can match, and returns what it binds.
 ///
-/// A pattern is a graph in the textual IR. It returns one value, computed by a node rather than
-/// passed in, and every node leads to that value, so nothing in it goes unmatched. An attribute
-/// whose value is the string `"$name"` captures whatever the matched node has there. Types are not
-/// compared, so they can be written as anything the parser takes, such as `f32[?]`.
+/// A pattern is a graph in the textual IR that returns one value computed by a node, and every
+/// node leads to that value. An attribute whose value is the string `"$name"` captures the matched
+/// node's value. Types are not compared, so they can be written as anything, such as `f32[?]`.
 [[nodiscard]] Result<PatternShape> check_pattern(const ir::Graph& pattern);
 
 /// One argument of the operation a match becomes.
@@ -37,15 +36,14 @@ struct RewriteArgument {
   /// The pattern input or the captured scalar that supplies it.
   std::string name;
 
-  /// A tensor becomes an operand. A scalar becomes the attribute `arg<position>`, which is how the
-  /// importer spells a positional scalar.
+  /// A tensor becomes an operand, a scalar the attribute `arg<position>`, as the importer spells a
+  /// positional scalar.
   bool tensor = true;
 };
 
 /// Replaces every match of a pattern with one call to an operation.
 ///
-/// This is how a model that writes a computation out in plain PyTorch gets a custom operation's
-/// kernel for it. Each custom operation with a pattern gets a pass of its own, `rewrite-<name>`.
+/// Each custom operation with a pattern gets one, `rewrite-<name>`.
 ///
 /// A match binds each pattern input to one value of the graph, the same value every time the input
 /// appears, and each pattern node to one node with the same operation and the same attributes. An
@@ -58,11 +56,10 @@ struct RewriteArgument {
 /// value the pattern returned. The node records the names of the values it absorbed as
 /// `tessiq.absorbed`, so a kernel for it can say which nodes of the original graph it computes.
 ///
-/// Legality: the pattern computes what `op` computes, which its author declares by writing it. A
-/// match also needs every value inside it other than the last to have no reader outside it and not
-/// to be returned, since those values stop existing. That is what keeps a training graph as it
-/// was: AOTAutograd returns each value the backward graph needs, so a pattern covering one does
-/// not match. A match whose tensors have a type `op` does not declare is left alone.
+/// Legality: the pattern's author declares it computes what `op` computes. Every value inside a
+/// match other than the last stops existing, so none may be read outside the match or returned.
+/// That also leaves training graphs alone, since AOTAutograd returns each value the backward graph
+/// needs. A match whose tensors have a type `op` does not declare is left alone.
 class Rewrite final : public Pass {
  public:
   Rewrite(std::string name,

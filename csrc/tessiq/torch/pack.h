@@ -11,15 +11,13 @@ namespace tessiq::torch_backend {
 
 /// Copies `src` into `dst` on the device, gathering through `src`'s own layout.
 ///
-/// `dst` has to be contiguous, the same shape, and the same element size. What `src` looks like is
-/// the point: it may be a permuted or expanded view, and the kernel steps through it rather than
-/// requiring it to be packed first.
+/// `dst` has to be contiguous, with the same shape and element size. `src` may be any view, such
+/// as a permuted or expanded one.
 ///
-/// Returns `unsupported` when there is no kernel for this case, which is the caller's signal to
-/// fall back rather than a failure. That covers a device with no CUDA behind it, a build with no
-/// toolkit, a rank deeper than the kernels go, and an element size no integer type has.
+/// Returns `unsupported`, the caller's signal to fall back, for the CPU reference device, a build
+/// with no toolkit, a rank above `kMaxPackRank`, or an element size no integer type has.
 ///
-/// Asynchronous, like any launch. The caller orders the result against whatever reads it.
+/// Asynchronous on the legacy default stream.
 [[nodiscard]] Result<void> pack_on_device(const at::Tensor& src, const at::Tensor& dst);
 
 } // namespace tessiq::torch_backend

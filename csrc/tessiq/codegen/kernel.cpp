@@ -38,10 +38,7 @@ const std::int64_t* group_of(const ir::Node* node) {
 
 namespace {
 
-/// The operand's extents lined up against the output's, or nothing when they cannot broadcast.
-///
-/// Broadcasting aligns shapes to the right, so a missing axis reads as 1. An axis that is neither
-/// 1 nor the output's own extent is not a broadcast of it.
+/// An operand's extents and steps, lined up against the output's axes.
 struct Alignment {
   /// The operand's extents lined up against the output's, 1 where it has no axis.
   std::vector<std::int64_t> extents;
@@ -50,6 +47,9 @@ struct Alignment {
   std::vector<std::int64_t> steps;
 };
 
+/// Lines `operand` up against `output`, or nothing when it does not broadcast to it. Shapes align
+/// to the right, so a missing axis reads as 1; an axis that is neither 1 nor the output's extent
+/// does not broadcast.
 std::optional<Alignment> align(const ir::TensorType& output, const ir::TensorType& operand) {
   const std::vector<std::int64_t>& out = output.shape().dims();
   const std::vector<std::int64_t>& in = operand.shape().dims();
@@ -92,10 +92,8 @@ std::optional<Alignment> align(const ir::TensorType& output, const ir::TensorTyp
 
 /// Whether the steps are the packed row-major ones for `extents`, which is what `i` means.
 ///
-/// An extent that is not known makes every step outside it unknowable too, so the walk stops
-/// there and answers yes for what it could check. That is safe because the only operands reaching
-/// this with an unknown extent are ones the type already records as contiguous, where packed is
-/// what contiguous means.
+/// Stops at the first unknown extent and answers yes for what it checked. That is safe because
+/// an operand with an unknown extent only reaches this when its type is contiguous.
 bool steps_are_packed(const std::vector<std::int64_t>& extents,
                       const std::vector<std::int64_t>& steps) {
   std::int64_t expected = 1;
@@ -127,7 +125,7 @@ std::int64_t span(const std::vector<std::int64_t>& dims, std::size_t from, std::
 /// How many output elements share one operand element, when the operand is the output packed with
 /// a run of trailing axes read once each.
 ///
-/// The per-row value a softmax and a layer norm subtract, and the cheapest case there is.
+/// The per-row value a softmax or a layer norm subtracts.
 std::optional<std::int64_t> repeated_divisor(const std::vector<std::int64_t>& out,
                                              const Alignment& aligned) {
   std::size_t kept = out.size();
@@ -166,7 +164,7 @@ std::optional<std::int64_t> cycled_divisor(const std::vector<std::int64_t>& out,
 
 /// The output position taken apart into coordinates and stepped through the operand.
 ///
-/// What a permuted or otherwise strided operand needs, and what materialising one used to be for.
+/// For an operand that is neither read at `i` nor a run or a cycle.
 std::string general_index(const std::vector<std::int64_t>& out, const Alignment& aligned) {
   std::string text;
   for (std::size_t j = out.size(); j > 0; --j) {
@@ -212,9 +210,8 @@ std::string general_index(const std::vector<std::int64_t>& out, const Alignment&
 std::optional<OperandRead> operand_read(const ir::TensorType& output,
                                         const ir::TensorType& operand) {
   if (output.shape().dims() == operand.shape().dims() && operand.is_contiguous()) {
-    // Identical dim lists, so one index walks both, whether or not the extents are known. Two
-    // unknown extents both print as `?` and the IR cannot tell whether they are the same number,
-    // so the launch compares the sizes it is actually handed. See `FusedKernel::launch`.
+    // Identical dim lists, so one index walks both. Two unknown extents both print as `?`, so the
+    // launch checks the sizes it is handed (see `FusedKernel::launch` in torch/fused.cpp).
     return OperandRead{};
   }
   const std::optional<Alignment> aligned = align(output, operand);
@@ -231,17 +228,14 @@ std::optional<OperandRead> operand_read(const ir::TensorType& output,
 
   const std::vector<std::int64_t>& out = output.shape().dims();
   if (const std::optional<std::int64_t> repeated = repeated_divisor(out, *aligned)) {
-    // A divisor of one means every output position reads its own element, which is the same
-    // thing as having the result's shape and is cheaper to write.
+    // A divisor of one is the same as reading at `i`.
     return *repeated == 1 ? OperandRead{} : broadcast(OperandRead::Kind::kRepeated, *repeated);
   }
   if (const std::optional<std::int64_t> cycled = cycled_divisor(out, *aligned)) {
     return broadcast(OperandRead::Kind::kCycled, *cycled);
   }
   if (!output.shape().is_static() || !operand.shape().is_static()) {
-    // The last form steps through the operand axis by axis, which needs every extent. There is no
-    // way to hand those over at the launch as one number, so an operand that got this far without
-    // them cannot be reached and the operation runs elsewhere.
+    // The strided form needs every extent in the source.
     return std::nullopt;
   }
   OperandRead strided;
@@ -269,8 +263,7 @@ std::string index_for(const ir::TensorType& output, const ir::TensorType& operan
 }
 
 const ir::Value* held_value(const ir::Value* value) {
-  // A loop rather than one step, although layout-assign never copies a copy, so that a second
-  // pass inserting copies of its own would not leave a name the executor does not know.
+  // A loop, in case another pass ever copies a copy.
   while (value != nullptr && value->producer() != nullptr &&
          value->producer()->op() == kMaterialise && value->producer()->operand_count() == 1) {
     value = value->producer()->operand(0);
@@ -343,11 +336,10 @@ Result<Step> build_step(const ir::Node* node,
   step.op = node->op();
   step.result = node->result(0)->name();
 
-  // Arguments are rebuilt position by position rather than operands first. The importer keys a
-  // non-tensor argument by the position it occupied, so a constant can come before a tensor:
-  // `1 - sigmoid(x)` in a backward graph is `sub` with the constant at position 0. Appending the
-  // constants after the operands would compute `sigmoid(x) - 1`, which is the same shape, the
-  // same type, and the wrong number.
+  // Arguments are rebuilt by position, not operands first. The importer keys a non-tensor
+  // argument by its position, so a constant can come before a tensor: `1 - sigmoid(x)` in a
+  // backward graph is `sub` with the constant at position 0, and appending constants after the
+  // operands would compute `sigmoid(x) - 1`.
   const auto arity = static_cast<std::size_t>(passes::elementwise_arity(node->op()));
   std::size_t next_operand = 0;
   for (std::size_t position = 0; position < arity; ++position) {
@@ -371,8 +363,8 @@ Result<Step> build_step(const ir::Node* node,
                            " into a loop over " + output.to_string() +
                            ", which no index expression describes");
       }
-      // Empty for a divisor the source cannot hold, which is not a failure: the emitter writes
-      // that one as a parameter and the launch supplies the number.
+      // The index is empty when the divisor is not known here; the emitter then makes it a
+      // parameter and the launch supplies it.
       inputs.push_back({name, index_for(output, operand->type()), *read, operand->type()});
     }
   }
@@ -434,8 +426,7 @@ Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group) {
   FusedKernel kernel;
   kernel.name = "tessiq_fused_" + std::to_string(group);
   kernel.dtype = type.dtype();
-  // `kDynamic` when the shape is not known here. The kernel already takes its element count as an
-  // argument, so the number is one the launch reads off the output tensor instead.
+  // `kDynamic` when the shape is not known here; the launch then reads the count off the output.
   kernel.elements = type.shape().is_static() ? type.shape().element_count() : ir::kDynamic;
 
   std::unordered_set<std::string> seen;
@@ -446,16 +437,15 @@ Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group) {
     kernel.absorbed.insert(kernel.absorbed.end(), absorbed.begin(), absorbed.end());
   }
 
-  // Exactly one value leaves the group. Every other member has a single reader inside it, which
-  // is the condition that let it fuse in the first place.
+  // Exactly one value leaves the group; every other member has its only reader inside it.
   const std::vector<std::string> escaping = escaping_values(graph, members, inside);
   if (escaping.size() > 1) {
     return invalid_argument("fusion group " + std::to_string(group) + " has " +
                             std::to_string(escaping.size()) +
                             " values leaving it, which one kernel cannot write");
   }
-  // A group whose result nothing reads is dead and dead-node-elimination removes it. Writing the
-  // last value keeps the kernel well formed if one is met before that happens.
+  // A group whose result nothing reads is dead; writing its last value keeps the kernel well
+  // formed until dead-node-elimination removes it.
   kernel.output = escaping.empty() ? members.back()->result(0)->name() : escaping.front();
 
   return kernel;

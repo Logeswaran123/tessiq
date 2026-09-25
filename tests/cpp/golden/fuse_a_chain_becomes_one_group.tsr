@@ -1,6 +1,6 @@
 // RUN: mark-supported,cluster,fuse-elementwise
-// (a*b + c).relu().sigmoid(). Four operations reading and writing the same positions, so one
-// loop can compute all of them with the intermediates staying in registers.
+// (a*b + c).relu().sigmoid(): four operations over the same positions, so one loop computes them
+// all with the intermediates in registers.
 graph @g(%a: f32[1024], %b: f32[1024], %c: f32[1024]) -> f32[1024] {
   %m = aten.mul.Tensor(%a, %b) : f32[1024]
   %s = aten.add.Tensor(%m, %c) : f32[1024]

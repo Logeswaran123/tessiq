@@ -1,6 +1,5 @@
 // RUN: mark-supported,cluster
-// Two supported runs with no data dependency between them stay separate: nothing connects them,
-// so there is nothing to merge.
+// Two supported runs with no edge between them stay separate.
 graph @g(%a: f32[4], %b: f32[4]) -> (f32[4], f32[4]) {
   %x = aten.neg.default(%a) : f32[4]
   %y = aten.abs.default(%b) : f32[4]

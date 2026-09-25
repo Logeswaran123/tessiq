@@ -2,14 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Graphs whose shapes are not known at compile time.
 
-Dynamo captures concrete shapes the first time it sees a function and recompiles with symbolic
-ones the second time a dimension changes. That is the default rather than something a caller opts
-into, so a model called with two sequence lengths reaches the backend with a symbolic graph
-without anyone asking for one.
+By default Dynamo captures concrete shapes the first time it sees a function and recompiles with
+symbolic ones the second time a dimension changes.
 
-The compiler takes such a graph. These check that it gives the same answers across shapes, that
-the elementwise work in it reaches the device rather than being interpreted, and that the parts
-whose extents are still baked in decline instead of guessing.
+These check that such a graph gives the same answers across shapes, that its work reaches the
+device, and that what needs its extents at compile time declines instead of guessing.
 """
 
 from __future__ import annotations
@@ -71,8 +68,8 @@ def test_a_symbolic_graph_is_not() -> None:
 
 
 def test_a_changing_shape_does_not_raise() -> None:
-    # The whole point. Before this, the second distinct shape crashed the backend under torch's
-    # own default settings, with no `dynamic` argument anywhere.
+    # The second distinct shape gives a symbolic graph under torch's defaults, with no `dynamic`
+    # argument anywhere.
     net = model()
     compiled = torch.compile(net, backend="tessiq", options={"device": str(tessiq.cpu)})
 
@@ -93,8 +90,7 @@ def test_asking_for_dynamic_shapes_works_too() -> None:
 
 
 def test_a_static_graph_is_still_compiled() -> None:
-    # Taking symbolic graphs would be a poor trade if it changed what happens to the ordinary
-    # ones, and the difference is invisible from the outside: both give the right answer.
+    # Supporting symbolic graphs must not change what happens to static ones.
     from tessiq.recipe import build_recipe
 
     graph = captured(model(), torch.randn(2, 6, 32), dynamic=False)
@@ -103,8 +99,7 @@ def test_a_static_graph_is_still_compiled() -> None:
 
 
 def test_an_unknown_extent_reaches_the_ir() -> None:
-    # `?` is how the IR spells an extent it does not know. Everything downstream reads it from
-    # the type rather than from a table kept beside the graph.
+    # `?` is how the IR spells an unknown extent.
     graph = captured(model(), torch.randn(2, 6, 32), dynamic=True)
     text = _C.import_fx(graph, "forward")
     assert "f32[?,?,32]" in text, text
@@ -112,8 +107,8 @@ def test_an_unknown_extent_reaches_the_ir() -> None:
 
 
 def test_the_extents_a_reshape_computes_are_operands() -> None:
-    # A reshape in a symbolic graph takes its sizes as values the graph computes, not as
-    # constants. They are operands in the IR, and the argument is marked rather than invented.
+    # A reshape in a symbolic graph takes its sizes as computed values. They become operands, and
+    # the argument is marked as computed.
     graph = captured(model(), torch.randn(2, 6, 32), dynamic=True)
     text = _C.import_fx(graph, "forward")
     assert 'aten.view.default(%arg4_1, %mul_6) {arg1 = "dynamic"}' in text, text
@@ -130,15 +125,14 @@ def test_a_symbolic_graph_compiles_kernels() -> None:
     graph = captured(model(), torch.randn(2, 6, 32), dynamic=True)
     recipe = build_recipe(graph, tessiq.gpu, use_cache=False)
     assert recipe.kernels, "a symbolic graph should still compile to kernels"
-    # Every one of them takes the numbers it needs at the launch. A kernel here that thought it
-    # knew its extents would have got them from a shape that is only one of many.
+    # Every kernel takes its extents at launch, since the traced shape is only one of many.
     assert all(kernel.has_dynamic_extent for kernel in recipe.kernels.values())
 
 
 @pytest.mark.cuda
 def test_one_compile_serves_every_shape() -> None:
-    # The point of the whole thing. One kernel, launched with the count read off each call's
-    # output, gives the same answers as eager across shapes it was never compiled for.
+    # One kernel, launched with the count read off each call's output, matches eager across
+    # shapes it was not compiled for.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -152,8 +146,8 @@ def test_one_compile_serves_every_shape() -> None:
 
 @pytest.mark.cuda
 def test_the_elementwise_work_runs_on_the_device() -> None:
-    # Answers that match eager prove nothing on their own: running the whole graph uncompiled
-    # matches too. What this checks is that the launches happened.
+    # Matching eager proves nothing on its own, since running uncompiled matches too. This checks
+    # that the launches happened.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -172,8 +166,7 @@ def test_the_elementwise_work_runs_on_the_device() -> None:
 
 @pytest.mark.cuda
 def test_a_zero_extent_has_nothing_to_launch() -> None:
-    # A dimension that turns out to be zero. The static path never sees this, because a group of
-    # no elements is not compiled at all, so the dynamic launch is the only place it can arrive.
+    # A dimension that turns out to be zero, which only a dynamic launch can meet.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -187,9 +180,8 @@ def test_a_zero_extent_has_nothing_to_launch() -> None:
 
 @pytest.mark.cuda
 def test_a_mismatched_input_is_caught_at_the_launch() -> None:
-    # The IR spells every unknown extent as the same `?`, so it cannot prove that two of them are
-    # the same number. This check is what makes that safe: a kernel handed buffers of different
-    # sizes refuses rather than reading past the shorter one.
+    # The IR cannot prove two `?` extents equal, so a kernel handed buffers of different sizes
+    # refuses rather than reading past the shorter one.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -206,8 +198,7 @@ def test_a_mismatched_input_is_caught_at_the_launch() -> None:
 
 @pytest.mark.cuda
 def test_a_symbolic_graph_claims_what_a_concrete_one_does() -> None:
-    # The milestone. Not knowing the shapes costs nothing in coverage: the same operations get
-    # kernels, and the numbers they would have been compiled with arrive at the launch instead.
+    # Unknown shapes cost nothing in coverage: the same operations get kernels.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -227,9 +218,8 @@ def test_a_symbolic_graph_claims_what_a_concrete_one_does() -> None:
 
 @pytest.mark.cuda
 def test_a_softmax_gets_its_row_length_at_the_launch() -> None:
-    # The one case the divisor cannot be folded into the source: a softmax's rows are as long as
-    # the sequence, which is the thing that changes. The kernel takes the length as an argument,
-    # so one compile still covers every sequence length.
+    # A softmax's rows are as long as the sequence, which changes, so the kernel takes the row
+    # length as an argument.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 
@@ -246,10 +236,7 @@ def test_a_softmax_gets_its_row_length_at_the_launch() -> None:
 
 @pytest.mark.cuda
 def test_the_work_stays_on_the_device_between_kernels() -> None:
-    # Coverage is not the point on its own: an operation the compiler claims but cannot run falls
-    # back to the host and costs a transfer each way. What this checks is that a symbolic graph
-    # crosses the boundary no more often than a concrete one, which is what makes the kernels
-    # worth having.
+    # A symbolic graph must cross between host and device no more often than a static one.
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
 

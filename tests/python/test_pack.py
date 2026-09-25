@@ -2,12 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Packing a view on the device instead of on the host.
 
-`clone` is the one operation whose fallback is pure waste. Everything else reaches the host
-because there is no kernel for the arithmetic; a clone has no arithmetic. It reads a view and
-writes it packed, which the device can do to itself, and sending it across costs the whole tensor
-each way to produce a rearrangement of bytes that never had to leave.
-
-`.contiguous()` goes through the same operation, so these cover both.
+A clone does no arithmetic, so the device packs a view itself instead of sending it through the
+host fallback. `.contiguous()` goes through the same operation, so these cover both.
 """
 
 from __future__ import annotations
@@ -83,8 +79,8 @@ def test_clone_matches_the_host() -> None:
     "dtype", [torch.float32, torch.float64, torch.float16, torch.bfloat16, torch.int64, torch.bool]
 )
 def test_every_width_packs(dtype: torch.dtype) -> None:
-    # The kernel is written for an element width rather than an element type, because a copy does
-    # no arithmetic. That is what covers the dtypes the expression emitter has no spelling for.
+    # The kernel is written for an element width, so it covers dtypes the expression emitter has
+    # no spelling for.
     device = str(tessiq.gpu)
     source = torch.ones(3, 4, 5, device=device, dtype=torch.float32)
     base = source.to(dtype) if dtype != torch.bool else source.to(torch.bool)
@@ -106,8 +102,7 @@ def test_an_empty_tensor_has_nothing_to_pack() -> None:
 
 @pytest.mark.usefixtures("_debug_logs")
 def test_the_packing_stays_on_the_device(capfd: pytest.CaptureFixture[str]) -> None:
-    # The whole point, and the only way to check it that does not measure a clock. The fallback
-    # announces itself, so its silence is the evidence.
+    # The fallback logs when it runs, so no log line means the kernel packed it.
     device = str(tessiq.gpu)
     view = torch.randn(8, 16, 32, device=device).permute(1, 0, 2)
     capfd.readouterr()
@@ -120,8 +115,7 @@ def test_the_packing_stays_on_the_device(capfd: pytest.CaptureFixture[str]) -> N
 
 @pytest.mark.usefixtures("_debug_logs")
 def test_a_shape_too_deep_falls_back(capfd: pytest.CaptureFixture[str]) -> None:
-    # Kernels exist up to eight axes. A tensor deeper than that has to still work, by the route
-    # everything took before this existed.
+    # Kernels exist up to eight axes. A deeper tensor still works, through the fallback.
     device = str(tessiq.gpu)
     deep = torch.randn(2, 1, 1, 1, 1, 1, 1, 1, 3, device=device).transpose(0, 8)
     capfd.readouterr()
@@ -135,8 +129,7 @@ def test_a_shape_too_deep_falls_back(capfd: pytest.CaptureFixture[str]) -> None:
 
 
 def test_the_host_reference_device_still_works() -> None:
-    # tessiq.cpu has no CUDA behind it, so there is no kernel to launch and the fallback is the
-    # only route. It has to stay correct.
+    # tessiq.cpu has no CUDA behind it, so the fallback is the only route.
     view = torch.randn(3, 4, device=str(tessiq.cpu)).transpose(0, 1)
     packed = view.contiguous()
     assert packed.is_contiguous()
@@ -144,8 +137,8 @@ def test_the_host_reference_device_still_works() -> None:
 
 
 def test_the_encoder_block_leaves_nothing_on_the_host() -> None:
-    # The phase milestone. Every operation the block is made of now runs on the device, and the
-    # last four to get there were the clones that packed an attention head's view of the scores.
+    # Every operation in the block runs on the device, including the clones that pack an attention
+    # head's view of the scores.
     from test_models import EncoderBlock
 
     torch.manual_seed(0)

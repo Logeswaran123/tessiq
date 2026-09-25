@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """What fusion is worth.
 
-Compares one generated kernel against the same graph with the kernels removed. Same recipe, same
-device, same everything else, so the difference is whether the chain ran as one kernel or as
-separate operations.
+Compares one generated kernel against the same recipe with the kernels removed, so the only
+difference is one kernel against separate operations.
 
-Be clear about what the other side is. Without a kernel, each operation on a tessiq tensor reaches
-PyTorch's CPU implementation through the fallback, which copies to the host and back. So this
-measures a generated kernel against the fallback, which is what the backend does otherwise, rather
-than against a hand-written CUDA kernel per operation.
+Without a kernel, each operation on a tessiq tensor reaches PyTorch's CPU implementation through
+the fallback, which copies to the host and back. So this measures a generated kernel against the
+fallback, not against a CUDA kernel per operation.
 
 Run with: python bench/fusion.py
 """
@@ -67,7 +65,7 @@ def measure(work: Callable[[], object]) -> tuple[float, float, float]:
 
 
 def chain(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-    """The chain from the phase 6 milestone."""
+    """The fused chain the README quotes."""
     return torch.sigmoid(torch.relu(a * b + c))
 
 
@@ -89,12 +87,10 @@ def main() -> None:
         run_fused = tessiq.execute(fused)
         run_unfused = tessiq.execute(unfused)
 
-        # Same numbers either way, checked here rather than assumed, because a benchmark that
-        # measures the wrong answer quickly is worse than no benchmark.
+        # Both have to give the same numbers before either is timed.
         assert torch.allclose(run_fused(*inputs)[0], run_unfused(*inputs)[0], atol=1e-6)
 
-        # Bound as defaults: a bare closure over the loop variables reads whatever they hold when
-        # it runs, which for a benchmark timing several sizes is the last one every time.
+        # Bound as defaults, since a closure over loop variables would see only the last size.
         f_median, f_low, f_high = measure(lambda r=run_fused, x=inputs: r(*x))
         u_median, u_low, u_high = measure(lambda r=run_unfused, x=inputs: r(*x))
         print(

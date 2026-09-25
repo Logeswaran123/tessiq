@@ -16,19 +16,16 @@ namespace {
 /// Evaluates scalar arithmetic on constants at compile time.
 ///
 /// Precondition: `const` nodes carry a `value` attribute matching their result type.
-/// Postcondition: no `add`, `sub` or `mul` node has all-constant scalar operands.
+/// Postcondition: no `add`, `sub` or `mul` node that is still used has all-constant scalar
+/// operands.
 ///
-/// Legality: an operation on values known at compile time has a result known at compile time, so
-/// replacing the operation with that result cannot change what the graph computes. Two limits keep
-/// that true here:
+/// Two limits:
 ///
-///  - **Scalars only.** A folded tensor would have to be materialised as a dense attribute, and a
-///    pass that can silently turn a megabyte of weights into IR text is a pass that makes graphs
-///    unreadable and files enormous. Tensor folding belongs with a constant pool.
-///  - **Floating point is folded with the same operation the target would run.** For the scalar
-///    ops here that is exact on any IEEE-754 machine. Anything where the host and the device could
-///    round differently -- a fused multiply-add, a transcendental -- must not be folded without
-///    knowing the target, so those ops are simply not in the table.
+///  - Scalars only. Folding a tensor would put its contents in the IR as an attribute, which needs
+///    a constant pool first.
+///  - Only `add`, `sub` and `mul`. They are computed in double, and rounding that to a narrower
+///    float type gives the same answer as computing in it. An operation where host and device can
+///    round differently, such as a fused multiply-add or a transcendental, is not folded.
 class ConstantFolding final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "const-fold"; }
@@ -59,8 +56,7 @@ class ConstantFolding final : public Pass {
         continue;
       }
 
-      // Before the node it replaces, not appended: a definition after its use is not a
-      // graph, and the verifier says so.
+      // Before the node it replaces, since a definition has to come before its uses.
       ir::Node* folded = graph.insert_node("const", node);
       if (ir::is_float(type.dtype())) {
         const double result = apply(node->op(), as_double(lhs), as_double(rhs));
@@ -77,8 +73,7 @@ class ConstantFolding final : public Pass {
       changed = true;
     }
 
-    // The folded node is left in place with no users; dead-node-elimination removes it. Keeping
-    // this pass to one job means a partially folded chain is still a valid graph at every step.
+    // The folded nodes are left with no users for dead-node-elimination.
     return changed;
   }
 

@@ -1,8 +1,7 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Which operations are elementwise. The table is duplicated across two spellings, which is the
-// kind of thing that goes wrong quietly, so it is checked rather than trusted.
+// Which operations are elementwise, under both spellings.
 
 #include <algorithm>
 #include <gtest/gtest.h>
@@ -23,8 +22,7 @@ TEST(OpTraitsTest, KnowsTheElementwiseOperations) {
 }
 
 TEST(OpTraitsTest, AMatrixMultiplyIsNotElementwise) {
-  // It reads positions it is not writing, which is exactly what cannot be fused into a loop that
-  // walks one index.
+  // It reads positions other than the one it writes, so it cannot join a loop over one index.
   EXPECT_FALSE(is_elementwise("aten.mm.default"));
   EXPECT_FALSE(is_elementwise("mm"));
   EXPECT_FALSE(is_elementwise("aten.convolution.default"));
@@ -32,8 +30,7 @@ TEST(OpTraitsTest, AMatrixMultiplyIsNotElementwise) {
 
 TEST(OpTraitsTest, BothSpellingsOfAnOperationAgree) {
   // The table carries a short name for hand-written IR and an ATen name for imported graphs. A
-  // missing spelling is invisible until a chain stops fusing where it should, which is how
-  // aten.tanh.default was found missing.
+  // missing spelling only shows as a chain that stops fusing.
   const std::vector<std::pair<std::string, std::string>> pairs{
       {"abs", "aten.abs.default"},
       {"add", "aten.add.Tensor"},
@@ -54,14 +51,8 @@ TEST(OpTraitsTest, BothSpellingsOfAnOperationAgree) {
 }
 
 TEST(OpTraitsTest, EverythingTheBackendSupportsHasAWayToRun) {
-  // Written once as "everything supported is elementwise", which reductions ended, then as
-  // "everything supported has a kernel shape", which movement operations ended, then as "nothing
-  // supported is a matmul", which cuBLAS ended. Each category now runs some way, so what this
-  // checks is that every claimed operation belongs to one of them and that the list is written
-  // down rather than assumed.
-  //
-  // A fifth category added without an execution path fails here rather than reaching the fallback
-  // by accident, which is what this test has caught three times.
+  // Every claimed operation belongs to a category with an execution path. A new category added
+  // without one fails here rather than reaching the fallback.
   for (const std::string& op : default_op_support().names()) {
     const OpInfo* info = find_op(op);
     ASSERT_NE(info, nullptr) << op << " is supported and not in the table";
@@ -85,9 +76,8 @@ TEST(OpTraitsTest, TheListIsSortedAndComplete) {
 }
 
 TEST(OpTraitsTest, EveryElementwiseRowCanBeEmitted) {
-  // The emitter substitutes $0 and $1 into the expression and nothing else, so a row whose arity
-  // and expression disagree produces a kernel that either drops an input or reads past its
-  // arguments. Checking it here means a bad ops.toml row fails the suite rather than the GPU.
+  // The emitter substitutes $0 and $1, so a row whose arity and expression disagree would drop an
+  // input or read past its arguments. A bad ops.toml row fails here rather than on the GPU.
   for (const std::string& name : elementwise_ops()) {
     const int arity = elementwise_arity(name);
     const std::string_view expression = elementwise_expression(name);

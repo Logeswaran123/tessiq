@@ -48,8 +48,7 @@ std::mutex& launch_mutex() {
 
 /// One cuBLAS handle per device, created on first use and kept.
 ///
-/// Creating a handle allocates workspace and is far more expensive than the multiplies a model
-/// does with it, so this is a cache rather than a per-call resource.
+/// Creating a handle allocates workspace and costs far more than a multiply.
 Result<cublasHandle_t> handle_for(int ordinal) {
   static std::unordered_map<int, cublasHandle_t> handles;
 

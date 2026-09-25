@@ -34,11 +34,11 @@ bool any_extent_is_unknown(const ir::Node& node) {
   return false;
 }
 
-/// Whether every value the node reads and writes has an element type `info` has a kernel for.
+/// Whether every value the node reads and writes has an element type `info` accepts.
 ///
-/// Always true for an operation from ops.toml, which accepts every type and leaves the question to
-/// the emitter. A registered operation names the types its expression was written for, and a node
-/// of any other type stays on the host rather than reaching a kernel nobody wrote for it.
+/// Most operations accept every type and leave the question to the emitter. The ones that name
+/// types are those backed by cuBLAS or cuDNN, which are float32 only here, and custom operations,
+/// whose kernels were written for particular types.
 bool accepts_the_types(const OpInfo& info, const ir::Node& node) {
   for (std::size_t i = 0; i < node.result_count(); ++i) {
     if (!info.accepts(node.result(i)->type().dtype())) {
@@ -54,35 +54,30 @@ bool accepts_the_types(const OpInfo& info, const ir::Node& node) {
   return true;
 }
 
-/// Whether there can be a kernel for this node given the types it actually has.
+/// Whether a kernel can be built for this node, given its element types and shapes.
 ///
-/// Support is a property of the operation for every shape the compiler knows, and this is the one
-/// case where it is not. When an extent is not known until the call, what can still run is
-/// anything whose numbers can arrive with the tensors: a matrix multiply, a reduction, and a loop
-/// reading operands at the output position or in whole runs or cycles of it. What cannot is a
-/// loop that steps through a permuted operand axis by axis, because that needs every extent
-/// written into the source and there are none to write.
+/// `OpSupport` answers for the operation and this answers for the node. It says no when a value
+/// has a type the operation does not accept, when the node is a convolution cuDNN has no plan
+/// for, or when an extent is unknown until the call and the kernel would need it compiled in.
+/// Matmuls, reductions and packs take their extents as arguments, and so does a loop that reads
+/// its operands at the output position or in whole runs or cycles of it. A loop that steps
+/// through a permuted operand axis by axis does not.
 ///
-/// Claiming those anyway is worse than leaving them alone. A node on the device with no kernel
-/// reaches the host fallback, which is the same computation plus a transfer each way, so the
-/// graph gets slower the more of it the compiler claims. Measured on the encoder block: claiming
-/// everything put 69 operations on that path and took 12.2 ms against 0.7 ms for eager.
+/// A claimed node with no kernel runs through the host fallback, which costs a transfer each way
+/// on top of the computation, so it is better left unclaimed.
 bool has_a_kernel_for_these_types(const ir::Node& node) {
   const OpInfo* info = find_op(node.op());
   if (info != nullptr && !accepts_the_types(*info, node)) {
     return false;
   }
   if (info != nullptr && info->category == OpCategory::kCustom) {
-    // A registered kernel is launched over whatever it is handed, with its own code working out
-    // the extents from the tensors, so a shape that is not known until the call stops nothing.
+    // A custom kernel reads its extents from the tensors it is given.
     return true;
   }
   if (info != nullptr && info->category == OpCategory::kConvolution) {
-    // Asked before anything else, because unlike the other categories a convolution can have no
-    // kernel even when every extent is known. cuDNN is given a two dimensional convolution, which
-    // is four dimensional tensors; a one or three dimensional one has no plan, and claiming it
-    // would put it on the device with nothing to run it. A shape that is not known until the call
-    // has no plan either, because the descriptors are built once when the graph is compiled.
+    // Checked before the extents, because a convolution can lack a kernel even when they are all
+    // known: plans are built only for 2-D convolutions, which have 4-D tensors. The descriptors
+    // are built at compile time, so an unknown extent rules one out too.
     return node.result_count() == 1 && node.result(0)->type().shape().rank() == 4 &&
            !any_extent_is_unknown(node);
   }
@@ -93,18 +88,16 @@ bool has_a_kernel_for_these_types(const ir::Node& node) {
     return false;
   }
   if (info->category == OpCategory::kMovement) {
-    // No kernel either way. A movement operation is interpreted wherever it is placed, and
-    // `cluster` already keeps one that moves nothing onto the host.
+    // Movement operations have no kernel; they become views wherever they run. `cluster` leaves
+    // a unit made only of them on the host.
     return true;
   }
   if (info->category == OpCategory::kMatmul || info->category == OpCategory::kReduction ||
       info->category == OpCategory::kCopy) {
-    // All three take their extents as arguments: BLAS at the call, the reduction kernel as three
-    // numbers beside its buffers, and the pack kernel as one extent and one step per axis. So a
-    // shape that changes does not stop any of them. Whether the layout or the axes are ones they
-    // can handle is a separate question, and one that `extract_gemm`, `extract_reduction` and the
-    // pack registration already answer, exactly as they do for a shape that is known. This asks
-    // only what the extents decide.
+    // These take their extents as arguments: BLAS at the call, the reduction kernel as three
+    // numbers, the pack kernel as an extent and a stride per axis. Whether they handle the layout
+    // or the axes is decided by `extract_gemm`, `extract_reduction` and the pack registration, as
+    // it is for static shapes.
     return true;
   }
   if (info->category != OpCategory::kElementwise || node.result_count() != 1) {
@@ -126,9 +119,8 @@ bool has_a_kernel_for_these_types(const ir::Node& node) {
 /// Precondition: none.
 /// Postcondition: every node carries `tessiq.supported`.
 ///
-/// This changes nothing about what the graph computes; it annotates. Splitting it from clustering
-/// means the answer is visible in the printed IR, so a clustering test can be read without also
-/// having to work out which operations the support set happened to contain.
+/// Only annotates. Keeping it apart from clustering puts the answer in the printed IR, so a
+/// clustering test states its input directly.
 class MarkSupported final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "mark-supported"; }

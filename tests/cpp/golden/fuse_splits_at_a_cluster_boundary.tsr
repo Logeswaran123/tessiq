@@ -1,6 +1,6 @@
 // RUN: mark-supported,cluster,fuse-elementwise
-// A matrix multiply has no kernel and is not elementwise, so it ends one group and the operations
-// after it start another.
+// hypot has no kernel, so it runs on the host between two clusters, and each side fuses into a
+// group of its own.
 graph @g(%a: f32[4,4], %b: f32[4,4]) -> f32[4,4] {
   %x = aten.add.Tensor(%a, %b) : f32[4,4]
   %r = aten.relu.default(%x) : f32[4,4]

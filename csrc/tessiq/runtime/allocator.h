@@ -33,22 +33,17 @@ struct AllocatorStats {
 
 /// Sub-allocates device memory, keeping freed blocks for reuse.
 ///
-/// Driver allocation is slow enough that a training step which allocates per iteration will spend
-/// most of its time in the driver. Freed blocks are therefore cached rather than returned.
-///
-/// Sizes are rounded to a size class so that a block freed by one tensor can serve the next tensor
-/// of similar size. Without rounding the free list fills with blocks of odd sizes that never match
-/// a later request.
+/// Driver allocation is slow, so freed blocks are cached rather than returned. Sizes are rounded to
+/// a size class so that a block freed by one tensor can serve the next of similar size.
 ///
 /// Thread-safe.
 class CachingAllocator {
  public:
-  /// Size class granularity for small requests. Address alignment is the Device's contract
-  /// (kDeviceAlignment), not something rounding the size can provide.
+  /// Size class granularity for small requests. Address alignment comes from the Device.
   static constexpr std::size_t kAlignment = kDeviceAlignment;
 
-  /// Requests at or above this are rounded to kLargeGranularity instead of kAlignment. Rounding
-  /// a 100 MB tensor to 512 bytes leaves a free list that never matches; rounding to 2 MB does.
+  /// Requests at or above this are rounded to kLargeGranularity instead of kAlignment, so large
+  /// blocks are reusable across slightly different sizes.
   static constexpr std::size_t kLargeThreshold = 1U << 20U;
 
   static constexpr std::size_t kLargeGranularity = 2U << 20U;
@@ -64,8 +59,7 @@ class CachingAllocator {
 
   /// Returns a pointer to at least `bytes` of device memory, or kResourceExhausted.
   ///
-  /// A zero-byte request returns a distinct non-null pointer, matching the convention that a
-  /// zero-element tensor still has an identity.
+  /// A zero-byte request returns a distinct non-null pointer.
   Result<void*> allocate(std::size_t bytes);
 
   /// Returns a pointer from allocate() to the cache. Passing null is a no-op; passing anything
@@ -74,14 +68,12 @@ class CachingAllocator {
 
   /// Releases cached blocks back to the device. Blocks still in use are untouched.
   ///
-  /// Returns the number of bytes released. Used to hand memory back to another process, and by
-  /// tests to assert the cache is doing what it claims.
+  /// Returns the number of bytes released.
   std::size_t empty_cache();
 
   [[nodiscard]] AllocatorStats stats() const;
 
-  /// Rounds `bytes` up to its size class. Exposed for tests, which assert the policy directly
-  /// rather than inferring it from allocation behaviour.
+  /// Rounds `bytes` up to its size class. Public for tests.
   [[nodiscard]] static std::size_t round_size(std::size_t bytes);
 
  private:
@@ -105,8 +97,7 @@ class CachingAllocator {
   AllocatorStats stats_;
 };
 
-/// The allocator for `index`. One per device, so statistics are per backend rather than pooled
-/// into a total that belongs to no device.
+/// The allocator for `index`. One per device.
 CachingAllocator& allocator_at(int index);
 
 /// The allocator for the index this thread is on.

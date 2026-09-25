@@ -13,12 +13,11 @@ namespace {
 /// Removes nodes whose results nothing reads.
 ///
 /// Precondition: use lists agree with operands, which the verifier checks.
-/// Postcondition: every remaining node has at least one result that is used or returned.
+/// Postcondition: every remaining node with results has at least one that is used or returned.
 ///
-/// Legality: removing a node that produces nothing anyone reads cannot change what the graph
-/// computes. This holds only because the IR has no side-effecting ops. When one arrives it needs
-/// an effects marker and this pass has to consult it, or it will delete the store nobody reads
-/// the result of.
+/// Legality: removing a node nobody reads cannot change what the graph computes, because no
+/// operation in the IR has side effects. One that does will need an effects marker for this pass
+/// to check.
 class DeadNodeElimination final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "dead-node-elimination"; }
@@ -30,8 +29,8 @@ class DeadNodeElimination final : public Pass {
   Result<bool> run(ir::Graph& graph) override {
     bool changed = false;
 
-    // Backwards, so a chain of dead nodes goes in one sweep: erasing a consumer is what makes its
-    // producer dead. Forwards would need iterating to a fixpoint.
+    // Backwards, so a dead chain goes in one sweep: erasing a consumer is what makes its producer
+    // dead.
     const std::vector<ir::Node*> nodes = graph.nodes();
     for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
       ir::Node* node = *it;
@@ -57,8 +56,7 @@ class DeadNodeElimination final : public Pass {
         return true;
       }
     }
-    // A node with no results at all is kept: it produces nothing, so liveness says nothing about
-    // it, and it is more likely to be an effect this pass must not touch.
+    // A node with no results is kept. If it does anything, it is a side effect.
     return node->result_count() == 0;
   }
 };

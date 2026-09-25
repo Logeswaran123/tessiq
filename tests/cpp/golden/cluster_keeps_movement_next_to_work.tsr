@@ -1,6 +1,6 @@
 // RUN: mark-supported,cluster
-// The other side of the same rule. Here the group has an operation that computes, so the transfer
-// is earned and the movement joins it rather than splitting the group in two.
+// The counterpart of cluster_leaves_a_movement_only_group_on_the_host.tsr. This unit has an
+// operation that computes, so it is placed and the movement stays in it.
 graph @g(%a: f32[4,8]) -> f32[8,4:1,8] {
   %r = aten.relu.default(%a) : f32[4,8]
   %p = aten.permute.default(%r) {arg1 = [1,0]} : f32[8,4:1,8]

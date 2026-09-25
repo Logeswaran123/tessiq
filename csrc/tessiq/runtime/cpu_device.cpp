@@ -18,10 +18,8 @@ namespace tessiq {
 
 namespace {
 
-/// Device memory is host memory here, so copies are memcpy and synchronize does nothing.
-///
-/// This backend is never optimised. It is what CUDA results are checked against, so its value is
-/// being obviously correct; anything clever in here weakens the oracle.
+/// Device memory is host memory here, so copies are memcpy and synchronize does nothing. Kept
+/// simple on purpose, since CUDA results are checked against it.
 class CpuDevice final : public Device {
  public:
   [[nodiscard]] DeviceKind kind() const override { return DeviceKind::kCpu; }

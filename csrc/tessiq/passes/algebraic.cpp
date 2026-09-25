@@ -17,9 +17,8 @@ namespace {
 
 /// Whether `value` is produced by a `const` node holding exactly `target`.
 ///
-/// Integer and floating attributes both answer, because a graph may spell one as the other and a
-/// rewrite that only recognised its own spelling would fire unpredictably. The comparison is exact:
-/// 0 and 1 are representable in every dtype the IR carries, so there is no tolerance to choose.
+/// Matches an integer or a float attribute, since a graph may spell the constant either way. The
+/// comparison is exact; 0 and 1 are representable in every dtype.
 bool is_constant(const ir::Value* value, std::int64_t target) {
   const ir::Node* producer = value->producer();
   if (producer == nullptr || producer->op() != "const") {
@@ -61,8 +60,7 @@ bool has_scalar_argument(const ir::Node* node, std::int64_t target) {
 
 /// Whether `node` is the named operation, under either spelling.
 ///
-/// Imported graphs carry `aten.mul.Tensor`; graphs written by hand for a test carry `mul`. Both
-/// are matched without building a string, because this runs once per identity per node.
+/// Imported graphs carry `aten.mul.Tensor` and hand-written test graphs carry `mul`.
 bool is_op(const ir::Node* node, std::string_view name) {
   std::string_view op = node->op();
   if (op == name) {
@@ -92,14 +90,12 @@ struct Identity {
   bool exact_for_floats;
 };
 
-/// One table, so an identity cannot be half-added.
+/// Multiplying or dividing by one is exact for every float, including infinities, signed zeros and
+/// NaNs.
 ///
-/// Multiplying or dividing by one is exact for every value a float can hold, including the
-/// infinities, both zeros and every NaN, because the result is the operand's own bit pattern.
-///
-/// Adding or subtracting zero is not. `(-0.0) + 0.0` is `+0.0`, so the rewrite would change the
-/// sign of a zero, and a value that compares equal is not the same value once something divides
-/// by it. Integers have one zero and no such trap, so the additive identities are theirs alone.
+/// Adding or subtracting zero is not, because the match accepts either zero: `-0.0 + 0.0` is
+/// `+0.0`, and `x - (-0.0)` is the same sum. The sign of a zero shows once something divides by it,
+/// so the additive identities apply to integers only.
 constexpr std::array<Identity, 4> kIdentities{{
     {"mul", 1, true, true},
     {"div", 1, false, true},
@@ -119,9 +115,8 @@ const Identity* find_identity(const ir::Node* node, bool is_float_result) {
 
 /// The operand this node could collapse to, or null when no identity applies.
 ///
-/// Every rewrite here replaces the node's result with one of its own operands, so the two must
-/// have the same type. A broadcast makes them differ: `add(%x: i32[1], %zeros: i32[4])` produces
-/// `i32[4]`, and `%x` cannot stand in for it because the zeros are what gave it its shape.
+/// The operand has to have the result's type. A broadcast makes them differ:
+/// `add(%x: i32[1], %zeros: i32[4])` produces `i32[4]`, and `%x` cannot stand in for it.
 ir::Value* identity_operand(const ir::Node* node) {
   if (node->result_count() != 1) {
     return nullptr;
@@ -132,7 +127,7 @@ ir::Value* identity_operand(const ir::Node* node) {
     return nullptr;
   }
 
-  // The one-operand form, where the constant arrived as an attribute rather than an operand.
+  // The constant arrived as an attribute rather than an operand.
   if (node->operand_count() == 1) {
     ir::Value* only = node->operand(0);
     const bool applies = has_scalar_argument(node, identity->constant) && only->type() == result;
@@ -155,9 +150,7 @@ ir::Value* identity_operand(const ir::Node* node) {
 
 /// The operand of a unary node that makes it redundant, or null.
 ///
-/// Two cases, both exact. Negation is its own inverse, so `neg(neg(x))` is `x` down to the bit
-/// pattern. `relu` and `abs` are idempotent, so applying either twice gives what applying it once
-/// already gave.
+/// Both cases are exact: `neg(neg(x))` is `x` bit for bit, and `relu` and `abs` are idempotent.
 ir::Value* redundant_unary(const ir::Node* node) {
   if (node->operand_count() != 1 || node->result_count() != 1) {
     return nullptr;
@@ -181,18 +174,13 @@ ir::Value* redundant_unary(const ir::Node* node) {
   return nullptr;
 }
 
-/// Replaces operations whose result is already available with the value that holds it.
+/// Replaces an operation with one of its operands when an identity says they are equal.
 ///
 /// Precondition: none.
-/// Postcondition: no node matches one of the identities below.
+/// Postcondition: no node that is still used matches one of the identities above.
 ///
-/// Legality is per identity and each one is argued where it is applied. The rule running through
-/// all of them is that a rewrite must be exact rather than close: an identity that holds for
-/// ordinary values and not for a signed zero, an infinity or a NaN is not an identity, and the
-/// graph is not the place to decide that those cases do not matter.
-///
-/// The simplified node is left in place with no users, as cse does, so dead-node-elimination
-/// removes it and a partially simplified graph is valid at every step.
+/// Every identity must be exact, including for signed zeros, infinities and NaNs. The replaced
+/// node is left with no users for dead-node-elimination to remove.
 class AlgebraicSimplification final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "algebraic-simplify"; }
@@ -213,9 +201,8 @@ class AlgebraicSimplification final : public Pass {
         continue;
       }
 
-      // Only a replacement that moved a use counts as a change. The simplified node stays until
-      // dead-node-elimination runs, so a second pass finds it again, and reporting a change every
-      // time would keep a fixpoint loop spinning on a graph that has stopped moving.
+      // A change only if it moved a use. The replaced node stays until dead-node-elimination, so
+      // running this again finds it again and must not report a change.
       if (is_used(graph, node->result(0))) {
         changed = true;
       }

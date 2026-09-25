@@ -31,12 +31,11 @@ struct CubinCacheStats {
 
 /// Compiles `source`, reusing a file from a previous run when one matches.
 ///
-/// The key is a digest of the source, the architecture and the compiler's version. The version is
-/// in there because a toolkit upgrade can change what the same source compiles to, and a cubin
-/// produced by an older compiler must not be handed to a newer driver as though it were current.
+/// The key is a digest of the source, the architecture and the NVRTC version, since a toolkit
+/// upgrade can change what the same source compiles to.
 ///
-/// A cache that cannot be read or written is not an error. The kernel is compiled and returned
-/// either way, because a read-only home directory should make compilation slower and not stop it.
+/// A cache that cannot be read or written is not an error; the kernel is compiled and returned
+/// either way.
 Result<Cubin> compile_cached(std::string_view source, std::string_view name, int major, int minor);
 
 [[nodiscard]] CubinCacheStats cubin_cache_stats();

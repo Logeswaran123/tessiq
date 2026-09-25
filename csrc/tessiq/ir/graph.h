@@ -24,11 +24,9 @@ class Node;
 
 /// A constant carried on a node: `%c = const() {value = 1.0} : f32[]`.
 ///
-/// Small on purpose. Anything that needs a richer attribute is usually asking for an operand.
-///
-/// `std::monostate` is Python's None, which real graphs carry: a convolution with no bias passes
-/// None where the bias goes, and dropping it would renumber every argument after it. It is first
-/// so that a default-constructed attribute is the absent one.
+/// `std::monostate` is Python's None. Graphs carry it: a convolution with no bias passes None where
+/// the bias goes, and dropping it would renumber the arguments after it. It comes first so that a
+/// default-constructed attribute is None.
 using Attribute = std::
     variant<std::monostate, std::int64_t, double, bool, std::string, std::vector<std::int64_t>>;
 
@@ -40,9 +38,8 @@ using AttributeMap = std::map<std::string, Attribute, std::less<>>;
 
 /// An SSA value: a graph input, or one result of one node.
 ///
-/// Values are owned by the graph or the node that produces them and are referred to by pointer
-/// everywhere else. A value outlives every use of it, because removing a node with live uses is
-/// rejected by the graph rather than left to the caller.
+/// Owned by the graph or by the node that produces it, and referred to by pointer everywhere else.
+/// The graph refuses to erase a node whose results are still used, so a value outlives its uses.
 class Value {
  public:
   Value(std::string name, TensorType type, Node* producer, std::size_t result_index)
@@ -96,11 +93,8 @@ class Node {
 
   [[nodiscard]] const std::string& op() const { return op_; }
 
-  /// Makes this node a different operation over the same operands, attributes and results.
-  ///
-  /// For a rewrite that swaps one operation for another that computes the same thing. Everything
-  /// that refers to the node or to its results stays valid, which replacing it with a new node
-  /// would not give: the results would have to be renamed back to what the executor knows them by.
+  /// Changes which operation this is, keeping operands, attributes and results. For a rewrite that
+  /// swaps one operation for an equivalent one without renaming anything.
   void set_op(std::string op) { op_ = std::move(op); }
 
   [[nodiscard]] Graph* graph() const { return graph_; }
@@ -177,18 +171,14 @@ class Graph {
   /// Appends a node. Operands and results are added to it afterwards.
   Node* add_node(std::string op);
 
-  /// Inserts a node immediately before `before`, or appends when `before` is null.
-  ///
-  /// A pass that creates a replacement has to put it where its uses can see it. Appending would
-  /// leave the definition after the use, which the verifier rejects.
+  /// Inserts a node immediately before `before`, or appends when `before` is null. A replacement
+  /// goes before its first use; appending it would put the definition after the use.
   Node* insert_node(std::string op, Node* before);
 
   void set_results(std::vector<Value*> results);
 
-  /// Removes `node`, which must have no users of any of its results.
-  ///
-  /// Returns kInvalidArgument rather than asserting: a pass asking to erase a live node has made
-  /// an ordinary mistake about the graph, and the message names what still uses it.
+  /// Removes `node`. Fails with kInvalidArgument, naming the users, if any of its results is still
+  /// used or returned.
   Result<void> erase(Node* node);
 
   /// Replaces every use of `from` with `to`, including graph results.
@@ -208,9 +198,9 @@ class Graph {
 
 /// Checks the structural invariants a pass is allowed to assume.
 ///
-/// Every operand defined before its use, use lists agreeing with actual operands, results
-/// belonging to nodes in the graph, no duplicate names. Run after every pass in debug builds:
-/// a pass that corrupts the graph should be caught in its own test, not three passes later.
+/// Every operand defined before its use, use lists agreeing with operands, results belonging to
+/// nodes in the graph, and no duplicate names. The pass manager runs it after every pass in debug
+/// builds.
 Result<void> verify(const Graph& graph);
 
 } // namespace tessiq::ir

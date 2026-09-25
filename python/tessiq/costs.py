@@ -1,20 +1,11 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""What each kernel costs the device, measured without the measurement getting in the way.
+"""What each kernel costs the device, measured in isolation.
 
-The profiler can mark the stream around a kernel inside a real call, and on this card a mark costs
-about what a small kernel costs. So a per-kernel reading taken that way carries a mark's worth of
-bias, which is fine for ranking kernels against each other and not fine for adding them up and
-comparing the total against anything.
-
-This takes the other approach. Each kernel is launched many times between one pair of marks, so
-the cost of marking is divided by however many launches it covered and stops mattering. What it
-gives up is the real call's interleaving: these are kernels run back to back on a device that is
-never waiting, which is the right number for "what does our generated code cost" and the wrong one
-for "what happens in a call".
-
-Both are needed, and they answer different questions. This one answers whether the kernels are the
-problem.
+A stream mark costs about as much as a small kernel, so the profiler's per-kernel timings inside a
+real call carry that bias. Here each kernel is launched many times between one pair of marks, which
+spreads their cost over every launch. The kernels then run back to back on an idle device rather
+than interleaved as in a call, so this measures the generated code, not the call.
 """
 
 from __future__ import annotations
@@ -27,8 +18,7 @@ from tessiq import _C
 from tessiq.device import cuda_ordinal
 from tessiq.recipe import Recipe
 
-#: Launches per measurement. Chosen so that one pair of marks, about sixteen microseconds, is
-#: under a percent of what it covers for even the smallest kernel here.
+#: Launches per measurement, enough that the pair of marks is a small part of what it covers.
 DEFAULT_REPEATS = 200
 
 
@@ -38,7 +28,7 @@ class KernelCost:
 
     Attributes:
         name: The graph node whose value the kernel writes.
-        kind: ``fused``, ``reduction`` or ``gemm``.
+        kind: ``fused``, ``reduction``, ``gemm``, ``conv`` or ``custom``.
         microseconds: Device time for one launch, averaged over `repeats` back to back.
         repeats: How many launches the pair of marks covered.
     """
@@ -52,11 +42,9 @@ class KernelCost:
 def _tensor_like(node: torch.fx.Node, device: torch.device, *, packed: bool) -> torch.Tensor:
     """A tensor shaped and laid out the way this node's value will be.
 
-    Taken from the fake tensor rather than from a run, so nothing has to be executed to find out
-    what a kernel will be handed. `packed` forces the contiguous layout, which is what a fused
-    loop and a reduction require of their inputs and what the executor gives them. A matmul is the
-    exception: it reads the layout it was given, so a transposed operand has to stay transposed or
-    the measurement is of a different call.
+    Taken from the fake tensor, so nothing has to run. `packed` forces the contiguous layout the
+    executor gives a kernel that packs its inputs; otherwise the fake tensor's layout is kept, so a
+    matmul's transposed operand stays transposed.
     """
     meta = node.meta["val"]
     if packed or meta.is_contiguous():
@@ -71,9 +59,8 @@ def _kind_of(kernel: _C.Kernel) -> str:
 def kernel_costs(recipe: Recipe, *, repeats: int = DEFAULT_REPEATS) -> list[KernelCost]:
     """Device time per launch for every kernel in `recipe`, slowest first.
 
-    Nothing is run beforehand: the tensors come from the shapes the compiler already recorded, so
-    what a kernel reads is uninitialised memory of the right size and layout. That is enough,
-    because a kernel's cost here is bandwidth and occupancy rather than the values in it.
+    The inputs are uninitialised tensors of the recorded shapes and layouts, which is enough since
+    the cost does not depend on the values.
 
     Args:
         recipe: A compiled graph. Its device has to be a GPU, since this measures device time.
@@ -104,8 +91,7 @@ def kernel_costs(recipe: Recipe, *, repeats: int = DEFAULT_REPEATS) -> list[Kern
             for _ in range(3):
                 kernel.launch(inputs, out)
         except (KeyError, TypeError, ValueError):
-            # A kernel whose operands this cannot reconstruct is left out. Reporting it as free
-            # would be worse than not reporting it.
+            # Left out rather than reported as free.
             continue
 
         timer = _C.DeviceTimer(ordinal)

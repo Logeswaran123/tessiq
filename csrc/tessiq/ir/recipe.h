@@ -36,14 +36,9 @@ struct Buffer {
 
 /// Everything needed to run a graph, worked out once.
 ///
-/// A recipe holds names rather than pointers into the graph it came from, because it is built to
-/// outlive that graph: it gets cached, and the next call that matches reuses it long after the
-/// `Graph` object has gone. A pointer here would be a dangling read that happens to work until
-/// the allocator reuses the memory.
-///
-/// It says nothing about what a step runs on, beyond which cluster claimed it. Turning a cluster
-/// into a kernel is a separate job, and a recipe that already knew the answer would have to be
-/// rebuilt when that changes.
+/// Holds value names rather than pointers into the graph, because a cached recipe outlives the
+/// graph it was built from. It records which cluster claimed each step; kernels are built
+/// separately.
 struct Recipe {
   std::vector<Step> steps;
 
@@ -63,12 +58,9 @@ struct Recipe {
 
 /// Lowers a graph into a recipe.
 ///
-/// Reads `tessiq.cluster` to decide which steps the backend claims. A graph that has not been
-/// through `mark-supported,cluster` has no such attributes, so every step is `kHost`, which is a
-/// correct recipe for a backend that claims nothing rather than an error.
-///
-/// `alignment` is the caller's, for the reason `plan_memory` takes one: the IR does not know what
-/// hardware it is lowering for.
+/// Reads `tessiq.cluster` to decide which steps the backend claims. Without it, as in a graph that
+/// has not been through `mark-supported,cluster`, every step is `kHost`. `alignment` is the
+/// device's, as for `plan_memory`.
 Result<Recipe> build_recipe(const Graph& graph, std::size_t alignment);
 
 } // namespace tessiq::ir

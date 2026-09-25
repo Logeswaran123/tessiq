@@ -15,7 +15,7 @@ namespace tessiq::codegen {
 
 namespace {
 
-/// The message an external failure carries, built once so both return types can use it.
+/// The message for a failed CUDA runtime call.
 std::string cuda_message(cudaError_t status, const char* what) {
   return std::string(what) + ": " + cudaGetErrorName(status);
 }
@@ -30,8 +30,7 @@ DeviceTimer::DeviceTimer(int ordinal) : ordinal_(ordinal) {
   if (cudaSetDevice(ordinal) != cudaSuccess) {
     return;
   }
-  // Default flags, which time with the device's own clock. cudaEventDisableTiming would make
-  // these cheaper and useless.
+  // Default flags, so the events record timestamps.
   cudaEvent_t start = nullptr;
   cudaEvent_t stop = nullptr;
   if (cudaEventCreate(&start) != cudaSuccess) {
@@ -58,9 +57,8 @@ Result<void> DeviceTimer::start() {
   if (!ready()) {
     return unsupported("this timer has no events");
   }
-  // Switched only when it has to be. An event can only be recorded on the device it was created
-  // on, so the check has to happen, but the switch itself is most of what marking costs and the
-  // device is almost always already this one: the launcher set it for the kernel about to run.
+  // An event records only on the device it was created on. The launcher has usually set this
+  // device already, and switching is most of what marking costs, so switch only when needed.
   int current = -1;
   if (const cudaError_t status = cudaGetDevice(&current); status != cudaSuccess) {
     return external_error(cuda_message(status, "cudaGetDevice"));
@@ -70,7 +68,7 @@ Result<void> DeviceTimer::start() {
       return external_error(cuda_message(status, "cudaSetDevice"));
     }
   }
-  // Stream 0, which is where the launcher puts every kernel.
+  // The legacy default stream, where every launch goes.
   if (const cudaError_t status = cudaEventRecord(as_event(start_), nullptr);
       status != cudaSuccess) {
     return external_error(cuda_message(status, "cudaEventRecord"));

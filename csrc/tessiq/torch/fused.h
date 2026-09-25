@@ -40,12 +40,12 @@ class FusedKernel final : public Kernel {
     /// Every value the group computes, the output included.
     std::vector<std::string> members;
 
-    /// Elements every buffer holds. Fusion refuses a shape change, so there is one count.
+    /// Elements in the output, or `ir::kDynamic`. An input holds as many, or fewer when it
+    /// broadcasts.
     std::int64_t elements = 0;
 
-    /// How each input is reached, in the order `inputs` names them. A kernel written for a shape
-    /// nobody knew could not fold a broadcast's divisor into its source, so the launch works each
-    /// one out from the buffer sizes and passes it beside the element count.
+    /// How each input is read, in `inputs` order. A divisor not known at compile time is worked
+    /// out at launch from the buffer sizes.
     std::vector<codegen::OperandRead> reads;
 
     /// Loaded and owned by the codegen layer, which keeps it for the life of the process.
@@ -68,8 +68,8 @@ class FusedKernel final : public Kernel {
 
   [[nodiscard]] bool has_dynamic_extent() const override;
 
-  /// The first input's shape. Every buffer in a group has the result's shape, which is what lets
-  /// one index walk all of them.
+  /// The first input's shape. That is the result's shape unless the first input broadcasts, in
+  /// which case the result is sized wrongly.
   [[nodiscard]] Result<std::vector<std::int64_t>>
   output_shape(const std::vector<at::Tensor>& tensors) const override;
 
@@ -85,8 +85,7 @@ class FusedKernel final : public Kernel {
 
 /// One compiled reduction, ready to run.
 ///
-/// A kernel of its own rather than a step in a loop. It reads one tensor and writes one, and the
-/// three extents say how: `outer * inner` outputs, each combining `reduce` elements that sit
+/// Reads one tensor and writes `outer * inner` outputs, each combining `reduce` elements that sit
 /// `inner` apart.
 class ReductionKernel final : public Kernel {
  public:
@@ -101,18 +100,15 @@ class ReductionKernel final : public Kernel {
     std::int64_t reduce = 0;
     std::int64_t inner = 0;
 
-    /// The axes folded and the rank they are folded over, so that a launch given a shape the
-    /// compiler never saw can work the three extents out from the tensor itself.
+    /// The reduced axes and the input rank, so a launch can derive the extents from the tensor.
     std::size_t first_axis = 0;
     std::size_t last_axis = 0;
     std::size_t rank = 0;
 
-    /// Whether the folded axes stay in the result as ones, which the executor needs in order to
-    /// allocate a tensor the rest of the graph can read.
+    /// Whether the reduced axes stay in the result with size 1, for sizing the output.
     bool keeps_dims = false;
 
-    /// Which kernel shape the emitter wrote. Carried rather than inferred, so the launch cannot
-    /// disagree with the source about how the threads are laid over the problem.
+    /// The kernel shape the emitter wrote, so the launch lays out threads the same way.
     codegen::ReductionShape shape = codegen::ReductionShape::kBlockPerOutput;
 
     const codegen::Program* program = nullptr;
@@ -160,8 +156,7 @@ class ReductionKernel final : public Kernel {
 
 /// One matrix multiply, ready to run through cuBLAS.
 ///
-/// No compiled code behind this. What it carries is the shape of the call: which operands, whether
-/// the library reads either transposed, and the extents.
+/// Carries the call's operands, transpose flags and extents; there is no generated code.
 class GemmKernel final : public Kernel {
  public:
   struct Parts {
@@ -170,9 +165,8 @@ class GemmKernel final : public Kernel {
     /// The CUDA device it runs on, which cuBLAS needs in order to pick its handle.
     int ordinal = 0;
 
-    /// Fills the result with the bias before the multiply, when there is one. BLAS only takes an
-    /// accumulator by scaling what is already there, so the bias has to be written first, and
-    /// doing that through torch costs a host round trip per multiply.
+    /// Writes the bias into every row of the result before the multiply, when there is one. See
+    /// `codegen::broadcast_row_source`.
     const codegen::Program* fill = nullptr;
   };
 
@@ -187,17 +181,15 @@ class GemmKernel final : public Kernel {
 
   [[nodiscard]] const std::string& output() const override { return parts_.description.output; }
 
-  /// The one kernel that reads a layout rather than requiring one. Packing a transposed operand
-  /// before handing it over would move the data and leave the transpose flag describing a layout
-  /// that is no longer there.
+  /// cuBLAS reads the layout it was described. Packing a transposed operand would leave the
+  /// transpose flag describing data that moved.
   [[nodiscard]] bool packs_inputs() const override { return false; }
 
   [[nodiscard]] bool has_dynamic_extent() const override {
     return parts_.description.has_dynamic_extent();
   }
 
-  /// The batch dimensions and the row count come from the left operand and the column count from
-  /// the right, which is where they are even when the description has numbers of its own.
+  /// The batch dimensions and rows of the left operand, and the columns of the right.
   [[nodiscard]] Result<std::vector<std::int64_t>>
   output_shape(const std::vector<at::Tensor>& tensors) const override;
 
@@ -211,15 +203,13 @@ class GemmKernel final : public Kernel {
 
 /// One convolution, ready to run through cuDNN.
 ///
-/// Like a matmul this has no generated code behind it. What it carries is a plan: the problem
-/// described to cuDNN and an algorithm chosen, both done once when the graph was compiled.
+/// Carries a plan built when the graph was compiled; there is no generated code.
 class ConvKernel final : public Kernel {
  public:
   struct Parts {
     codegen::ConvKernel description;
 
-    /// Shared rather than owned, because every copy of a compiled graph has to reach the same
-    /// cuDNN descriptors and workspace.
+    /// Shared, so every copy of a compiled graph uses the same descriptors.
     std::shared_ptr<const codegen::ConvPlan> plan;
   };
 
@@ -255,10 +245,8 @@ class ConvKernel final : public Kernel {
 
 /// Every kernel `graph` can run on CUDA device `ordinal`, of whatever kind.
 ///
-/// Something the compiler declines is not a failure. A group the emitter has no code for, a
-/// reduction with no kernel shape, a matmul cuBLAS cannot take and a convolution cuDNN has no plan
-/// for all run one operation at a time instead, which always works. So does everything on a build
-/// with no CUDA toolkit, where this returns nothing.
+/// A node the compiler declines runs one operation at a time instead, which always works. So
+/// does everything on a build with no CUDA toolkit, where this returns nothing.
 Result<std::vector<std::shared_ptr<Kernel>>> compile_kernels(const ir::Graph& graph, int ordinal);
 
 } // namespace tessiq::torch_backend

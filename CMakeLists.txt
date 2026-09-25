@@ -14,14 +14,12 @@ project(
 option(TESSIQ_BUILD_TESTS "Build the C++ test suite" ON)
 option(TESSIQ_BUILD_PYTHON "Build the Python extension module" ON)
 option(TESSIQ_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
-# Default follows the machine: on where a toolkit exists, off where it does not, so the same
-# command works on a developer box with a GPU and on a CI runner without one. Force it either way
+# On when a CUDA toolkit is found, so the same command works with and without a GPU. Force it
 # with -DTESSIQ_ENABLE_CUDA=ON/OFF.
 find_package(CUDAToolkit QUIET)
 option(TESSIQ_ENABLE_CUDA "Build the CUDA backend" ${CUDAToolkit_FOUND})
 
-# Reserved for the MLIR export target. Declared now so the option name is fixed and documented
-# before anything depends on it; enabling it is a later phase.
+# Reserved for the MLIR export target; not implemented yet.
 option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PHASES.md, phase 15)" OFF)
 
 set(TESSIQ_SANITIZER "" CACHE STRING
@@ -51,7 +49,7 @@ include(Sanitizers)
 
 if(TESSIQ_ENABLE_MLIR)
   message(FATAL_ERROR
-          "TESSIQ_ENABLE_MLIR is reserved for phase 10 (see PHASES.md) and is not "
+          "TESSIQ_ENABLE_MLIR is reserved for phase 15 (see PHASES.md) and is not "
           "implemented yet. Configure without it.")
 endif()
 

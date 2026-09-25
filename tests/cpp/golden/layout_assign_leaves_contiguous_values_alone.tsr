@@ -1,5 +1,5 @@
 // RUN: mark-supported,layout-assign
-// The common case, and the one that has to stay free: nothing is strided, so nothing is copied.
+// Nothing is strided, so nothing is copied.
 graph @g(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
   %r = aten.relu.default(%a) : f32[4,8]
   %s = aten.add.Tensor(%r, %b) : f32[4,8]

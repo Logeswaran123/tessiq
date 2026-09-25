@@ -26,7 +26,7 @@ namespace tessiq::codegen {
 
 namespace {
 
-/// What a failed call says, built once so every return type can use it.
+/// The message for a failed cuDNN call.
 std::string cudnn_message(cudnnStatus_t status, const char* what) {
   return std::string(what) + ": " + cudnnGetErrorString(status);
 }
@@ -39,9 +39,8 @@ std::mutex& launch_mutex() {
 
 /// One handle per device, created on first use and kept.
 ///
-/// A handle carries a context and is not free to create, and every plan on a device can share
-/// one. Its stream is set on every launch to the one the caller names, which is what orders a
-/// convolution against the kernels either side of it without anyone synchronising.
+/// Every plan on a device shares it. Its stream is set on each launch to the caller's, which
+/// orders the convolution against the kernels around it.
 Result<cudnnHandle_t> handle_for(int ordinal) {
   static std::mutex mutex;
   static std::map<int, cudnnHandle_t> handles;
@@ -203,8 +202,8 @@ class CudnnConvPlan final : public ConvPlan {
         status != CUDNN_STATUS_SUCCESS) {
       return external_error(cudnn_message(status, "cudnnCreateConvolutionDescriptor"));
     }
-    // Cross-correlation, which is what every deep learning framework calls convolution. The
-    // other mode flips the filter and gives an answer nobody asked for.
+    // Cross-correlation, which is what torch calls convolution. CUDNN_CONVOLUTION flips the
+    // filter.
     if (const cudnnStatus_t status =
             cudnnSetConvolution2dDescriptor(convolution_,
                                             static_cast<int>(kernel.padding[0]),
@@ -255,9 +254,8 @@ class CudnnConvPlan final : public ConvPlan {
 
   /// Picks the algorithm cuDNN's heuristic ranks first among those that fit in memory.
   ///
-  /// The heuristic rather than a timed search. A search runs every candidate and is the right
-  /// thing for a long-lived deployment; here it would run on every compile, and the heuristic's
-  /// first choice is usually the one a search would find.
+  /// The heuristic rather than a timed search, which would run every candidate on every compile.
+  /// The heuristic's first choice is usually what a search would pick.
   Result<void> choose_algorithm() {
     constexpr int kCandidates = 8;
     std::array<cudnnConvolutionFwdAlgoPerf_t, kCandidates> candidates{};

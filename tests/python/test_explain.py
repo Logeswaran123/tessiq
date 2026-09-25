@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """One model's whole compilation, reported in one place.
 
-What these check is that the report says what happened rather than what the reporting code
-believes happened. The two come apart the moment a report holds its own copy of something the
-compiler decides, which is why the pipeline and the kernels are read back from the compiler here
-rather than written down.
+These check that the report says what the compiler did. The pipeline and the kernels are read
+back from the compiler rather than written down in the report.
 """
 
 from __future__ import annotations
@@ -43,8 +41,7 @@ def test_only_the_sections_asked_for() -> None:
 
 
 def test_an_unknown_section_is_refused() -> None:
-    # Named rather than ignored, because a typo that silently drops a section is a report that
-    # quietly answers a different question.
+    # An unknown section is an error, so a typo cannot silently drop one.
     with pytest.raises(ValueError, match="unknown section"):
         explain(model(), torch.randn(4, 32), sections=("summary", "kernles"))
 
@@ -55,9 +52,7 @@ def test_the_pipeline_is_the_one_the_backend_runs() -> None:
 
 
 def test_a_pass_that_changes_nothing_says_so() -> None:
-    # layout-assign only acts when an operand's layout has to be materialised, which this graph
-    # does not need. A report that showed a diff for it would be describing a pass that did not
-    # run.
+    # Nothing here is strided, so layout-assign changes nothing and the report shows no diff for it.
     report = explain(model(), torch.randn(4, 32), sections=("passes",))
     assert "layout-assign: nothing changed" in report
 
@@ -83,8 +78,7 @@ def test_the_schedule_covers_every_operation() -> None:
 
 
 def test_the_host_target_says_why_it_has_no_kernels() -> None:
-    # The easiest way to be confused by this tool is to run it without a device and conclude the
-    # compiler cannot do anything.
+    # The default device is the host reference, which has no kernels, and the summary says so.
     report = explain(model(), torch.randn(4, 32), sections=("summary",))
     assert "kernels" in report
     assert "host reference" in report
@@ -137,14 +131,9 @@ def test_the_source_is_the_generated_kernel() -> None:
 
 
 def test_an_operation_on_the_host_is_not_reported_as_on_the_device() -> None:
-    # A node returning more than one tensor has its first result renamed after the getitem that
-    # reads it, so it is missing from the recipe's device map. The default for a missing entry has
-    # to be the host. `tessiq.cpu` looks like the right default and is not: it is the reference
-    # device and its type is `tessiq`, so using it reported every such node as on the device.
-    #
-    # topk is the case because it returns values and indices and nothing runs it. This test used a
-    # residual block until phase 11 moved convolution to the device and decomposed batch norm, at
-    # which point it had no multi-result node left on the host and failed for the wrong reason.
+    # A node returning more than one tensor has its first result named after the getitem that
+    # reads it, so it is missing from the recipe's device map, and the default has to be the host
+    # (not `tessiq.cpu`, whose type is `tessiq`). topk returns values and indices and has no kernel.
     class TopK(nn.Module):
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             values, _ = torch.topk(torch.relu(x), 3, dim=-1)
