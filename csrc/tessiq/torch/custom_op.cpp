@@ -60,6 +60,11 @@ CustomOp& CustomOp::kernel(std::string file, std::string entry) {
   return *this;
 }
 
+CustomOp& CustomOp::replaces(std::string torch_op) {
+  replaced_ = std::move(torch_op);
+  return *this;
+}
+
 CustomOp& define(std::string name, std::string signature, std::string_view file) {
   CustomOp& op = owned_definitions().emplace_back(std::move(name), std::move(signature), file);
   definition_list().push_back(&op);

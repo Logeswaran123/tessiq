@@ -37,6 +37,7 @@
 #include "tessiq/passes/op_registry.h"
 #include "tessiq/passes/op_table.h"
 #include "tessiq/passes/pass.h"
+#include "tessiq/passes/replace_op.h"
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/support/result.h"
@@ -68,6 +69,12 @@ struct RegisteredOp {
 
   /// How many of the arguments are tensors.
   int arity = 0;
+
+  /// The torch operation it stands in for, as torch names it (`aten::_softmax`), or empty.
+  std::string replaced;
+
+  /// The same torch operation as a graph spells it (`aten._softmax.default`).
+  std::string replaced_spelling;
 
   /// The kernel file's text. Empty for an operation defined by an expression.
   std::string_view source;
@@ -115,6 +122,29 @@ RegisteredOp* find_qualified(std::string_view qualified) {
   auto& ops = registered_ops();
   const auto found = ops.find(qualified);
   return found == ops.end() ? nullptr : found->second.get();
+}
+
+/// The operations that stand in for a torch one, by the torch operation's name.
+std::map<std::string, RegisteredOp*, std::less<>>& replacements() {
+  static std::map<std::string, RegisteredOp*, std::less<>> ops;
+  return ops;
+}
+
+/// The name of every pass that puts a custom operation in place of a torch one.
+std::vector<std::string>& replacing_passes() {
+  static std::vector<std::string> names;
+  return names;
+}
+
+/// The custom operation a call through `handle` runs: the operation itself, or the one standing in
+/// for the torch operation `handle` names.
+RegisteredOp* find_for(const c10::OperatorHandle& handle) {
+  if (RegisteredOp* op = find_qualified(handle.schema().name())) {
+    return op;
+  }
+  const auto& ops = replacements();
+  const auto found = ops.find(c10::toString(handle.operator_name()));
+  return found == ops.end() ? nullptr : found->second;
 }
 
 RegisteredOp* find_spelled(std::string_view spelling) {
@@ -217,6 +247,64 @@ Result<Signature> read_signature(const std::string& qualified, const CustomOp& o
   return signature;
 }
 
+/// `aten::add.Tensor` as torch keys it, the name `aten::add` and the overload `Tensor`.
+c10::OperatorName operator_name_of(const std::string& text) {
+  const std::size_t dot = text.find('.', text.find("::"));
+  if (dot == std::string::npos) {
+    return {text, ""};
+  }
+  return {text.substr(0, dot), text.substr(dot + 1)};
+}
+
+/// The torch operation as a graph spells it: `aten._softmax.default`, `aten.add.Tensor`.
+std::string spelling_of(const c10::OperatorName& name) {
+  std::string spelled = name.name;
+  spelled.replace(spelled.find("::"), 2, ".");
+  return spelled + "." + (name.overload_name.empty() ? "default" : name.overload_name);
+}
+
+/// Checks that the torch operation `op` replaces exists, and takes what `op` takes.
+Result<void> check_replacement(const CustomOp& op, RegisteredOp& checked) {
+  const std::string& text = op.replaced();
+  if (text.find("::") == std::string::npos) {
+    return invalid_argument("it replaces '" + text +
+                            "', which is not a torch operation's name; write it as aten::_softmax "
+                            "or aten::add.Tensor");
+  }
+  const c10::OperatorName name = operator_name_of(text);
+  const std::optional<c10::OperatorHandle> handle = c10::Dispatcher::singleton().findSchema(name);
+  if (!handle.has_value()) {
+    return invalid_argument("it replaces " + text + ", which torch does not have");
+  }
+  // Such an operation is broken into others as it is called, before a backend's kernel or a graph
+  // could see it, so there would be nothing to replace.
+  if (handle->hasKernelForDispatchKey(c10::DispatchKey::CompositeImplicitAutograd)) {
+    return invalid_argument("it replaces " + text +
+                            ", which torch breaks into other operations before any backend sees "
+                            "it; replace one of those instead");
+  }
+  if (handle->hasKernelForDispatchKey(c10::DispatchKey::PrivateUse1)) {
+    return invalid_argument("it replaces " + text + ", which tessiq already implements itself");
+  }
+
+  const c10::FunctionSchema& theirs = handle->schema();
+  const std::vector<c10::Argument>& arguments = theirs.arguments();
+  bool same = theirs.returns().size() == 1 && arguments.size() == checked.parameters.size();
+  for (std::size_t i = 0; same && i < arguments.size(); ++i) {
+    same = arguments[i].name() == checked.names[i] &&
+           parameter_of(arguments[i]) == checked.parameters[i] &&
+           !arguments[i].default_value().has_value() && arguments[i].alias_info() == nullptr;
+  }
+  if (!same) {
+    return invalid_argument("it replaces " + text + ", whose schema is " + c10::toString(theirs) +
+                            "; the two have to take the same arguments, with the same names and "
+                            "types, and no defaults");
+  }
+  checked.replaced = c10::toString(name);
+  checked.replaced_spelling = spelling_of(name);
+  return ok();
+}
+
 /// Checks that a definition holds together, before anything is registered.
 Result<std::unique_ptr<RegisteredOp>> check_definition(const CustomOp& op) {
   auto checked = std::make_unique<RegisteredOp>();
@@ -266,6 +354,9 @@ Result<std::unique_ptr<RegisteredOp>> check_definition(const CustomOp& op) {
       return invalid_argument(std::string("it declares ") + c10::toString(dtype) +
                               ", which the compiler has no type for");
     }
+  }
+  if (!op.replaced().empty()) {
+    TESSIQ_RETURN_IF_ERROR(check_replacement(op, *checked));
   }
   return checked;
 }
@@ -454,7 +545,7 @@ run_expression(RegisteredOp& op, const std::vector<c10::IValue>& arguments, int 
 /// CPU reference device included, the arguments are copied to the host, the reference runs, and
 /// the result comes back, which is counted.
 void run_on_device(const c10::OperatorHandle& handle, torch::jit::Stack* stack) {
-  RegisteredOp* op = find_qualified(handle.schema().name());
+  RegisteredOp* op = find_for(handle);
   TORCH_CHECK(
       op != nullptr, handle.schema().name(), " is not a custom operation tessiq registered");
 
@@ -519,6 +610,51 @@ Result<void> register_with_torch(RegisteredOp& op) {
   return ok();
 }
 
+std::vector<ir::DType> ir_dtypes(const RegisteredOp& op) {
+  std::vector<ir::DType> dtypes;
+  for (const at::ScalarType dtype : op.definition->element_types()) {
+    const Result<ir::DType> type = to_ir_dtype(dtype);
+    if (type.has_value()) {
+      dtypes.push_back(*type);
+    }
+  }
+  return dtypes;
+}
+
+/// Puts `op` in place of the torch operation it replaces: as that operation's implementation on
+/// tessiq's devices, and as a pass that swaps it in a graph.
+Result<void> register_replacement(RegisteredOp& op) {
+  if (const auto found = replacements().find(op.replaced); found != replacements().end()) {
+    return invalid_argument(found->second->qualified + " already replaces " + op.replaced);
+  }
+  const c10::OperatorName name = operator_name_of(op.replaced);
+  const std::size_t separator = name.name.find("::");
+  std::string unqualified = name.name.substr(separator + 2);
+  if (!name.overload_name.empty()) {
+    unqualified += "." + name.overload_name;
+  }
+  auto library = std::make_unique<torch::Library>(torch::Library::IMPL,
+                                                  name.name.substr(0, separator),
+                                                  c10::DispatchKey::PrivateUse1,
+                                                  __FILE__,
+                                                  __LINE__);
+  try {
+    library->impl(unqualified.c_str(), torch::CppFunction::makeFromBoxedFunction<&run_on_device>());
+  } catch (const c10::Error& error) {
+    return invalid_argument(error.what_without_backtrace());
+  }
+  libraries().push_back(std::move(library));
+
+  std::string pass = "override-" + op.definition->name();
+  passes::PassRegistry::instance().add(
+      pass, [pass, from = op.replaced_spelling, to = op.spelling, dtypes = ir_dtypes(op)] {
+        return std::make_unique<passes::ReplaceOp>(pass, from, to, dtypes);
+      });
+  replacing_passes().push_back(std::move(pass));
+  replacements().emplace(op.replaced, &op);
+  return ok();
+}
+
 Result<void> register_one(const CustomOp& definition) {
   TESSIQ_ASSIGN_OR_RETURN(std::unique_ptr<RegisteredOp> op, check_definition(definition));
   if (find_qualified(op->qualified) != nullptr) {
@@ -526,6 +662,9 @@ Result<void> register_one(const CustomOp& definition) {
   }
   TESSIQ_RETURN_IF_ERROR(register_with_compiler(*op));
   TESSIQ_RETURN_IF_ERROR(register_with_torch(*op));
+  if (!op->replaced.empty()) {
+    TESSIQ_RETURN_IF_ERROR(register_replacement(*op));
+  }
   TESSIQ_LOG(kDebug, kLogModule) << "registered " << op->qualified
                                  << (op->has_kernel() ? " with a kernel" : " as an expression");
   const std::string qualified = op->qualified;
@@ -674,6 +813,22 @@ std::vector<std::string> custom_op_names() {
   for (const auto& [qualified, op] : registered_ops()) {
     names.push_back(qualified);
   }
+  return names;
+}
+
+std::vector<CustomOverride> custom_op_overrides() {
+  std::vector<CustomOverride> overrides;
+  for (const auto& [replaced, op] : replacements()) {
+    overrides.push_back({.op = op->qualified,
+                         .replaced = op->replaced_spelling,
+                         .dtypes = op->definition->element_types()});
+  }
+  return overrides;
+}
+
+std::vector<std::string> override_passes() {
+  std::vector<std::string> names = replacing_passes();
+  std::ranges::sort(names);
   return names;
 }
 

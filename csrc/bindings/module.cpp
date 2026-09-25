@@ -239,6 +239,17 @@ void bind_custom_ops(py::module_& m) {
         &tessiq::torch_backend::custom_op_names,
         "Every custom operation in csrc/custom_ops, as tessiq::<name>, sorted.");
   m.def(
+      "custom_op_overrides",
+      []() {
+        py::list overrides;
+        for (const auto& each : tessiq::torch_backend::custom_op_overrides()) {
+          overrides.append(py::make_tuple(each.op, each.replaced, each.dtypes));
+        }
+        return overrides;
+      },
+      "Every custom operation that replaces a torch one, as (operation, torch operation as a "
+      "graph spells it, the dtypes it replaces it for).");
+  m.def(
       "custom_op_fallbacks",
       [](const std::string& name) {
         return value_or_raise(tessiq::torch_backend::custom_op_fallbacks(name));
@@ -447,10 +458,9 @@ PYBIND11_MODULE(_C, m) {
         &tessiq::codegen::device_timing_available,
         "Whether this build can time device work with the device's own clock.");
 
-  m.def(
-      "default_pipeline",
-      []() { return std::string(tessiq::torch_backend::default_pipeline()); },
-      "The passes the backend runs to decide what it takes, in order, comma separated.");
+  m.def("default_pipeline",
+        &tessiq::torch_backend::default_pipeline,
+        "The passes the backend runs to decide what it takes, in order, comma separated.");
 
   m.def(
       "pass_names",

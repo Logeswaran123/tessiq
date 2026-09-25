@@ -5,6 +5,7 @@
 
 #include <ATen/core/Tensor.h>
 #include <ATen/core/ivalue.h>
+#include <c10/core/ScalarType.h>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -42,6 +43,26 @@ compile_elementwise(std::string_view op, int arity, ir::DType dtype, int ordinal
 
 /// Every custom operation registered, as `tessiq::<name>`, sorted.
 [[nodiscard]] std::vector<std::string> custom_op_names();
+
+/// A custom operation that stands in for a torch one.
+struct CustomOverride {
+  /// The custom operation, as `tessiq::<name>`.
+  std::string op;
+
+  /// The torch operation it replaces, as a graph spells it: `aten._softmax.default`.
+  std::string replaced;
+
+  /// The element types it replaces the torch operation for. Anything else runs the torch one.
+  std::vector<at::ScalarType> dtypes;
+};
+
+/// Every custom operation that replaces a torch one, by the torch operation's name.
+[[nodiscard]] std::vector<CustomOverride> custom_op_overrides();
+
+/// The passes that put those operations in place of the torch ones, `override-<name>`, sorted.
+///
+/// They run ahead of the rest of the pipeline, so every later pass sees the custom operation.
+[[nodiscard]] std::vector<std::string> override_passes();
 
 /// How many calls of custom operation `name` on a tessiq tensor ran the reference.
 ///

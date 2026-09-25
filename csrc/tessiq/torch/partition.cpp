@@ -41,14 +41,23 @@ Result<std::unique_ptr<ir::Graph>> prepare(const pybind11::object& graph_module,
   TESSIQ_ASSIGN_OR_RETURN(auto graph, import_fx(graph_module, std::move(name)));
 
   passes::PassManager manager;
-  TESSIQ_RETURN_IF_ERROR(manager.add_from_pipeline(kPipeline));
+  TESSIQ_RETURN_IF_ERROR(manager.add_from_pipeline(default_pipeline()));
   TESSIQ_RETURN_IF_ERROR(manager.run(*graph));
   return graph;
 }
 
 } // namespace
 
-std::string_view default_pipeline() { return kPipeline; }
+std::string default_pipeline() {
+  // A custom operation that replaces a torch one is swapped in first, so that deciding what the
+  // backend claims, and everything after it, sees the custom operation.
+  std::string pipeline;
+  for (const std::string& pass : override_passes()) {
+    pipeline += pass;
+    pipeline += ",";
+  }
+  return pipeline + std::string(kPipeline);
+}
 
 Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::string name) {
   TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name)));
