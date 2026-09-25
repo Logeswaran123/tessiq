@@ -68,13 +68,14 @@ class FusedKernel final : public Kernel {
 
   [[nodiscard]] bool has_dynamic_extent() const override;
 
-  /// The first input's shape. That is the result's shape unless the first input broadcasts, in
-  /// which case the result is sized wrongly.
+  /// The inputs' shapes broadcast together, which is the result's shape: every operation in a
+  /// group is elementwise, so its result is the broadcast of its operands.
   [[nodiscard]] Result<std::vector<std::int64_t>>
   output_shape(const std::vector<at::Tensor>& tensors) const override;
 
   /// Every input and the output must be contiguous on the device this was compiled for, and the
-  /// output must already be the right size.
+  /// output must already be the right size. For a dynamic kernel that is checked against the
+  /// inputs' broadcast shape, since the element count is taken from the output.
   [[nodiscard]] Result<void> launch(const std::vector<at::Tensor>& tensors,
                                     const at::Tensor& out,
                                     codegen::Stream stream) const override;
