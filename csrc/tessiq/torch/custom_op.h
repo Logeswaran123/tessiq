@@ -165,6 +165,16 @@ class CustomOp {
   /// A kernel in another file of the directory, or under another name than the operation's.
   CustomOp& kernel(std::string file, std::string entry);
 
+  /// Gives this operation a rewrite: a pass, `rewrite-<name>`, that finds the computation in
+  /// `file` written out in a graph and replaces it with one call to this operation.
+  ///
+  /// `file` is in the operation's directory, `<name>.pattern.tsr` when not given, and holds a graph
+  /// in tessiq's textual IR. Its inputs are named after the operation's tensor arguments, and each
+  /// scalar argument is captured by writing `"$name"` where the pattern has it, such as
+  /// `{arg1 = "$eps"}`. A compile runs the rewrite only when it is asked to, by naming it in
+  /// `options={"rewrites": [...]}`.
+  CustomOp& pattern(std::string file = {});
+
   /// Makes this operation stand in for torch operation `torch_op`, such as `aten::_softmax` or
   /// `aten::add.Tensor`, wherever it declares the types.
   ///
@@ -203,6 +213,8 @@ class CustomOp {
 
   [[nodiscard]] const std::string& replaced() const { return replaced_; }
 
+  [[nodiscard]] const std::string& pattern_file() const { return pattern_file_; }
+
  private:
   std::string name_;
   std::string signature_;
@@ -216,6 +228,7 @@ class CustomOp {
   std::string kernel_file_;
   std::string entry_;
   std::string replaced_;
+  std::string pattern_file_;
 };
 
 /// Starts the definition of operation `name`. Used through TESSIQ_CUSTOM_OP.
@@ -224,17 +237,19 @@ CustomOp& define(std::string name, std::string signature, std::string_view file)
 /// Every operation defined in the extension, in the order their files were loaded.
 const std::vector<CustomOp*>& definitions();
 
-/// The text of a kernel file, carried in the extension. Made by the build, one per .cu file.
+/// The text of a file in an operation's directory, carried in the extension. Made by the build, one
+/// per .cu and .tsr file.
 ///
 /// A kernel is compiled for the device it runs on, the first time it runs there, so the extension
-/// carries its source rather than a binary for one architecture. `key` is `<directory>/<file>`.
-class KernelFile {
+/// carries its source rather than a binary for one architecture. A pattern is parsed when tessiq is
+/// imported. `key` is `<directory>/<file>`.
+class EmbeddedFile {
  public:
-  KernelFile(std::string_view key, std::string_view text);
+  EmbeddedFile(std::string_view key, std::string_view text);
 };
 
-/// The text of kernel file `key`, or nothing when the build carries no such file.
-std::optional<std::string_view> find_kernel_file(std::string_view key);
+/// The text of file `key`, or nothing when the build carries no such file.
+std::optional<std::string_view> find_embedded_file(std::string_view key);
 
 } // namespace tessiq::custom_ops
 

@@ -12,6 +12,7 @@
 #include <variant>
 #include <vector>
 
+#include "tessiq/codegen/kernel.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/passes/op_registry.h"
 #include "tessiq/passes/op_table.h"
@@ -69,6 +70,7 @@ std::optional<CustomCall> call_of(const ir::Node& node,
   call.op = node.op();
   call.output = node.result(0)->name();
   call.has_dynamic_extent = has_unknown_extent(node);
+  call.absorbed = absorbed_by(node);
 
   std::size_t operand = 0;
   for (std::size_t position = 0;; ++position) {

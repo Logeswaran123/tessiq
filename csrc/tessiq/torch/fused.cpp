@@ -466,6 +466,7 @@ Result<void> compile_fused(const ir::Graph& graph, int ordinal, Kernels& compile
     for (const codegen::Step& step : description.body) {
       members.push_back(step.result);
     }
+    members.insert(members.end(), description.absorbed.begin(), description.absorbed.end());
 
     std::vector<codegen::OperandRead> reads;
     reads.reserve(description.inputs.size());

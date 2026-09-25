@@ -38,6 +38,7 @@
 #include "tessiq/passes/op_table.h"
 #include "tessiq/passes/pass.h"
 #include "tessiq/passes/replace_op.h"
+#include "tessiq/passes/rewrite.h"
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/support/result.h"
@@ -134,6 +135,28 @@ std::map<std::string, RegisteredOp*, std::less<>>& replacements() {
 std::vector<std::string>& replacing_passes() {
   static std::vector<std::string> names;
   return names;
+}
+
+/// The name of each operation's rewrite pass, by the operation's name.
+std::map<std::string, std::string, std::less<>>& rewrite_passes() {
+  static std::map<std::string, std::string, std::less<>> passes;
+  return passes;
+}
+
+/// `rms_norm` as a pass name spells it, `rms-norm`, like every other pass.
+std::string hyphenated(std::string name) {
+  std::ranges::replace(name, '_', '-');
+  return name;
+}
+
+/// `(x, weight)`.
+std::string listed(std::vector<std::string> names) {
+  std::string text = "(";
+  for (std::size_t i = 0; i < names.size(); ++i) {
+    text += i == 0 ? "" : ", ";
+    text += names[i];
+  }
+  return text + ")";
 }
 
 /// The custom operation a call through `handle` runs: the operation itself, or the one standing in
@@ -343,7 +366,7 @@ Result<std::unique_ptr<RegisteredOp>> check_definition(const CustomOp& op) {
                               listed(checked->parameters));
     }
     const std::string key = op.directory() + "/" + op.kernel_file();
-    const std::optional<std::string_view> source = custom_ops::find_kernel_file(key);
+    const std::optional<std::string_view> source = custom_ops::find_embedded_file(key);
     if (!source.has_value() || source->empty()) {
       return invalid_argument("there is no kernel file csrc/custom_ops/" + key);
     }
@@ -686,13 +709,64 @@ Result<void> register_replacement(RegisteredOp& op) {
   }
   libraries().push_back(std::move(library));
 
-  std::string pass = "override-" + op.definition->name();
+  std::string pass = "override-" + hyphenated(op.definition->name());
   passes::PassRegistry::instance().add(
       pass, [pass, from = op.replaced_spelling, to = op.spelling, dtypes = ir_dtypes(op)] {
         return std::make_unique<passes::ReplaceOp>(pass, from, to, dtypes);
       });
   replacing_passes().push_back(std::move(pass));
   replacements().emplace(op.replaced, &op);
+  return ok();
+}
+
+/// Checks `op`'s pattern against its schema and registers the pass that rewrites to it.
+Result<void> register_rewrite(const RegisteredOp& op) {
+  const std::string key = op.definition->directory() + "/" + op.definition->pattern_file();
+  const std::optional<std::string_view> text = custom_ops::find_embedded_file(key);
+  if (!text.has_value()) {
+    return invalid_argument("there is no pattern file csrc/custom_ops/" + key);
+  }
+  Result<std::unique_ptr<ir::Graph>> parsed = ir::parse(*text);
+  if (!parsed.has_value()) {
+    return parsed.error().with_context("its pattern csrc/custom_ops/" + key + " does not parse");
+  }
+  const std::shared_ptr<const ir::Graph> pattern = std::move(*parsed);
+  const Result<passes::PatternShape> shape = passes::check_pattern(*pattern);
+  if (!shape.has_value()) {
+    return shape.error().with_context("its pattern csrc/custom_ops/" + key);
+  }
+
+  std::vector<passes::RewriteArgument> arguments;
+  std::vector<std::string> tensors;
+  std::vector<std::string> scalars;
+  for (std::size_t i = 0; i < op.parameters.size(); ++i) {
+    const bool tensor = op.parameters[i] == Parameter::kTensor;
+    arguments.push_back({.name = op.names[i], .tensor = tensor});
+    (tensor ? tensors : scalars).push_back(op.names[i]);
+  }
+  const auto same = [](std::vector<std::string> first, std::vector<std::string> second) {
+    std::ranges::sort(first);
+    std::ranges::sort(second);
+    return first == second;
+  };
+  // Each argument of the call the pattern becomes has to come from somewhere in the match.
+  if (!same(shape->inputs, tensors)) {
+    return invalid_argument("its pattern csrc/custom_ops/" + key + " has the inputs " +
+                            listed(shape->inputs) + ", and its tensor arguments are " +
+                            listed(tensors) + "; they have to be the same names");
+  }
+  if (!same(shape->captures, scalars)) {
+    return invalid_argument("its pattern csrc/custom_ops/" + key + " captures " +
+                            listed(shape->captures) + ", and its scalar arguments are " +
+                            listed(scalars) + "; capture each one as \"$name\"");
+  }
+
+  std::string pass = "rewrite-" + hyphenated(op.definition->name());
+  passes::PassRegistry::instance().add(
+      pass, [pass, pattern, to = op.spelling, arguments, dtypes = ir_dtypes(op)] {
+        return std::make_unique<passes::Rewrite>(pass, pattern, to, arguments, dtypes);
+      });
+  rewrite_passes().emplace(op.qualified, std::move(pass));
   return ok();
 }
 
@@ -705,6 +779,9 @@ Result<void> register_one(const CustomOp& definition) {
   TESSIQ_RETURN_IF_ERROR(register_with_torch(*op));
   if (!op->replaced.empty()) {
     TESSIQ_RETURN_IF_ERROR(register_replacement(*op));
+  }
+  if (!definition.pattern_file().empty()) {
+    TESSIQ_RETURN_IF_ERROR(register_rewrite(*op));
   }
   TESSIQ_LOG(kDebug, kLogModule) << "registered " << op->qualified
                                  << (op->has_kernel() ? " with a kernel" : " as an expression");
@@ -867,6 +944,10 @@ std::vector<CustomOverride> custom_op_overrides() {
   return overrides;
 }
 
+std::vector<std::pair<std::string, std::string>> custom_op_rewrites() {
+  return {rewrite_passes().begin(), rewrite_passes().end()};
+}
+
 std::vector<std::string> override_passes() {
   std::vector<std::string> names = replacing_passes();
   std::ranges::sort(names);
@@ -903,6 +984,12 @@ CustomKernel::CustomKernel(codegen::CustomCall call,
     : call_(std::move(call)), op_(op), scalars_(std::move(scalars)), ordinal_(ordinal) {}
 
 const std::string& CustomKernel::op() const { return op_->qualified; }
+
+std::vector<std::string> CustomKernel::members() const {
+  std::vector<std::string> members = call_.absorbed;
+  members.push_back(call_.output);
+  return members;
+}
 
 std::vector<c10::IValue> CustomKernel::arguments(const std::vector<at::Tensor>& tensors) const {
   std::vector<c10::IValue> arguments;

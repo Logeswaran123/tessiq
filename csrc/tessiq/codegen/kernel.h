@@ -122,6 +122,10 @@ struct FusedKernel {
   std::string output;
 
   std::vector<Step> body;
+
+  /// Values of the original graph that a rewrite folded into one of the steps. The kernel computes
+  /// them on its way as much as it computes the steps, so the executor has to skip them as well.
+  std::vector<std::string> absorbed;
 };
 
 /// The value the executor holds for `value`, which is the tensor a kernel is handed for it.
@@ -134,6 +138,12 @@ struct FusedKernel {
 /// A kernel reads such an input under the source's name and with the copy's layout, which is the
 /// packed layout the executor hands over.
 [[nodiscard]] const ir::Value* held_value(const ir::Value* value);
+
+/// The values of the original graph a rewrite folded into `node`, from `tessiq.absorbed`.
+///
+/// Empty for a node no rewrite made. The executor walks the original graph, so a kernel standing in
+/// for such a node has to list these among what it computes, or they would run a second time.
+[[nodiscard]] std::vector<std::string> absorbed_by(const ir::Node& node);
 
 /// Pulls fusion group `group` out of `graph`.
 ///

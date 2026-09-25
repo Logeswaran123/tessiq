@@ -22,6 +22,9 @@ namespace {
 
 constexpr std::string_view kFusion = "tessiq.fusion";
 
+/// Where a rewrite records the values it absorbed.
+constexpr std::string_view kAbsorbed = "tessiq.absorbed";
+
 /// The operation `layout-assign` gives the copies it inserts.
 constexpr std::string_view kMaterialise = "tessiq.contiguous";
 
@@ -275,6 +278,24 @@ const ir::Value* held_value(const ir::Value* value) {
   return value;
 }
 
+std::vector<std::string> absorbed_by(const ir::Node& node) {
+  const ir::Attribute* attribute = node.attribute(kAbsorbed);
+  const auto* names = attribute == nullptr ? nullptr : std::get_if<std::string>(attribute);
+  std::vector<std::string> absorbed;
+  if (names == nullptr) {
+    return absorbed;
+  }
+  std::size_t start = 0;
+  while (start <= names->size()) {
+    const std::size_t comma = std::min(names->find(',', start), names->size());
+    if (comma > start) {
+      absorbed.push_back(names->substr(start, comma - start));
+    }
+    start = comma + 1;
+  }
+  return absorbed;
+}
+
 std::vector<std::string> FusedKernel::input_names() const {
   std::vector<std::string> names;
   names.reserve(inputs.size());
@@ -421,6 +442,8 @@ Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group) {
   for (const ir::Node* node : members) {
     TESSIQ_ASSIGN_OR_RETURN(Step step, build_step(node, result_type, inside, seen, kernel.inputs));
     kernel.body.push_back(std::move(step));
+    const std::vector<std::string> absorbed = absorbed_by(*node);
+    kernel.absorbed.insert(kernel.absorbed.end(), absorbed.begin(), absorbed.end());
   }
 
   // Exactly one value leaves the group. Every other member has a single reader inside it, which

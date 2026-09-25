@@ -249,6 +249,9 @@ void bind_custom_ops(py::module_& m) {
       },
       "Every custom operation that replaces a torch one, as (operation, torch operation as a "
       "graph spells it, the dtypes it replaces it for).");
+  m.def("custom_op_rewrites",
+        &tessiq::torch_backend::custom_op_rewrites,
+        "Every custom operation with a pattern, and the name of the pass that rewrites to it.");
   m.def(
       "custom_op_fallbacks",
       [](const std::string& name) {
@@ -348,8 +351,10 @@ PYBIND11_MODULE(_C, m) {
 
   m.def(
       "partition_fx",
-      [](const py::object& graph_module, const std::string& name) {
-        auto result = tessiq::torch_backend::partition_fx(graph_module, name);
+      [](const py::object& graph_module,
+         const std::string& name,
+         const std::vector<std::string>& rewrites) {
+        auto result = tessiq::torch_backend::partition_fx(graph_module, name, rewrites);
         if (!result) {
           raise_from_error(result.error());
         }
@@ -357,6 +362,7 @@ PYBIND11_MODULE(_C, m) {
       },
       py::arg("graph_module"),
       py::arg("name") = "forward",
+      py::arg("rewrites") = std::vector<std::string>{},
       "Imports and partitions an FX graph. Returns the IR and a map from node name to cluster; "
       "a node absent from the map runs on the host.");
 
@@ -389,9 +395,10 @@ PYBIND11_MODULE(_C, m) {
       [](const py::object& graph_module,
          const std::string& name,
          std::size_t alignment,
-         int ordinal) {
-        auto result =
-            tessiq::torch_backend::build_recipe_fx(graph_module, name, alignment, ordinal);
+         int ordinal,
+         const std::vector<std::string>& rewrites) {
+        auto result = tessiq::torch_backend::build_recipe_fx(
+            graph_module, name, alignment, ordinal, rewrites);
         if (!result) {
           raise_from_error(result.error());
         }
@@ -401,8 +408,9 @@ PYBIND11_MODULE(_C, m) {
       py::arg("name") = "forward",
       py::arg("alignment") = 512,
       py::arg("ordinal") = -1,
+      py::arg("rewrites") = std::vector<std::string>{},
       "Imports, partitions, fuses and lowers an FX graph. A negative ordinal skips compiling "
-      "kernels.");
+      "kernels. `rewrites` names rewrite passes to run first.");
 
   m.def(
       "run_passes",

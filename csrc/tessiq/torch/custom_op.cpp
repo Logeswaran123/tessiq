@@ -31,7 +31,7 @@ std::vector<CustomOp*>& definition_list() {
   return list;
 }
 
-std::map<std::string, std::string_view, std::less<>>& kernel_files() {
+std::map<std::string, std::string_view, std::less<>>& embedded_files() {
   static std::map<std::string, std::string_view, std::less<>> files;
   return files;
 }
@@ -60,6 +60,11 @@ CustomOp& CustomOp::kernel(std::string file, std::string entry) {
   return *this;
 }
 
+CustomOp& CustomOp::pattern(std::string file) {
+  pattern_file_ = file.empty() ? name_ + ".pattern.tsr" : std::move(file);
+  return *this;
+}
+
 CustomOp& CustomOp::replaces(std::string torch_op) {
   replaced_ = std::move(torch_op);
   return *this;
@@ -73,12 +78,12 @@ CustomOp& define(std::string name, std::string signature, std::string_view file)
 
 const std::vector<CustomOp*>& definitions() { return definition_list(); }
 
-KernelFile::KernelFile(std::string_view key, std::string_view text) {
-  kernel_files().emplace(std::string(key), text);
+EmbeddedFile::EmbeddedFile(std::string_view key, std::string_view text) {
+  embedded_files().emplace(std::string(key), text);
 }
 
-std::optional<std::string_view> find_kernel_file(std::string_view key) {
-  const auto& files = kernel_files();
+std::optional<std::string_view> find_embedded_file(std::string_view key) {
+  const auto& files = embedded_files();
   const auto found = files.find(key);
   if (found == files.end()) {
     return std::nullopt;
