@@ -70,7 +70,7 @@ class PassRegistry {
 
 /// Registers a pass at static initialisation.
 ///
-///   TESSIQ_REGISTER_PASS(DeadCodeElimination);
+///   TESSIQ_REGISTER_PASS(DeadNodeElimination);
 // NOLINTBEGIN(bugprone-throwing-static-initialization): registering allocates, and a failure
 // here means the binary has no passes, which is not a state worth recovering into.
 #define TESSIQ_REGISTER_PASS(PassType)                                                             \
@@ -99,7 +99,7 @@ class PassManager {
  public:
   void add(std::unique_ptr<Pass> pass);
 
-  /// Builds the named passes and adds them. Accepts "dce,cse" or a single name.
+  /// Builds the named passes and adds them. Accepts "cse,dead-node-elimination" or a single name.
   Result<void> add_from_pipeline(std::string_view pipeline);
 
   /// Runs every pass once, in order.

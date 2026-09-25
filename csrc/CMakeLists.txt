@@ -73,7 +73,7 @@ add_library(tessiq_ir STATIC
   tessiq/passes/cluster.cpp
   tessiq/passes/const_fold.cpp
   tessiq/passes/cse.cpp
-  tessiq/passes/dce.cpp
+  tessiq/passes/dead_node_elimination.cpp
   tessiq/passes/fuse.cpp
   tessiq/passes/layout_assign.cpp
   tessiq/passes/mark_supported.cpp

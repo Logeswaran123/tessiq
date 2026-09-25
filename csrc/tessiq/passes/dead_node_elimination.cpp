@@ -19,9 +19,9 @@ namespace {
 /// computes. This holds only because the IR has no side-effecting ops. When one arrives it needs
 /// an effects marker and this pass has to consult it, or it will delete the store nobody reads
 /// the result of.
-class DeadCodeElimination final : public Pass {
+class DeadNodeElimination final : public Pass {
  public:
-  [[nodiscard]] std::string_view name() const override { return "dce"; }
+  [[nodiscard]] std::string_view name() const override { return "dead-node-elimination"; }
 
   [[nodiscard]] std::string_view description() const override {
     return "remove nodes whose results are never used";
@@ -63,7 +63,7 @@ class DeadCodeElimination final : public Pass {
   }
 };
 
-TESSIQ_REGISTER_PASS(DeadCodeElimination)
+TESSIQ_REGISTER_PASS(DeadNodeElimination)
 
 } // namespace
 

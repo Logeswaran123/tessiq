@@ -1,4 +1,4 @@
-// RUN: cse,dce
+// RUN: cse,dead-node-elimination
 // Same op and operands, different attributes, so these compute different things.
 graph @g(%a: f32[4]) -> f32[4] {
   %x = scale(%a) {factor = 2.0} : f32[4]

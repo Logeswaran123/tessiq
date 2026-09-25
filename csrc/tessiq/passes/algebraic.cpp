@@ -191,8 +191,8 @@ ir::Value* redundant_unary(const ir::Node* node) {
 /// ordinary values and not for a signed zero, an infinity or a NaN is not an identity, and the
 /// graph is not the place to decide that those cases do not matter.
 ///
-/// The simplified node is left in place with no users, as cse does, so dce removes it and a
-/// partially simplified graph is valid at every step.
+/// The simplified node is left in place with no users, as cse does, so dead-node-elimination
+/// removes it and a partially simplified graph is valid at every step.
 class AlgebraicSimplification final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "algebraic-simplify"; }
@@ -214,8 +214,8 @@ class AlgebraicSimplification final : public Pass {
       }
 
       // Only a replacement that moved a use counts as a change. The simplified node stays until
-      // dce runs, so a second pass finds it again, and reporting a change every time would keep a
-      // fixpoint loop spinning on a graph that has stopped moving.
+      // dead-node-elimination runs, so a second pass finds it again, and reporting a change every
+      // time would keep a fixpoint loop spinning on a graph that has stopped moving.
       if (is_used(graph, node->result(0))) {
         changed = true;
       }

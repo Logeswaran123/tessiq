@@ -1,4 +1,4 @@
-// RUN: dce
+// RUN: dead-node-elimination
 graph @g(%a: f32[4]) -> f32[4] {
   %keep = neg(%a) : f32[4]
   %d0 = neg(%a) : f32[4]

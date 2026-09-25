@@ -20,7 +20,7 @@ namespace {
 
 /// A golden file: a pipeline, an input graph, and the expected output.
 ///
-///   // RUN: cse,dce
+///   // RUN: cse,dead-node-elimination
 ///   graph @g(...) { ... }
 ///   // ---
 ///   graph @g(...) { ... }
@@ -102,7 +102,7 @@ INSTANTIATE_TEST_SUITE_P(Golden,
 
 TEST(RegistryTest, KnowsTheBuiltInPasses) {
   const std::vector<std::string> names = PassRegistry::instance().names();
-  EXPECT_NE(std::find(names.begin(), names.end(), "dce"), names.end());
+  EXPECT_NE(std::find(names.begin(), names.end(), "dead-node-elimination"), names.end());
   EXPECT_NE(std::find(names.begin(), names.end(), "cse"), names.end());
   EXPECT_NE(std::find(names.begin(), names.end(), "const-fold"), names.end());
   EXPECT_NE(std::find(names.begin(), names.end(), "layout-assign"), names.end());
@@ -137,12 +137,13 @@ TEST(RegistryTest, UnknownPassListsWhatIsAvailable) {
   auto pass = PassRegistry::instance().create("does-not-exist");
   ASSERT_FALSE(pass.has_value());
   EXPECT_EQ(pass.error().code(), ErrorCode::kNotFound);
-  EXPECT_NE(pass.error().message().find("dce"), std::string::npos) << pass.error().message();
+  EXPECT_NE(pass.error().message().find("dead-node-elimination"), std::string::npos)
+      << pass.error().message();
 }
 
 TEST(PassManagerTest, BuildsAPipelineFromNames) {
   PassManager manager;
-  ASSERT_TRUE(manager.add_from_pipeline("cse,dce").has_value());
+  ASSERT_TRUE(manager.add_from_pipeline("cse,dead-node-elimination").has_value());
   EXPECT_EQ(manager.size(), 2U);
 }
 
@@ -160,12 +161,12 @@ TEST(PassManagerTest, ReportsWhetherEachPassChangedAnything) {
   ASSERT_TRUE(graph.has_value());
 
   PassManager manager;
-  ASSERT_TRUE(manager.add_from_pipeline("dce").has_value());
+  ASSERT_TRUE(manager.add_from_pipeline("dead-node-elimination").has_value());
   auto reports = manager.run(**graph);
   ASSERT_TRUE(reports.has_value());
 
   ASSERT_EQ(reports->size(), 1U);
-  EXPECT_EQ(reports->front().pass, "dce");
+  EXPECT_EQ(reports->front().pass, "dead-node-elimination");
   EXPECT_FALSE(reports->front().changed) << "nothing in this graph is dead";
 }
 

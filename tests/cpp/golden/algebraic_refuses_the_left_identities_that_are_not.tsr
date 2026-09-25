@@ -1,4 +1,4 @@
-// RUN: algebraic-simplify,dce
+// RUN: algebraic-simplify,dead-node-elimination
 // 1/x is not x and 0-x is not x. Only the right-hand forms are identities.
 graph @g(%x: f32[4], %n: i32[4]) -> f32[4] {
   %one = const() {value = 1.0} : f32[]

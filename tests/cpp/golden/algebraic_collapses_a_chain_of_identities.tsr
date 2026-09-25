@@ -1,4 +1,4 @@
-// RUN: algebraic-simplify,dce
+// RUN: algebraic-simplify,dead-node-elimination
 // Multiply by one, divide by one, negate twice, relu twice. Everything but one relu goes.
 graph @g(%x: f32[4]) -> f32[4] {
   %one = const() {value = 1.0} : f32[]

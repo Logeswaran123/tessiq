@@ -1,4 +1,4 @@
-// RUN: dce
+// RUN: dead-node-elimination
 graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
   %live = add(%a, %b) : f32[4]
   %dead = mul(%a, %a) : f32[4]
