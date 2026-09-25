@@ -9,8 +9,7 @@
 
 # Applies the sanitizers named in TESSIQ_SANITIZER to `target`.
 #
-# Both compile and link options are required: a sanitizer applied only at compile time links
-# against missing runtime symbols, which produces a confusing failure far from its cause.
+# Both compile and link options are required, or the sanitizer runtime is missing at link time.
 function(tessiq_enable_sanitizers target)
   if(NOT TESSIQ_SANITIZER)
     return()
@@ -28,7 +27,7 @@ function(tessiq_enable_sanitizers target)
 
   target_compile_options(${target} PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-fsanitize=${sanitizer_flag}>
-    # Without frame pointers the stack traces sanitizers produce are close to useless.
+    # Frame pointers, for usable sanitizer stack traces.
     $<$<COMPILE_LANGUAGE:CXX>:-fno-omit-frame-pointer>)
   target_link_options(${target} PRIVATE -fsanitize=${sanitizer_flag})
 endfunction()

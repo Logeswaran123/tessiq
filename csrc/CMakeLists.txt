@@ -3,12 +3,10 @@
 
 # --- tessiq_support ------------------------------------------------------------------------
 #
-# The foundation layer: assertions, errors, logging. Every other target depends on it, and it
-# depends on nothing but the standard library. Keeping it free of torch and CUDA is what allows
-# the IR and the passes to be tested without either.
+# Assertions, errors, logging. Every other target depends on it, and it depends only on the
+# standard library, so the IR and the passes can be tested without torch or CUDA.
 
-# version.h is generated so that the version lives in exactly one place (CMakeLists.txt) and
-# cannot drift between the native module and the Python package.
+# version.h is generated from the version in the top-level CMakeLists.txt.
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/tessiq/version.h.in"
   "${CMAKE_CURRENT_BINARY_DIR}/generated/tessiq/version.h"
@@ -30,8 +28,8 @@ add_library(tessiq::support ALIAS tessiq_support)
 
 # --- tessiq_runtime ------------------------------------------------------------------------
 #
-# Device memory and transfers. Depends on support and the standard library, nothing else: the
-# CPU backend has to build and run on a machine with no GPU and no PyTorch.
+# Device memory and transfers. Depends only on support, so the CPU backend builds and runs on a
+# machine with no GPU and no PyTorch.
 
 add_library(tessiq_runtime STATIC
   tessiq/runtime/allocator.cpp
@@ -39,9 +37,8 @@ add_library(tessiq_runtime STATIC
   tessiq/runtime/cuda_device.cpp
   tessiq/runtime/registry.cpp)
 
-# The CUDA backend talks to the driver through the runtime API only; kernels arrive in a later
-# phase and will need the CUDA language enabled. Until then this is ordinary C++ linking cudart,
-# which keeps the build working on machines without a GPU.
+# The CUDA backend uses the runtime API only, so it is ordinary C++ linking cudart. Kernels are
+# compiled at run time with NVRTC (see tessiq_codegen), so the CUDA language is never enabled.
 if(TESSIQ_ENABLE_CUDA)
   find_package(CUDAToolkit REQUIRED)
   target_link_libraries(tessiq_runtime PRIVATE CUDA::cudart)
@@ -58,9 +55,8 @@ add_library(tessiq::runtime ALIAS tessiq_runtime)
 
 # --- tessiq_ir ------------------------------------------------------------------------------
 #
-# The IR, its textual form, and the pass infrastructure. Depends on support and nothing else: the
-# compiler has to be testable without torch, without CUDA and without a GPU, which is what keeps
-# `tessiq-opt` a plain binary and pass tests a matter of text in, text out.
+# The IR, its textual form, and the passes. Depends only on support, so `tessiq-opt` is a plain
+# binary and pass tests need no torch, CUDA or GPU.
 
 add_library(tessiq_ir STATIC
   tessiq/ir/graph.cpp
@@ -96,9 +92,9 @@ add_library(tessiq::ir ALIAS tessiq_ir)
 
 # --- tessiq_codegen ---------------------------------------------------------------------------
 #
-# Turning a fused group into source text. Its own target rather than part of tessiq_ir, because
-# compiling that source needs the CUDA toolkit and the IR and the passes have to keep building
-# without one. Emitting the text does not, which is why this half is testable anywhere.
+# Kernel descriptions, source emission, and compiling and launching through NVRTC, cuBLAS and
+# cuDNN. Separate from tessiq_ir so the IR and passes build without the toolkit. Emitting source
+# needs no toolkit, so that part is testable anywhere.
 
 add_library(tessiq_codegen STATIC
   tessiq/codegen/blas.cpp
@@ -117,8 +113,8 @@ add_library(tessiq_codegen STATIC
 
 target_link_libraries(tessiq_codegen PUBLIC tessiq::ir)
 
-# NVRTC compiles generated source at run time. Guarded the same way the CUDA backend is: without
-# the toolkit the compiler reports that this build has none, and everything above it carries on.
+# Without the toolkit the codegen reports that this build has none, and everything else carries
+# on.
 if(TESSIQ_ENABLE_CUDA)
   find_package(CUDAToolkit REQUIRED)
   # cudart sets the device and creates the primary context; the driver API loads modules and
@@ -126,10 +122,9 @@ if(TESSIQ_ENABLE_CUDA)
   target_link_libraries(tessiq_codegen PRIVATE CUDA::nvrtc CUDA::cudart CUDA::cuda_driver CUDA::cublas)
   target_compile_definitions(tessiq_codegen PRIVATE TESSIQ_WITH_CUDA)
 
-  # cuDNN does not ship with the CUDA toolkit. It comes inside the nvidia-cudnn pip package that
-  # torch depends on, so the place to look is wherever that package is installed. Asked of the
-  # interpreter rather than guessed, the way the torch and pybind11 CMake configs are found.
-  # Optional: without it convolution stays on the host, which is correct and slower.
+  # cuDNN is not part of the CUDA toolkit; it comes in the nvidia-cudnn pip package torch depends
+  # on, so the interpreter is asked where that is. Optional: without it convolution stays on the
+  # host.
   #
   # -I because pip builds in isolation: it installs a sitecustomize that removes the environment's
   # own site-packages from the path, so a plain `import nvidia.cudnn` fails under `pip install`

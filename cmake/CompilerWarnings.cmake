@@ -3,13 +3,11 @@
 #
 # Warning configuration.
 #
-# Warnings are build failures in CI, not advisory output. A warning that is allowed to persist
-# trains everyone to ignore the next one.
+# Warnings fail the build in CI.
 
 # Applies the project's warning set to `target`.
 #
-# Warnings are PRIVATE: consumers of tessiq are not subjected to our warning policy, and a strict
-# policy must never leak through an installed header into someone else's build.
+# PRIVATE, so the policy does not leak into targets that link against tessiq.
 function(tessiq_set_warnings target)
   set(gcc_clang_warnings
       -Wall
