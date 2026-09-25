@@ -10,6 +10,7 @@ and a text editor.
     python tools/tessiq_explain.py encoder --device tessiq:1
     python tools/tessiq_explain.py encoder --sections schedule
     python tools/tessiq_explain.py encoder --dynamic --sections summary,kernels --source
+    python tools/tessiq_explain.py rmsnorm --device tessiq:1 --rewrites rms_norm,fast_gelu
 
 The models are the blocks the test suite uses, because they are the ones the rest of the project
 quotes numbers for. `tessiq.explain(model, example)` takes any module.
@@ -27,11 +28,12 @@ sys.path.insert(0, str(ROOT / "tests" / "python"))
 import torch  # noqa: E402
 
 from tessiq.explain import SECTIONS, explain  # noqa: E402
-from test_models import EncoderBlock, ResidualBlock  # noqa: E402
+from test_models import EncoderBlock, ResidualBlock, RMSNormBlock  # noqa: E402
 
 MODELS = {
     "encoder": (EncoderBlock, (2, 6, 32)),
     "residual": (ResidualBlock, (1, 16, 8, 8)),
+    "rmsnorm": (RMSNormBlock, (2, 8, 64)),
 }
 
 
@@ -67,6 +69,11 @@ def main() -> None:
     parser.add_argument(
         "--source", action="store_true", help="print the generated CUDA for each kernel"
     )
+    parser.add_argument(
+        "--rewrites",
+        default="",
+        help="custom operations whose rewrites to run, comma separated, such as rms_norm",
+    )
     args = parser.parse_args()
 
     factory, default_shape = MODELS[args.model]
@@ -83,6 +90,7 @@ def main() -> None:
             dynamic=args.dynamic,
             sections=tuple(args.sections.split(",")),
             source=args.source,
+            rewrites=[name for name in args.rewrites.split(",") if name],
         ),
         end="",
     )

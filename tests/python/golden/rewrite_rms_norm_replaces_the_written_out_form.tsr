@@ -1,0 +1,18 @@
+// RUN: rewrite-rms-norm
+// RMSNorm as AOTAutograd hands it over for x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+// * weight. The six operations become one call, which keeps the last one's name, takes epsilon as
+// its third argument, and records the five it absorbed.
+graph @forward(%arg0_1: f32[2,8,64], %arg1_1: f32[64]) -> f32[2,8,64] {
+  %pow_1 = aten.pow.Tensor_Scalar(%arg0_1) {arg1 = 2} : f32[2,8,64]
+  %mean = aten.mean.dim(%pow_1) {arg1 = [-1], arg2 = true} : f32[2,8,1]
+  %add = aten.add.Tensor(%mean) {arg1 = 9.9999999999999995e-07} : f32[2,8,1]
+  %rsqrt = aten.rsqrt.default(%add) : f32[2,8,1]
+  %mul = aten.mul.Tensor(%arg0_1, %rsqrt) : f32[2,8,64]
+  %mul_1 = aten.mul.Tensor(%mul, %arg1_1) : f32[2,8,64]
+  return %mul_1
+}
+// ---
+graph @forward(%arg0_1: f32[2,8,64], %arg1_1: f32[64]) -> f32[2,8,64] {
+  %mul_1 = tessiq.rms_norm.default(%arg0_1, %arg1_1) {arg2 = 9.9999999999999995e-07, tessiq.absorbed = "pow_1,mean,add,rsqrt,mul"} : f32[2,8,64]
+  return %mul_1
+}

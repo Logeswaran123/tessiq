@@ -1,0 +1,12 @@
+// The sigmoid approximation of GELU written out in PyTorch, as AOTAutograd hands it to tessiq:
+//
+//   x * torch.sigmoid(1.702 * x)
+//
+// torch moves the constant after the tensor, so 1.702 * x arrives as mul(x, 1.702). The last
+// multiply matches with its operands either way round.
+graph @fast_gelu(%x: f32[?]) -> f32[?] {
+  %scaled = aten.mul.Tensor(%x) {arg1 = 1.702} : f32[?]
+  %gate = aten.sigmoid.default(%scaled) : f32[?]
+  %out = aten.mul.Tensor(%x, %gate) : f32[?]
+  return %out
+}
