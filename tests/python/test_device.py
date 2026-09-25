@@ -397,6 +397,23 @@ def test_an_op_that_resizes_its_output_allocates_on_that_device(device: torch.de
     assert torch.equal(torch.arange(8.0, device=device).cpu(), torch.arange(8.0))
 
 
+@pytest.mark.parametrize("touch", ["write", "data_ptr"])
+def test_a_lazy_clone_is_copied_on_its_own_device(device: torch.device, touch: str) -> None:
+    # A lazy clone shares storage until something asks for writable memory, and the copy made
+    # then goes through the allocator. Reading data_ptr() asks with no device guard set.
+    x = torch.arange(4.0, device=device)
+    y = torch._lazy_clone(x)
+    if touch == "write":
+        y.add_(1)
+        expected = torch.arange(4.0) + 1
+    else:
+        y.untyped_storage().data_ptr()
+        expected = torch.arange(4.0)
+    assert y.untyped_storage().device == device
+    assert torch.equal(y.cpu(), expected)
+    assert torch.equal(x.cpu(), torch.arange(4.0))
+
+
 def test_torch_can_tell_which_device_a_pointer_is_on(device: torch.device) -> None:
     x = torch.empty(16, device=device)
     assert _C._device_of_pointer(x.untyped_storage().data_ptr()) == device.index

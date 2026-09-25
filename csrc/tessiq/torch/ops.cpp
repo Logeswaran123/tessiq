@@ -60,7 +60,7 @@ at::Tensor empty_memory_format(at::IntArrayRef size,
   TESSIQ_LOG(kTrace, kLogModule) << "empty, " << size.size() << " dims on device "
                                  << current_device_index();
   return at::detail::empty_generic(size,
-                                   get_allocator(),
+                                   get_allocator(current_device_index()),
                                    c10::DispatchKeySet(kDispatchKey),
                                    c10::dtype_or_default(dtype),
                                    memory_format);
@@ -75,7 +75,7 @@ at::Tensor empty_strided(at::IntArrayRef size,
   const DeviceIndexGuard guard(index_for(device));
   return at::detail::empty_strided_generic(size,
                                            stride,
-                                           get_allocator(),
+                                           get_allocator(current_device_index()),
                                            c10::DispatchKeySet(kDispatchKey),
                                            c10::dtype_or_default(dtype));
 }

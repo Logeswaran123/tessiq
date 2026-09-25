@@ -173,3 +173,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `torch.arange` on a GPU, and any other operation whose output the fallback resizes, failed with
   `cudaMemcpyAsync: invalid argument`. `resize_` allocated on the thread's current device rather
   than the output's.
+- A lazily cloned tessiq tensor on a GPU crashed the process when its copy was made with no device
+  guard set, as by `untyped_storage().data_ptr()`. The allocator allocated and copied on the
+  current device rather than the tensor's.

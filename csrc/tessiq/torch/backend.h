@@ -11,8 +11,8 @@
 
 namespace tessiq::torch_backend {
 
-/// The c10 allocator backing tessiq tensors.
-c10::Allocator* get_allocator();
+/// The c10 allocator for tessiq device `index`, which always allocates there.
+c10::Allocator* get_allocator(int index);
 
 /// Registers the backend's hooks with torch. Idempotent, and called during module import.
 void register_backend();

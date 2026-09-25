@@ -21,10 +21,13 @@
 #include <c10/core/impl/DeviceGuardImplInterface.h>
 #include <c10/core/impl/alloc_cpu.h>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include <torch/library.h>
 
@@ -44,14 +47,19 @@ constexpr c10::DeviceType kDeviceType = c10::DeviceType::PrivateUse1;
 
 /// Adapts CachingAllocator to the interface c10 expects.
 ///
+/// c10's interface takes no device. The instance registered with c10 allocates on the current
+/// device, which torch's device guard sets around an op, as for CUDA's allocator. The instances
+/// from get_allocator(index) allocate on their own device, so a storage made with one clones onto
+/// that device whatever the current one is.
+///
 /// c10 reports allocation failure by throwing, so this is one of the few places outside the
 /// bindings where an Error becomes an exception.
 struct TessiqAllocator final : c10::Allocator {
+  explicit TessiqAllocator(std::optional<int> index = std::nullopt) noexcept : index_(index) {}
+
   c10::DataPtr allocate(std::size_t bytes) override {
-    // c10's interface takes no device. The index comes from the device guard torch sets around
-    // every op, as it does for CUDA's allocator.
-    const int index = current_device_index();
-    auto ptr = current_allocator().allocate(bytes);
+    const int index = index_.value_or(current_device_index());
+    auto ptr = allocator_at(index).allocate(bytes);
     if (!ptr) {
       TORCH_CHECK(false, ptr.error().to_string());
     }
@@ -63,7 +71,16 @@ struct TessiqAllocator final : c10::Allocator {
   [[nodiscard]] c10::DeleterFnPtr raw_deleter() const override { return &release; }
 
   void copy_data(void* dest, const void* src, std::size_t count) const override {
-    const auto result = current_device().copy_device_to_device(dest, src, count);
+    // c10 calls this from clone(), which allocates `dest` on the current device. Copy on the
+    // device that owns both, since the current one may be another.
+    const std::optional<int> to = owner_of(dest);
+    const std::optional<int> from = owner_of(src);
+    TORCH_CHECK(to.has_value() && from.has_value(), "tessiq did not allocate ", dest, " and ", src);
+    TORCH_CHECK(
+        *to == *from, "tessiq cannot clone an allocation on device ", *from, " onto device ", *to);
+    const auto device = device_at(*to);
+    TORCH_CHECK(device.has_value(), device.has_value() ? "" : device.error().to_string());
+    const auto result = (*device)->copy_device_to_device(dest, src, count);
     TORCH_CHECK(result.has_value(), result.has_value() ? "" : result.error().to_string());
   }
 
@@ -76,19 +93,21 @@ struct TessiqAllocator final : c10::Allocator {
 
   /// The device index that allocated `ptr`, or nothing if tessiq did not. `ptr` has to be the
   /// start of the allocation.
-  static std::optional<int> owner_of(void* ptr) {
+  static std::optional<int> owner_of(const void* ptr) {
     const std::scoped_lock guard(owners_mutex());
     const auto it = owners().find(ptr);
     return it == owners().end() ? std::nullopt : std::optional<int>(it->second);
   }
 
  private:
+  std::optional<int> index_;
+
   /// Which allocator handed out each live pointer.
   ///
   /// c10 frees through a function pointer that takes only the address, and freeing on the wrong
   /// device's allocator would silently corrupt both pools.
-  static std::unordered_map<void*, int>& owners() {
-    static std::unordered_map<void*, int> map;
+  static std::unordered_map<const void*, int>& owners() {
+    static std::unordered_map<const void*, int> map;
     return map;
   }
 
@@ -336,7 +355,19 @@ struct TessiqHooks final : at::PrivateUse1HooksInterface {
 // REGISTER_ALLOCATOR opens its own anonymous namespace, so it has to sit at namespace scope.
 REGISTER_ALLOCATOR(kDeviceType, &g_allocator)
 
-c10::Allocator* get_allocator() { return &g_allocator; }
+c10::Allocator* get_allocator(int index) {
+  static const std::vector<std::unique_ptr<TessiqAllocator>> per_device = [] {
+    std::vector<std::unique_ptr<TessiqAllocator>> made;
+    made.reserve(static_cast<std::size_t>(device_count()));
+    for (int each = 0; each < device_count(); ++each) {
+      made.push_back(std::make_unique<TessiqAllocator>(each));
+    }
+    return made;
+  }();
+  TORCH_CHECK(
+      index >= 0 && std::cmp_less(index, per_device.size()), "no tessiq device at index ", index);
+  return per_device[static_cast<std::size_t>(index)].get();
+}
 
 AllocatorStats allocator_stats(int index) { return allocator_at(index).stats(); }
 
