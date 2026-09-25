@@ -18,8 +18,10 @@ namespace tessiq::passes {
   return std::uint32_t{1} << static_cast<unsigned>(dtype);
 }
 
-/// Every element type. An operation generated from ops.toml accepts them all here, because whether
-/// a kernel exists for a type is the emitter's question and it answers it when it compiles.
+/// Every element type. An operation generated from ops.toml accepts them all unless it names its
+/// own there. For a loop tessiq writes, whether a kernel exists for a type is the emitter's
+/// question and it answers it when it compiles. A matmul or a convolution calls a library that
+/// takes only some types, and nothing asks it before the call, so those name theirs.
 inline constexpr std::uint32_t kEveryDType = ~std::uint32_t{0};
 
 /// What a pass may do with an operation.
@@ -76,8 +78,8 @@ struct OpInfo {
   bool has_kernel;
 
   /// The element types it has a kernel for, one bit per `ir::DType`. Every type for an operation
-  /// from ops.toml. A registered operation names its own, because its expression was written for
-  /// them and nobody has checked it against any other.
+  /// from ops.toml unless it names its own. A registered operation names its own, because its
+  /// expression was written for them and nobody has checked it against any other.
   std::uint32_t dtypes = kEveryDType;
 
   [[nodiscard]] constexpr bool accepts(ir::DType dtype) const {

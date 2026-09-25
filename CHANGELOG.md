@@ -111,3 +111,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   compilation: the imported graph, what each pass changed, the kernels, and where every step
   runs. `tessiq.capture()` and `tessiq.default_pipeline()` alongside it, so nothing reporting on
   a compilation has to keep its own copy of how one is made.
+- A kernel that packs a view, so a strided tessiq tensor becomes contiguous on the device rather
+  than through the host. `clone` is claimed as its own `copy` category, which put the last four
+  operations of the encoder block on the device.
+- A clock on the device. The profiler no longer drains the device around every kernel, which had
+  more than doubled the call it was measuring, and `tessiq.profile(device_time=True)` reports what
+  each kernel cost the device. `tessiq.kernel_costs(recipe)` measures each kernel by replaying it,
+  and `bench/where_the_gap_is.py` splits the gap to eager CUDA into the code tessiq generates and
+  everything around it.
+- Convolution through cuDNN, and batch norm in eval mode decomposed into arithmetic. The ResNet-18
+  residual block runs entirely on the device and takes 0.57 ms, against 0.90 ms with convolution
+  and batch norm on the host.
+- One `Kernel` interface for every kind of compiled work, which the executor runs without knowing
+  what kind it is, and a stream on every launch.
+- A launch over any grid and block, with dynamic shared memory and typed arguments.
+- Custom operations, one directory each in `csrc/custom_ops/`. A `.cpp` gives the schema, what
+  the operation computes in ATen, and either a launch function for a `.cu` kernel beside it or an
+  elementwise expression the compiler fuses. Each becomes `torch.ops.tessiq.<name>` and runs its
+  kernel on a tessiq GPU, called directly and in a compiled graph. `tessiq.library` lists them,
+  compiles them ahead of their first call, and counts the calls that ran the reference. `rms_norm`,
+  `fast_gelu`, `swiglu` and `softmax` ship with it.
+- A custom operation can replace a torch one, with `.replaces("aten::_softmax")`. It becomes the
+  torch operation's implementation on tessiq's devices and gets a pass, `override-<name>`, that
+  swaps the node in a graph. The torch operation keeps its backward. `softmax` replaces
+  `aten::_softmax`.
+- A custom operation can carry a pattern: the computation it replaces, written out in tessiq's IR.
+  Its pass, `rewrite-<name>`, replaces each match with one call, when a compile names it in
+  `options={"rewrites": [...]}`. `rms_norm` and `fast_gelu` rewrite what models write out.
+- `docs/passes.md`, on the passes a compile runs, in what order and why, and how to add one.
+- `ops.toml` can name the element types an operation takes. The matmuls and the convolution name
+  float32, since cuBLAS and cuDNN are float32 only here.
+
+### Changed
+
+- `dce` is called `dead-node-elimination`.
+- A custom operation's launch function that declines a call with `TORCH_CHECK` makes the call run
+  the reference, rather than fail.
+
+### Fixed
+
+- The profiler reported every input reused from an earlier call as a transfer of the whole tensor.
+- `tessiq-explain` showed operations that run on the host as running on the device.
+- A convolution on a tessiq tensor with no cuDNN kernel for it, such as one on the CPU reference
+  device, raised instead of running on the host.
+- A kernel reading a transposed or broadcast value did not compile, which also stopped training a
+  module whose loss is computed inside it.
+- The IR could print a string attribute holding a comma and not read it back.
+- A float64 matmul or convolution compiled for the GPU was claimed and then refused by cuBLAS or
+  cuDNN when it was called. It runs on the host now.
+- The ASan run failed every CUDA-backed C++ test on a machine with a GPU, from state the CUDA driver
+  allocates once and never frees.

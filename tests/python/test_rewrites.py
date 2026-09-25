@@ -20,7 +20,7 @@ from torch import nn
 import tessiq
 from tessiq import _C
 from tessiq.recipe import build_recipe
-from test_models import RMSNorm, RMSNormBlock
+from test_models import RMSNormBlock
 
 GOLDEN = Path(__file__).parent / "golden"
 
@@ -131,26 +131,13 @@ def test_compiled_on_a_shape_that_changes() -> None:
             torch.testing.assert_close(run(x), model(x))
 
 
-class NormAndGelu(nn.Module):
-    """The two written-out forms with nothing between them. No linear layer, because the matmul
-    kernel is float32 only and this is about the rewrites."""
-
-    def __init__(self, width: int = 64) -> None:
-        super().__init__()
-        self.norm = RMSNorm(width)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.norm(x)
-        out: torch.Tensor = h * torch.sigmoid(1.702 * h)
-        return out
-
-
 @pytest.mark.cuda
 @pytest.mark.usefixtures("needs_gpu")
 def test_compiled_for_a_type_the_norm_kernel_does_not_take() -> None:
     # rms_norm's kernel is float32 only, so the norm stays written out. fast_gelu takes float64,
-    # so the GELU is still rewritten.
-    model = NormAndGelu().double().eval()
+    # so the GELU is still rewritten. The linear layer between them runs on the host, since the
+    # matmul is float32 only too.
+    model = RMSNormBlock().double().eval()
     x = torch.randn(2, 8, 64, dtype=torch.float64)
     graph = tessiq.capture(model, x)
     recipe = build_recipe(graph, tessiq.gpu, use_cache=False, rewrites=BOTH)
