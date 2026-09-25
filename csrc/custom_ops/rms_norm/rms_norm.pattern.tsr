@@ -1,0 +1,15 @@
+// RMSNorm written out in PyTorch, as AOTAutograd hands it to tessiq:
+//
+//   x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
+//
+// The inputs are named after rms_norm's tensor arguments, and "$eps" captures its scalar one.
+// Types are not compared, so they are written as f32[?] throughout.
+graph @rms_norm(%x: f32[?], %weight: f32[?]) -> f32[?] {
+  %pow = aten.pow.Tensor_Scalar(%x) {arg1 = 2} : f32[?]
+  %mean = aten.mean.dim(%pow) {arg1 = [-1], arg2 = true} : f32[?]
+  %add = aten.add.Tensor(%mean) {arg1 = "$eps"} : f32[?]
+  %rsqrt = aten.rsqrt.default(%add) : f32[?]
+  %normed = aten.mul.Tensor(%x, %rsqrt) : f32[?]
+  %out = aten.mul.Tensor(%normed, %weight) : f32[?]
+  return %out
+}

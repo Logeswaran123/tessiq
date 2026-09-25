@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -103,7 +104,9 @@ def _describe(value: object) -> str:
     return repr(value)
 
 
-def signature(graph_module: torch.fx.GraphModule, device: torch.device) -> str:
+def signature(
+    graph_module: torch.fx.GraphModule, device: torch.device, rewrites: Sequence[str] = ()
+) -> str:
     """A key identifying every graph that would compile to the same recipe.
 
     Walks FX rather than the IR, which is the point: computing it has to be cheaper than the
@@ -111,13 +114,14 @@ def signature(graph_module: torch.fx.GraphModule, device: torch.device) -> str:
 
     Shapes and dtypes are in the key because the memory plan is built from them, so the same
     structure at a different shape is a different recipe. The device is in the key because it
-    decides where the clustered steps run.
+    decides where the clustered steps run. The rewrites are in the key because they change which
+    operations are there to compile.
 
     Returns:
         A hex digest. Content-addressed, so two graphs share a key exactly when they would compile
         to the same recipe.
     """
-    parts = [f"device={device}"]
+    parts = [f"device={device}", f"rewrites={','.join(rewrites)}"]
     for node in graph_module.graph.nodes:
         value = node.meta.get("val")
         typing = (

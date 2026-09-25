@@ -39,6 +39,9 @@ struct CustomCall {
   /// Whether some extent it reads or writes is not known until the call.
   bool has_dynamic_extent = false;
 
+  /// Values of the original graph a rewrite folded into the call, which it computes on its way.
+  std::vector<std::string> absorbed;
+
   /// The tensors it reads, in the order they appear among the arguments.
   [[nodiscard]] std::vector<std::string> inputs() const;
 };

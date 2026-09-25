@@ -29,14 +29,20 @@ std::string_view trim(std::string_view text) {
   return text;
 }
 
-/// Splits on `separator`, ignoring separators inside brackets so that `f32[4,8]` stays whole.
+/// Splits on `separator`, ignoring separators inside brackets so that `f32[4,8]` stays whole, and
+/// inside a quoted string, so that an attribute `"a,b"` does too.
 std::vector<std::string_view> split_top_level(std::string_view text, char separator) {
   std::vector<std::string_view> parts;
   int depth = 0;
+  bool quoted = false;
   std::size_t start = 0;
   for (std::size_t i = 0; i < text.size(); ++i) {
     const char c = text[i];
-    if (c == '[' || c == '(' || c == '{') {
+    if (c == '"') {
+      quoted = !quoted;
+    } else if (quoted) {
+      continue;
+    } else if (c == '[' || c == '(' || c == '{') {
       depth++;
     } else if (c == ']' || c == ')' || c == '}') {
       depth--;

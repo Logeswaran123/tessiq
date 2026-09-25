@@ -34,6 +34,7 @@ add_executable(tessiq_tests
   test_program.cpp
   test_recipe.cpp
   test_replace_op.cpp
+  test_rewrite.cpp
   test_reduction.cpp
   test_result.cpp
   test_shape_rules.cpp)

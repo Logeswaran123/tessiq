@@ -1,0 +1,18 @@
+// RUN: rewrite-fast-gelu
+// x * torch.sigmoid(1.702 * x) and torch.sigmoid(1.702 * x) * x, both as AOTAutograd hands them
+// over. Each becomes one call, with its multiply read either way round.
+graph @forward(%arg0_1: f32[16,64], %arg1_1: f32[16,64]) -> (f32[16,64], f32[16,64]) {
+  %mul = aten.mul.Tensor(%arg0_1) {arg1 = 1.702} : f32[16,64]
+  %sigmoid = aten.sigmoid.default(%mul) : f32[16,64]
+  %mul_1 = aten.mul.Tensor(%arg0_1, %sigmoid) : f32[16,64]
+  %mul_2 = aten.mul.Tensor(%arg1_1) {arg1 = 1.702} : f32[16,64]
+  %sigmoid_1 = aten.sigmoid.default(%mul_2) : f32[16,64]
+  %mul_3 = aten.mul.Tensor(%sigmoid_1, %arg1_1) : f32[16,64]
+  return %mul_1, %mul_3
+}
+// ---
+graph @forward(%arg0_1: f32[16,64], %arg1_1: f32[16,64]) -> (f32[16,64], f32[16,64]) {
+  %mul_1 = tessiq.fast_gelu.default(%arg0_1) {tessiq.absorbed = "mul,sigmoid"} : f32[16,64]
+  %mul_3 = tessiq.fast_gelu.default(%arg1_1) {tessiq.absorbed = "mul_2,sigmoid_1"} : f32[16,64]
+  return %mul_1, %mul_3
+}

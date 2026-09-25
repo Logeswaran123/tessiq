@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "tessiq/codegen/call.h"
@@ -64,6 +65,12 @@ struct CustomOverride {
 /// They run ahead of the rest of the pipeline, so every later pass sees the custom operation.
 [[nodiscard]] std::vector<std::string> override_passes();
 
+/// Every custom operation with a pattern, and the name of its rewrite pass, sorted.
+///
+/// A rewrite pass is registered like any other and runs only in a pipeline that names it, which a
+/// compile does when asked to in its options.
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> custom_op_rewrites();
+
 /// How many calls of custom operation `name` on a tessiq tensor ran the reference.
 ///
 /// A call runs the reference on the CPU reference device, and on a GPU for an element type the
@@ -101,6 +108,9 @@ class CustomKernel final : public Kernel {
   [[nodiscard]] bool packs_inputs() const override { return true; }
 
   [[nodiscard]] bool has_dynamic_extent() const override { return call_.has_dynamic_extent; }
+
+  /// Its output, and whatever a rewrite folded into the call.
+  [[nodiscard]] std::vector<std::string> members() const override;
 
   /// Found by running the operation's reference on tensors that have these shapes and no data.
   [[nodiscard]] Result<std::vector<std::int64_t>>

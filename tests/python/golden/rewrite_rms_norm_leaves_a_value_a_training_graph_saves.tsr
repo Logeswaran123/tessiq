@@ -1,0 +1,22 @@
+// RUN: rewrite-rms-norm
+// The forward graph of a training step returns %rsqrt and %mul, because the backward graph reads
+// them. Replacing the match would leave nothing to return. Unchanged.
+graph @forward(%arg0_1: f32[2,8,64], %arg1_1: f32[64]) -> (f32[2,8,64], f32[2,8,1], f32[2,8,64]) {
+  %pow_1 = aten.pow.Tensor_Scalar(%arg0_1) {arg1 = 2} : f32[2,8,64]
+  %mean = aten.mean.dim(%pow_1) {arg1 = [-1], arg2 = true} : f32[2,8,1]
+  %add = aten.add.Tensor(%mean) {arg1 = 9.9999999999999995e-07} : f32[2,8,1]
+  %rsqrt = aten.rsqrt.default(%add) : f32[2,8,1]
+  %mul = aten.mul.Tensor(%arg0_1, %rsqrt) : f32[2,8,64]
+  %mul_1 = aten.mul.Tensor(%mul, %arg1_1) : f32[2,8,64]
+  return %mul_1, %rsqrt, %mul
+}
+// ---
+graph @forward(%arg0_1: f32[2,8,64], %arg1_1: f32[64]) -> (f32[2,8,64], f32[2,8,1], f32[2,8,64]) {
+  %pow_1 = aten.pow.Tensor_Scalar(%arg0_1) {arg1 = 2} : f32[2,8,64]
+  %mean = aten.mean.dim(%pow_1) {arg1 = [-1], arg2 = true} : f32[2,8,1]
+  %add = aten.add.Tensor(%mean) {arg1 = 9.9999999999999995e-07} : f32[2,8,1]
+  %rsqrt = aten.rsqrt.default(%add) : f32[2,8,1]
+  %mul = aten.mul.Tensor(%arg0_1, %rsqrt) : f32[2,8,64]
+  %mul_1 = aten.mul.Tensor(%mul, %arg1_1) : f32[2,8,64]
+  return %mul_1, %rsqrt, %mul
+}

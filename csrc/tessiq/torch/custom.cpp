@@ -38,6 +38,7 @@
 #include "tessiq/passes/op_table.h"
 #include "tessiq/passes/pass.h"
 #include "tessiq/passes/replace_op.h"
+#include "tessiq/passes/rewrite.h"
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/support/result.h"
@@ -134,6 +135,28 @@ std::map<std::string, RegisteredOp*, std::less<>>& replacements() {
 std::vector<std::string>& replacing_passes() {
   static std::vector<std::string> names;
   return names;
+}
+
+/// The name of each operation's rewrite pass, by the operation's name.
+std::map<std::string, std::string, std::less<>>& rewrite_passes() {
+  static std::map<std::string, std::string, std::less<>> passes;
+  return passes;
+}
+
+/// `rms_norm` as a pass name spells it, `rms-norm`, like every other pass.
+std::string hyphenated(std::string name) {
+  std::ranges::replace(name, '_', '-');
+  return name;
+}
+
+/// `(x, weight)`.
+std::string listed(std::vector<std::string> names) {
+  std::string text = "(";
+  for (std::size_t i = 0; i < names.size(); ++i) {
+    text += i == 0 ? "" : ", ";
+    text += names[i];
+  }
+  return text + ")";
 }
 
 /// The custom operation a call through `handle` runs: the operation itself, or the one standing in
@@ -343,7 +366,7 @@ Result<std::unique_ptr<RegisteredOp>> check_definition(const CustomOp& op) {
                               listed(checked->parameters));
     }
     const std::string key = op.directory() + "/" + op.kernel_file();
-    const std::optional<std::string_view> source = custom_ops::find_kernel_file(key);
+    const std::optional<std::string_view> source = custom_ops::find_embedded_file(key);
     if (!source.has_value() || source->empty()) {
       return invalid_argument("there is no kernel file csrc/custom_ops/" + key);
     }
@@ -455,20 +478,28 @@ expression_for(RegisteredOp& op, at::ScalarType dtype, int ordinal) {
 }
 
 /// Launches `op`'s kernel over `arguments`, whose tensors are packed, writing `out`.
-Result<void> launch_kernel(RegisteredOp& op,
+///
+/// Returns false, having launched nothing, when the launch function refuses the arguments with
+/// TORCH_CHECK. That is how a kernel says it cannot take a call its reference can, such as a
+/// weight that broadcasts, and the caller then runs the reference instead. Any other failure is an
+/// error.
+Result<bool> launch_kernel(RegisteredOp& op,
                            const std::vector<c10::IValue>& arguments,
                            const at::Tensor& out,
                            int ordinal,
                            codegen::Stream stream) {
   if (out.numel() == 0) {
     // Nothing to compute, and a launch over no blocks is not something to ask the driver for.
-    return ok();
+    return true;
   }
   custom_ops::Launch launch;
   try {
     launch = op.definition->launch_function()(arguments, out);
   } catch (const c10::Error& error) {
-    return invalid_argument(op.qualified + ": " + error.what_without_backtrace());
+    TESSIQ_LOG(kDebug, kLogModule)
+        << op.qualified
+        << " declines a call, so it runs its reference: " << error.what_without_backtrace();
+    return false;
   }
   TESSIQ_ASSIGN_OR_RETURN(const codegen::Program* program, program_for(op, ordinal));
 
@@ -483,14 +514,38 @@ Result<void> launch_kernel(RegisteredOp& op,
   shape.grid = launch.grid;
   shape.block = launch.block;
   shape.shared_bytes = launch.shared_bytes;
-  return program->launch(buffers, launch.arguments, shape, stream);
+  TESSIQ_RETURN_IF_ERROR(program->launch(buffers, launch.arguments, shape, stream));
+  return true;
+}
+
+/// Runs `op`'s reference on host copies of `arguments` and writes what it gives into `out`.
+///
+/// For a call the kernel declined in a compiled graph, where the result already has a tensor the
+/// executor allocated. A call made outside one goes through the dispatcher's own fallback instead.
+Result<void>
+reference_into(RegisteredOp& op, const std::vector<c10::IValue>& arguments, const at::Tensor& out) {
+  op.fallbacks.fetch_add(1, std::memory_order_relaxed);
+  torch::jit::Stack stack;
+  stack.reserve(arguments.size());
+  for (const c10::IValue& argument : arguments) {
+    stack.push_back(argument.isTensor() ? c10::IValue(argument.toTensor().cpu()) : argument);
+  }
+  try {
+    op.handle->callBoxed(stack);
+    out.copy_(stack.back().toTensor());
+  } catch (const c10::Error& error) {
+    return invalid_argument(op.qualified + ": " + error.what_without_backtrace());
+  }
+  return ok();
 }
 
 void raise_if_error(const Result<void>& result) {
   TORCH_CHECK(result.has_value(), result.has_value() ? "" : result.error().to_string());
 }
 
-at::Tensor run_kernel(RegisteredOp& op, std::vector<c10::IValue> arguments, int ordinal) {
+/// The result of launching `op`'s kernel, or nothing when the kernel declined the call.
+std::optional<at::Tensor>
+run_kernel(RegisteredOp& op, std::vector<c10::IValue> arguments, int ordinal) {
   for (c10::IValue& argument : arguments) {
     if (argument.isTensor()) {
       argument = argument.toTensor().contiguous();
@@ -506,7 +561,11 @@ at::Tensor run_kernel(RegisteredOp& op, std::vector<c10::IValue> arguments, int 
     return c10::Device(c10::kCPU);
   }();
   at::Tensor out = at::empty(like.sizes(), like.options().device(device));
-  raise_if_error(launch_kernel(op, arguments, out, ordinal, codegen::kDefaultStream));
+  const Result<bool> launched = launch_kernel(op, arguments, out, ordinal, codegen::kDefaultStream);
+  TORCH_CHECK(launched.has_value(), launched.has_value() ? "" : launched.error().to_string());
+  if (!*launched) {
+    return std::nullopt;
+  }
   return out;
 }
 
@@ -561,10 +620,15 @@ void run_on_device(const c10::OperatorHandle& handle, torch::jit::Stack* stack) 
     return;
   }
 
-  at::Tensor out = op->has_kernel() ? run_kernel(*op, std::move(arguments), *ordinal)
-                                    : run_expression(*op, arguments, *ordinal);
+  std::optional<at::Tensor> out = op->has_kernel() ? run_kernel(*op, std::move(arguments), *ordinal)
+                                                   : run_expression(*op, arguments, *ordinal);
+  if (!out.has_value()) {
+    op->fallbacks.fetch_add(1, std::memory_order_relaxed);
+    at::native::cpu_fallback(handle, stack);
+    return;
+  }
   torch::jit::drop(*stack, count);
-  torch::jit::push(*stack, std::move(out));
+  torch::jit::push(*stack, std::move(*out));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -645,13 +709,64 @@ Result<void> register_replacement(RegisteredOp& op) {
   }
   libraries().push_back(std::move(library));
 
-  std::string pass = "override-" + op.definition->name();
+  std::string pass = "override-" + hyphenated(op.definition->name());
   passes::PassRegistry::instance().add(
       pass, [pass, from = op.replaced_spelling, to = op.spelling, dtypes = ir_dtypes(op)] {
         return std::make_unique<passes::ReplaceOp>(pass, from, to, dtypes);
       });
   replacing_passes().push_back(std::move(pass));
   replacements().emplace(op.replaced, &op);
+  return ok();
+}
+
+/// Checks `op`'s pattern against its schema and registers the pass that rewrites to it.
+Result<void> register_rewrite(const RegisteredOp& op) {
+  const std::string key = op.definition->directory() + "/" + op.definition->pattern_file();
+  const std::optional<std::string_view> text = custom_ops::find_embedded_file(key);
+  if (!text.has_value()) {
+    return invalid_argument("there is no pattern file csrc/custom_ops/" + key);
+  }
+  Result<std::unique_ptr<ir::Graph>> parsed = ir::parse(*text);
+  if (!parsed.has_value()) {
+    return parsed.error().with_context("its pattern csrc/custom_ops/" + key + " does not parse");
+  }
+  const std::shared_ptr<const ir::Graph> pattern = std::move(*parsed);
+  const Result<passes::PatternShape> shape = passes::check_pattern(*pattern);
+  if (!shape.has_value()) {
+    return shape.error().with_context("its pattern csrc/custom_ops/" + key);
+  }
+
+  std::vector<passes::RewriteArgument> arguments;
+  std::vector<std::string> tensors;
+  std::vector<std::string> scalars;
+  for (std::size_t i = 0; i < op.parameters.size(); ++i) {
+    const bool tensor = op.parameters[i] == Parameter::kTensor;
+    arguments.push_back({.name = op.names[i], .tensor = tensor});
+    (tensor ? tensors : scalars).push_back(op.names[i]);
+  }
+  const auto same = [](std::vector<std::string> first, std::vector<std::string> second) {
+    std::ranges::sort(first);
+    std::ranges::sort(second);
+    return first == second;
+  };
+  // Each argument of the call the pattern becomes has to come from somewhere in the match.
+  if (!same(shape->inputs, tensors)) {
+    return invalid_argument("its pattern csrc/custom_ops/" + key + " has the inputs " +
+                            listed(shape->inputs) + ", and its tensor arguments are " +
+                            listed(tensors) + "; they have to be the same names");
+  }
+  if (!same(shape->captures, scalars)) {
+    return invalid_argument("its pattern csrc/custom_ops/" + key + " captures " +
+                            listed(shape->captures) + ", and its scalar arguments are " +
+                            listed(scalars) + "; capture each one as \"$name\"");
+  }
+
+  std::string pass = "rewrite-" + hyphenated(op.definition->name());
+  passes::PassRegistry::instance().add(
+      pass, [pass, pattern, to = op.spelling, arguments, dtypes = ir_dtypes(op)] {
+        return std::make_unique<passes::Rewrite>(pass, pattern, to, arguments, dtypes);
+      });
+  rewrite_passes().emplace(op.qualified, std::move(pass));
   return ok();
 }
 
@@ -664,6 +779,9 @@ Result<void> register_one(const CustomOp& definition) {
   TESSIQ_RETURN_IF_ERROR(register_with_torch(*op));
   if (!op->replaced.empty()) {
     TESSIQ_RETURN_IF_ERROR(register_replacement(*op));
+  }
+  if (!definition.pattern_file().empty()) {
+    TESSIQ_RETURN_IF_ERROR(register_rewrite(*op));
   }
   TESSIQ_LOG(kDebug, kLogModule) << "registered " << op->qualified
                                  << (op->has_kernel() ? " with a kernel" : " as an expression");
@@ -826,6 +944,10 @@ std::vector<CustomOverride> custom_op_overrides() {
   return overrides;
 }
 
+std::vector<std::pair<std::string, std::string>> custom_op_rewrites() {
+  return {rewrite_passes().begin(), rewrite_passes().end()};
+}
+
 std::vector<std::string> override_passes() {
   std::vector<std::string> names = replacing_passes();
   std::ranges::sort(names);
@@ -863,6 +985,12 @@ CustomKernel::CustomKernel(codegen::CustomCall call,
 
 const std::string& CustomKernel::op() const { return op_->qualified; }
 
+std::vector<std::string> CustomKernel::members() const {
+  std::vector<std::string> members = call_.absorbed;
+  members.push_back(call_.output);
+  return members;
+}
+
 std::vector<c10::IValue> CustomKernel::arguments(const std::vector<at::Tensor>& tensors) const {
   std::vector<c10::IValue> arguments;
   arguments.reserve(scalars_.size());
@@ -890,7 +1018,12 @@ CustomKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
 Result<void> CustomKernel::launch(const std::vector<at::Tensor>& tensors,
                                   const at::Tensor& out,
                                   codegen::Stream stream) const {
-  return launch_kernel(*op_, arguments(tensors), out, ordinal_, stream);
+  const std::vector<c10::IValue> called = arguments(tensors);
+  TESSIQ_ASSIGN_OR_RETURN(const bool launched, launch_kernel(*op_, called, out, ordinal_, stream));
+  if (launched) {
+    return ok();
+  }
+  return reference_into(*op_, called, out);
 }
 
 Result<std::vector<std::shared_ptr<Kernel>>> custom_kernels(const ir::Graph& graph, int ordinal) {

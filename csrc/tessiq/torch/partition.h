@@ -39,7 +39,12 @@ struct PartitionResult {
 /// Node names survive the round trip: the importer names each IR value after the FX node that
 /// produced it, so the caller can map a cluster back onto the graph it started with. That is what
 /// lets the executor decide, node by node, what runs where.
-Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::string name);
+///
+/// `rewrites` names passes to run ahead of the default pipeline, which is how a compile asks for a
+/// custom operation's rewrite.
+Result<PartitionResult> partition_fx(const pybind11::object& graph_module,
+                                     std::string name,
+                                     const std::vector<std::string>& rewrites = {});
 
 /// A graph compiled as far as the compiler goes: a plan, and the kernels for it.
 struct CompiledGraph {
@@ -57,9 +62,11 @@ struct CompiledGraph {
 /// `alignment` is the device's, passed in because the compiler does not know which device the
 /// caller means to run on. `ordinal` is the CUDA device to compile kernels for, or negative to
 /// skip compiling them, which is what a caller targeting the host reference wants.
+/// `rewrites` names passes to run first, as for `partition_fx`.
 Result<CompiledGraph> build_recipe_fx(const pybind11::object& graph_module,
                                       std::string name,
                                       std::size_t alignment,
-                                      int ordinal);
+                                      int ordinal,
+                                      const std::vector<std::string>& rewrites = {});
 
 } // namespace tessiq::torch_backend

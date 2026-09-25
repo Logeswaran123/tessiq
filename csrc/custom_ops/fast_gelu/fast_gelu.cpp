@@ -21,4 +21,5 @@ at::Tensor fast_gelu(const at::Tensor& x) { return x * (1.702 * x).sigmoid(); }
 TESSIQ_CUSTOM_OP(fast_gelu, "(Tensor x) -> Tensor")
     .reference(fast_gelu)
     .expression("$0 * (scalar_t(1) / (scalar_t(1) + exp(scalar_t(-1.702) * $0)))")
-    .dtypes({at::kFloat, at::kDouble});
+    .dtypes({at::kFloat, at::kDouble})
+    .pattern();

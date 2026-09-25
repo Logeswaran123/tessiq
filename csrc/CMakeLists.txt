@@ -83,6 +83,7 @@ add_library(tessiq_ir STATIC
   tessiq/passes/op_traits.cpp
   tessiq/passes/pass.cpp
   tessiq/passes/replace_op.cpp
+  tessiq/passes/rewrite.cpp
   tessiq/passes/shape_infer.cpp
   tessiq/passes/shape_rules.cpp)
 

@@ -72,6 +72,39 @@ class EncoderBlock(nn.Module):
         return out
 
 
+class RMSNorm(nn.Module):
+    """RMSNorm the way models write it, with no custom operation in sight."""
+
+    def __init__(self, width: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.randn(width))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out: torch.Tensor = (
+            x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
+        )
+        return out
+
+
+class RMSNormBlock(nn.Module):
+    """A norm, a linear layer and the sigmoid approximation of GELU, all in plain PyTorch.
+
+    Nothing in it names a custom operation. Compiled with `rewrites=["rms_norm", "fast_gelu"]`,
+    the norm and the GELU each become one of tessiq's custom operations.
+    """
+
+    def __init__(self, width: int = 64) -> None:
+        super().__init__()
+        self.norm = RMSNorm(width)
+        self.linear = nn.Linear(width, width)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.linear(self.norm(x))
+        out: torch.Tensor = h * torch.sigmoid(1.702 * h)
+        return out
+
+
 def block_cases() -> list[object]:
     """Each block with an input, named so a failure says which one."""
     torch.manual_seed(0)

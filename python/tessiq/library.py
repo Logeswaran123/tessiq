@@ -17,6 +17,8 @@ first call, and says how often they ran their reference instead of their kernel.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from tessiq import _C
 from tessiq.device import cuda_ordinal, gpu, gpu_count
 
@@ -33,6 +35,43 @@ def overrides() -> dict[str, str]:
     carries it, such as `aten._softmax.default`.
     """
     return {op: replaced for op, replaced, _dtypes in _C.custom_op_overrides()}
+
+
+def rewrites() -> dict[str, str]:
+    """Each custom operation with a pattern, and the name of the pass that rewrites to it.
+
+    A rewrite finds the computation an operation's pattern describes, written out in plain PyTorch,
+    and replaces it with one call to the operation. It runs only when a compile asks for it:
+    ``torch.compile(model, backend="tessiq", options={"rewrites": ["rms_norm"]})``.
+    """
+    return dict(_C.custom_op_rewrites())
+
+
+def rewrite_passes(names: Sequence[str]) -> list[str]:
+    """The passes that run the rewrites `names` asks for, in the order asked, each once.
+
+    Args:
+        names: Operations, as ``rms_norm`` or ``tessiq::rms_norm``, or their passes, as
+            ``rewrite-rms-norm``.
+
+    Raises:
+        ValueError: A name with no rewrite. The message lists the ones that have one.
+    """
+    if isinstance(names, str):
+        names = [names]
+    known: dict[str, str] = {}
+    for op, pass_name in rewrites().items():
+        known[op] = known[op.partition("::")[2]] = known[pass_name] = pass_name
+    passes: list[str] = []
+    for name in names:
+        if name not in known:
+            available = ", ".join(sorted(op.partition("::")[2] for op in rewrites()))
+            raise ValueError(
+                f"no custom operation has a rewrite called {name!r}; these do: {available}"
+            )
+        if known[name] not in passes:
+            passes.append(known[name])
+    return passes
 
 
 def check(name: str | None = None) -> list[str]:

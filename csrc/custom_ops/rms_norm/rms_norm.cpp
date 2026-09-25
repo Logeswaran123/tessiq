@@ -56,4 +56,5 @@ launch(const at::Tensor& x, const at::Tensor& weight, double eps, const at::Tens
 TESSIQ_CUSTOM_OP(rms_norm, "(Tensor x, Tensor weight, float eps) -> Tensor")
     .reference(rms_norm)
     .launch(launch)
-    .dtypes({at::kFloat});
+    .dtypes({at::kFloat})
+    .pattern();

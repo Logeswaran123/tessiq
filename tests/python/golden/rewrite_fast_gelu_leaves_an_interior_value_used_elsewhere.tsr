@@ -1,0 +1,17 @@
+// RUN: rewrite-fast-gelu
+// %sigmoid is also read by %gate_sum, so replacing the match would take it away. Unchanged.
+graph @forward(%arg0_1: f32[16,64]) -> (f32[16,64], f32[16,64]) {
+  %mul = aten.mul.Tensor(%arg0_1) {arg1 = 1.702} : f32[16,64]
+  %sigmoid = aten.sigmoid.default(%mul) : f32[16,64]
+  %mul_1 = aten.mul.Tensor(%arg0_1, %sigmoid) : f32[16,64]
+  %gate_sum = aten.add.Tensor(%sigmoid) {arg1 = 1.0} : f32[16,64]
+  return %mul_1, %gate_sum
+}
+// ---
+graph @forward(%arg0_1: f32[16,64]) -> (f32[16,64], f32[16,64]) {
+  %mul = aten.mul.Tensor(%arg0_1) {arg1 = 1.702} : f32[16,64]
+  %sigmoid = aten.sigmoid.default(%mul) : f32[16,64]
+  %mul_1 = aten.mul.Tensor(%arg0_1, %sigmoid) : f32[16,64]
+  %gate_sum = aten.add.Tensor(%sigmoid) {arg1 = 1.0} : f32[16,64]
+  return %mul_1, %gate_sum
+}

@@ -37,11 +37,20 @@ constexpr std::string_view kPipeline = "mark-supported,layout-assign,cluster,fus
 
 /// Imports and runs the pipeline. Shared by both entry points so they cannot disagree about what
 /// the backend claims.
-Result<std::unique_ptr<ir::Graph>> prepare(const pybind11::object& graph_module, std::string name) {
+Result<std::unique_ptr<ir::Graph>> prepare(const pybind11::object& graph_module,
+                                           std::string name,
+                                           const std::vector<std::string>& rewrites) {
   TESSIQ_ASSIGN_OR_RETURN(auto graph, import_fx(graph_module, std::move(name)));
 
+  // A rewrite runs first, so the passes that decide what the backend claims see the operation it
+  // put in, and never the ones it took out.
+  std::string pipeline;
+  for (const std::string& rewrite : rewrites) {
+    pipeline += rewrite;
+    pipeline += ",";
+  }
   passes::PassManager manager;
-  TESSIQ_RETURN_IF_ERROR(manager.add_from_pipeline(default_pipeline()));
+  TESSIQ_RETURN_IF_ERROR(manager.add_from_pipeline(pipeline + default_pipeline()));
   TESSIQ_RETURN_IF_ERROR(manager.run(*graph));
   return graph;
 }
@@ -59,8 +68,10 @@ std::string default_pipeline() {
   return pipeline + std::string(kPipeline);
 }
 
-Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::string name) {
-  TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name)));
+Result<PartitionResult> partition_fx(const pybind11::object& graph_module,
+                                     std::string name,
+                                     const std::vector<std::string>& rewrites) {
+  TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name), rewrites));
 
   PartitionResult result;
   result.ir = ir::print(*graph);
@@ -89,8 +100,9 @@ Result<PartitionResult> partition_fx(const pybind11::object& graph_module, std::
 Result<CompiledGraph> build_recipe_fx(const pybind11::object& graph_module,
                                       std::string name,
                                       std::size_t alignment,
-                                      int ordinal) {
-  TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name)));
+                                      int ordinal,
+                                      const std::vector<std::string>& rewrites) {
+  TESSIQ_ASSIGN_OR_RETURN(auto graph, prepare(graph_module, std::move(name), rewrites));
 
   CompiledGraph compiled;
   TESSIQ_ASSIGN_OR_RETURN(compiled.recipe, ir::build_recipe(*graph, alignment));
