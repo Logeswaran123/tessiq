@@ -85,6 +85,21 @@ TEST(ReductionTest, TheLastAxisIsContiguous) {
   EXPECT_EQ(parsed.outputs(), 4);
 }
 
+TEST(ReductionTest, AnInputLayoutAssignCopiedIsAskedForUnderItsSourcesName) {
+  // The executor packs a reduction's input itself, which is the copy layout-assign recorded, so
+  // the kernel asks for the value the copy was made from and reads it with the packed shape.
+  const ReductionKernel parsed = extract(R"(graph @g(%a: f32[4,8:1,4]) -> f32[4] {
+  %a.contiguous = tessiq.contiguous(%a) {tessiq.supported = false} : f32[4,8]
+  %s = aten.sum.dim_IntList(%a.contiguous) {arg1 = [1]} : f32[4]
+  return %s
+}
+)");
+  EXPECT_EQ(parsed.input, "a");
+  EXPECT_EQ(parsed.outer, 4);
+  EXPECT_EQ(parsed.reduce, 8);
+  EXPECT_EQ(parsed.inner, 1);
+}
+
 TEST(ReductionTest, TheFirstAxisIsStrided) {
   const ReductionKernel parsed = extract(sum_over("[4,8]", "[8]", "[0]"));
   EXPECT_EQ(parsed.outer, 1);

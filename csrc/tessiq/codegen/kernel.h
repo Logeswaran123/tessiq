@@ -124,6 +124,17 @@ struct FusedKernel {
   std::vector<Step> body;
 };
 
+/// The value the executor holds for `value`, which is the tensor a kernel is handed for it.
+///
+/// `value` itself, unless it is a copy `layout-assign` made so that a kernel could read a strided
+/// value in order. The executor makes that copy on its own, by packing every input of a kernel that
+/// packs its inputs, so the copy never exists as a tensor of its own and its name is not one the
+/// executor knows. What the executor holds is the value the copy was made from.
+///
+/// A kernel reads such an input under the source's name and with the copy's layout, which is the
+/// packed layout the executor hands over.
+[[nodiscard]] const ir::Value* held_value(const ir::Value* value);
+
 /// Pulls fusion group `group` out of `graph`.
 ///
 /// Precondition: `fuse-elementwise` has run, so the group's nodes carry `tessiq.fusion`.

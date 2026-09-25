@@ -13,6 +13,7 @@
 #include <variant>
 #include <vector>
 
+#include "tessiq/codegen/kernel.h"
 #include "tessiq/codegen/program.h"
 #include "tessiq/ir/graph.h"
 #include "tessiq/ir/types.h"
@@ -136,7 +137,9 @@ Result<std::optional<ReductionKernel>> extract_reduction(const ir::Node& node) {
   kernel.last_axis = axes.back();
   kernel.rank = dims.size();
   kernel.keeps_dims = target->type().shape().rank() == dims.size();
-  kernel.input = source->name();
+  // Named after what the executor holds. When the source is a copy layout-assign made, the
+  // executor makes the same copy by packing, and the shape read below is that packed one.
+  kernel.input = held_value(source)->name();
   kernel.output = target->name();
   // Consecutive threads have to read consecutive addresses. With no kept axis after the reduced
   // one, a block's threads walking the reduced axis do that; with a kept axis after it, the
