@@ -10,6 +10,9 @@ custom_ops/
     rms_norm/
         rms_norm.cu     the kernel
         rms_norm.cpp    the operation: its schema, its reference, and how to launch the kernel
+    softmax/
+        softmax.cu      the kernel
+        softmax.cpp     the same, and it replaces torch's aten::_softmax
     fast_gelu/
         fast_gelu.cpp   an elementwise expression the compiler fuses, so no kernel file
     swiglu/
@@ -106,6 +109,51 @@ never as a bare `1.702`, which C++ reads as a double and which turns a float32 k
 arithmetic. The registration refuses the bare form. Every argument of such an operation is a
 tensor, and they broadcast against each other like the operands of torch's own `add`.
 
+## Replacing a torch operation
+
+An operation can stand in for one of torch's own. Then a model does not have to call it by name:
+it calls the torch operation, and the custom one runs wherever it declares the types. `softmax`
+replaces `aten::_softmax`, which `torch.softmax`, `F.softmax` and `nn.Softmax` all reach:
+
+```cpp
+at::Tensor softmax(const at::Tensor& self, std::int64_t dim, bool half_to_float) {
+  return at::_softmax(self, dim, half_to_float);
+}
+
+TESSIQ_CUSTOM_OP(softmax, "(Tensor self, int dim, bool half_to_float) -> Tensor")
+    .reference(softmax)
+    .launch(launch)
+    .dtypes({at::kFloat})
+    .replaces("aten::_softmax");
+```
+
+The schema has to take the same arguments as the torch operation's, with the same names and types,
+and the reference is usually the torch operation itself. The replacement happens in three places:
+
+- **Called on a tessiq tensor**, the custom operation is the torch operation's implementation on
+  tessiq's devices. For a type it does not declare, it runs the torch operation on the host, and
+  counts that in `fallbacks()`.
+- **In a compiled graph**, a pass named `override-softmax` runs first and makes each
+  `aten._softmax.default` node a `tessiq.softmax.default` node, where every tensor has a declared
+  type. `tessiq.explain` shows it in the pass-by-pass section:
+
+  ```
+  override-softmax: 1 line(s) rewritten
+    -  %_softmax = aten._softmax.default(%mul) {arg1 = -1, arg2 = false} : f32[8,128]
+    +  %_softmax = tessiq.softmax.default(%mul) {arg1 = -1, arg2 = false} : f32[8,128]
+  ```
+
+- **Before the graph reaches tessiq**, torch would break `_softmax` into five smaller operations.
+  tessiq keeps it whole where the custom operation declares the types, so the pass has something
+  to find, and breaks it up as before everywhere else.
+
+Training still works through it. The torch operation keeps its own backward, which reads the
+result the custom kernel computed.
+
+An operation torch breaks up as soon as it is called, such as `aten::softmax.int`, cannot be
+replaced, because no backend ever sees it. Replace the one it becomes, as `softmax` does.
+`tessiq.library.overrides()` lists what replaces what.
+
 ## What the definition decides
 
 - **Types.** A schema's `Tensor`, `float`, `int` and `bool` are `const at::Tensor&`, `double`,
@@ -151,5 +199,13 @@ ImportError: invalid_argument: custom operation tessiq::rms_norm in csrc/custom_
 ImportError: invalid_argument: custom operation tessiq::rms_norm in csrc/custom_ops/rms_norm: there is no kernel file csrc/custom_ops/rms_norm/rms.cu
 ```
 
+A replacement is checked the same way:
+
+```
+ImportError: invalid_argument: custom operation tessiq::softmax in csrc/custom_ops/softmax: it replaces aten::softmax.int, which torch breaks into other operations before any backend sees it; replace one of those instead
+ImportError: invalid_argument: custom operation tessiq::softmax in csrc/custom_ops/softmax: it replaces aten::_softmax, whose schema is aten::_softmax(Tensor self, int dim, bool half_to_float) -> Tensor; the two have to take the same arguments, with the same names and types, and no defaults
+```
+
 The same goes for a launch function whose parameters differ from the schema, a schema that does not
-parse, and an operation given both a kernel and an expression, or neither.
+parse, an operation given both a kernel and an expression, or neither, and a replacement of an
+operation torch does not have.

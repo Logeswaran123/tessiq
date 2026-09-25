@@ -22,7 +22,7 @@ namespace tessiq::torch_backend {
 /// Exposed so that a tool reporting on a compilation names the pipeline that actually ran rather
 /// than a copy of it. A copy is a second source of truth, and the way it goes wrong is a report
 /// that describes a compilation nobody performed.
-[[nodiscard]] std::string_view default_pipeline();
+[[nodiscard]] std::string default_pipeline();
 
 /// The outcome of compiling one FX graph, as far as the compiler currently goes.
 struct PartitionResult {

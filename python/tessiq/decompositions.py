@@ -13,10 +13,14 @@ short a whole namespace.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import torch
 from torch._decomp import core_aten_decompositions, get_decompositions
+from torch.utils import _pytree
+
+from tessiq import _C
 
 #: Left whole by core ATen and broken up here.
 #:
@@ -62,13 +66,47 @@ def _var_mean(
     return total / divisor, mean if keepdim else torch.mean(self, dim=axes, keepdim=False)
 
 
+def _unless_replaced(
+    decomposition: Callable[..., Any], dtypes: frozenset[torch.dtype]
+) -> Callable[..., Any]:
+    """`decomposition`, except where a custom operation replaces the operation it decomposes.
+
+    There it returns NotImplemented, which tells the tracer to keep the operation whole, so the
+    compiler's `override-<name>` pass can find it and put the custom operation in its place. That is
+    exactly where every tensor has a type the custom operation declares, which is the same test the
+    pass makes.
+    """
+
+    def decompose(*args: Any, **kwargs: Any) -> Any:
+        tensors = [a for a in _pytree.tree_leaves((args, kwargs)) if isinstance(a, torch.Tensor)]
+        if tensors and all(t.dtype in dtypes for t in tensors):
+            return NotImplemented
+        return decomposition(*args, **kwargs)
+
+    return decompose
+
+
+def _operation(spelling: str) -> Any:
+    """`aten._softmax.default` as the operation object torch keys decompositions on."""
+    namespace, rest = spelling.split(".", 1)
+    name, overload = rest.rsplit(".", 1)
+    return getattr(getattr(getattr(torch.ops, namespace), name), overload)
+
+
 def decompositions() -> dict[Any, Any]:
     """The table the backend hands AOTAutograd.
 
     Built fresh each time. AOTAutograd stores its keyword arguments and rewrites them on first use,
     so a shared dictionary would be modified under whoever holds it.
+
+    An operation a custom operation replaces is kept whole wherever the custom operation has the
+    types for it, and decomposed as before everywhere else.
     """
     table = dict(core_aten_decompositions())
     table.update(get_decompositions(_EXTRA))
     table[torch.ops.aten.var_mean.correction] = _var_mean
+    for _op, replaced, dtypes in _C.custom_op_overrides():
+        operation = _operation(replaced)
+        if operation in table:
+            table[operation] = _unless_replaced(table[operation], frozenset(dtypes))
     return table

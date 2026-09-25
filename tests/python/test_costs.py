@@ -47,7 +47,8 @@ def test_each_cost_is_positive_and_named(encoder_recipe: tessiq.Recipe) -> None:
     for cost in costs:
         assert isinstance(cost, KernelCost)
         assert cost.microseconds > 0.0
-        assert cost.kind in {"fused", "reduction", "gemm"}
+        # The custom kernel is the softmax, which a custom operation replaces.
+        assert cost.kind in {"fused", "reduction", "gemm", "custom"}
         assert cost.repeats == 20
 
 

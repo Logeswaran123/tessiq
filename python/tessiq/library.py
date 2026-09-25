@@ -8,6 +8,9 @@ that holds the kernel. `csrc/custom_ops/README.md` walks through adding one. Onc
 imported, each is `torch.ops.tessiq.<name>`, and it runs on the GPU both called directly and inside
 `torch.compile`.
 
+An operation can also replace a torch one, such as `softmax` replacing `aten::_softmax`. A model
+calling the torch operation then runs the custom one wherever it has the types for it.
+
 Nothing about an operation is defined here. This module lists them, compiles them ahead of their
 first call, and says how often they ran their reference instead of their kernel.
 """
@@ -21,6 +24,15 @@ from tessiq.device import cuda_ordinal, gpu, gpu_count
 def registered() -> list[str]:
     """Every custom operation, as `tessiq::<name>`, sorted."""
     return list(_C.custom_ops())
+
+
+def overrides() -> dict[str, str]:
+    """Each custom operation that replaces a torch one, and the torch operation it replaces.
+
+    Keyed by the custom operation, `tessiq::<name>`. The torch operation is spelled as a graph
+    carries it, such as `aten._softmax.default`.
+    """
+    return {op: replaced for op, replaced, _dtypes in _C.custom_op_overrides()}
 
 
 def check(name: str | None = None) -> list[str]:

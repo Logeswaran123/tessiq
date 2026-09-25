@@ -232,6 +232,11 @@ recipe's kernel map, and a rebuild. The four kernel kinds that exist were each w
 - The PyTorch side, done by the definition: a `TORCH_LIBRARY` operation whose ATen reference runs
   on the CPU and, on tensors with no data, gives the result's shape for tracing, and an
   implementation for the tessiq dispatch key so eager tensors on the device run the same kernel.
+- Replacing a torch operation. A custom operation can declare that it stands in for one, such as
+  a softmax kernel for `aten::_softmax`. It becomes that operation's implementation on tessiq's
+  devices, the decomposition table keeps the operation whole where the custom one has the types,
+  and a pass of its own, `override-<name>`, swaps the node before anything else sees it. The torch
+  operation keeps its backward.
 - A pattern rewriter. A pattern is a small IR graph, either written in the textual form or traced
   from a Python function through the backend's own decompositions, so that it matches what
   AOTAutograd emits rather than what the user typed. Each rewrite registers as its own pass,

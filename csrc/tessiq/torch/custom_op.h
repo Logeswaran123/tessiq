@@ -165,6 +165,16 @@ class CustomOp {
   /// A kernel in another file of the directory, or under another name than the operation's.
   CustomOp& kernel(std::string file, std::string entry);
 
+  /// Makes this operation stand in for torch operation `torch_op`, such as `aten::_softmax` or
+  /// `aten::add.Tensor`, wherever it declares the types.
+  ///
+  /// A model calling the torch operation then runs this one instead: called on a tessiq tensor,
+  /// and in a compiled graph, where a pass named `override-<name>` swaps the node before anything
+  /// else sees it. The torch operation keeps its own backward. The two schemas have to take the
+  /// same arguments, with the same names and types, and the reference has to compute what the
+  /// torch operation does, which it usually does by calling it.
+  CustomOp& replaces(std::string torch_op);
+
   [[nodiscard]] const std::string& name() const { return name_; }
 
   [[nodiscard]] const std::string& signature() const { return signature_; }
@@ -191,6 +201,8 @@ class CustomOp {
 
   [[nodiscard]] const std::string& entry() const { return entry_; }
 
+  [[nodiscard]] const std::string& replaced() const { return replaced_; }
+
  private:
   std::string name_;
   std::string signature_;
@@ -203,6 +215,7 @@ class CustomOp {
   std::vector<at::ScalarType> dtypes_{at::kFloat};
   std::string kernel_file_;
   std::string entry_;
+  std::string replaced_;
 };
 
 /// Starts the definition of operation `name`. Used through TESSIQ_CUSTOM_OP.

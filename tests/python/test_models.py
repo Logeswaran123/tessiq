@@ -129,14 +129,15 @@ def test_a_block_matches_eager_on_a_gpu(model: nn.Module, example: torch.Tensor)
 @pytest.mark.parametrize(("model", "example"), block_cases())
 def test_what_a_block_claims_matches_the_table(model: nn.Module, example: torch.Tensor) -> None:
     # Coverage checked on a real graph rather than on the table. What the backend claims here has
-    # to be exactly what ops.toml says it has a kernel for, so a block cannot quietly claim
-    # something the emitter would then decline.
+    # to be exactly what ops.toml says it has a kernel for, or a custom operation in
+    # csrc/custom_ops, so a block cannot quietly claim something the emitter would then decline.
     with_kernels = {
         str(spelling)
         for op in load_operations()
         if op["kernel"]
         for spelling in (op["name"], *op["aten"])
     }
+    with_kernels |= {name.replace("::", ".") + ".default" for name in tessiq.library.registered()}
 
     text, _ = tessiq.partition(capture(model, example))
     for line in text.splitlines():
@@ -182,12 +183,18 @@ def test_the_residual_block_still_exercises_the_fallback() -> None:
     assert declined > 0
 
 
-def test_softmax_and_layer_norm_become_operations_the_backend_runs() -> None:
-    # Neither has a kernel here and neither needs one. core ATen leaves them whole; tessiq breaks
-    # them up, and every piece they break into is something it already runs.
+def test_layer_norm_is_broken_up_and_softmax_is_kept_for_its_kernel() -> None:
+    # Layer norm has no kernel here and needs none. core ATen leaves it whole; tessiq breaks it up,
+    # and every piece it breaks into is something it already runs.
     text = tessiq.import_graph(capture(EncoderBlock().eval(), torch.randn(2, 6, 32)))
-    assert "aten._softmax" not in text, text
     assert "aten.native_layer_norm" not in text, text
     assert "prims." not in text, "decomposing further than ATen is a different operation set"
-    assert "aten.amax.default" in text, text
     assert "aten.rsqrt.default" in text, text
+    # Softmax went the same way until csrc/custom_ops/softmax replaced it. For float32, which the
+    # replacement has a kernel for, it is kept whole so the replacement can find it.
+    assert "aten._softmax.default" in text, text
+
+    double = EncoderBlock().double().eval()
+    text = tessiq.import_graph(capture(double, torch.randn(2, 6, 32, dtype=torch.float64)))
+    assert "aten._softmax" not in text, text
+    assert "aten.amax.default" in text, text

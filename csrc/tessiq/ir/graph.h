@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -94,6 +95,13 @@ class Node {
   ~Node() = default;
 
   [[nodiscard]] const std::string& op() const { return op_; }
+
+  /// Makes this node a different operation over the same operands, attributes and results.
+  ///
+  /// For a rewrite that swaps one operation for another that computes the same thing. Everything
+  /// that refers to the node or to its results stays valid, which replacing it with a new node
+  /// would not give: the results would have to be renamed back to what the executor knows them by.
+  void set_op(std::string op) { op_ = std::move(op); }
 
   [[nodiscard]] Graph* graph() const { return graph_; }
 

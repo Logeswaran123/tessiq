@@ -24,6 +24,8 @@ _SUBCLASS = {
     "reduction": _C.ReductionKernel,
     "gemm": _C.GemmKernel,
     "conv": _C.ConvKernel,
+    # The encoder's softmax, which a custom operation replaces.
+    "custom": _C.CustomKernel,
 }
 
 
