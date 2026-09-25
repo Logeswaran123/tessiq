@@ -457,7 +457,39 @@ def test_a_broadcasting_chain_agrees_with_eager() -> None:
     torch.testing.assert_close(compiled(*inputs), model(*inputs), rtol=1e-6, atol=1e-5)
 
 
-def test_a_transformer_block_runs_without_softmax_or_layer_norm_kernels() -> None:
+def transposed_chain(x: torch.Tensor) -> torch.Tensor:
+    return torch.relu(x.t() * 2.0) + 1.0
+
+
+def broadcast_chain(x: torch.Tensor) -> torch.Tensor:
+    return torch.relu(x.expand(4, 8) * 2.0)
+
+
+def transposed_sum(x: torch.Tensor) -> torch.Tensor:
+    return x.t().sum(dim=0)
+
+
+@pytest.mark.parametrize(
+    ("model", "shape"),
+    [(transposed_chain, (8, 4)), (broadcast_chain, (1, 8)), (transposed_sum, (8, 4))],
+)
+def test_a_kernel_reading_a_strided_value_agrees_with_eager(
+    model: Callable[[torch.Tensor], torch.Tensor], shape: tuple[int, ...]
+) -> None:
+    # Each reads a value laid out other than packed, which layout-assign copies first. None of
+    # these compiled before: the copy reached the kernel under a name with a dot in it.
+    x = torch.randn(*shape)
+    recipe = build_recipe(captured(model, x), tessiq.gpu, use_cache=False)
+    assert recipe.kernels
+    assert all("." not in name for kernel in recipe.kernels.values() for name in kernel.inputs)
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(x), model(x))
+
+
+def test_a_transformer_block_agrees_with_eager() -> None:
     import test_models
 
     model = test_models.EncoderBlock().eval()

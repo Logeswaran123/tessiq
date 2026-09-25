@@ -22,6 +22,9 @@ namespace {
 
 constexpr std::string_view kFusion = "tessiq.fusion";
 
+/// The operation `layout-assign` gives the copies it inserts.
+constexpr std::string_view kMaterialise = "tessiq.contiguous";
+
 /// The fusion group a node belongs to, or nothing.
 const std::int64_t* group_of(const ir::Node* node) {
   const ir::Attribute* attribute = node->attribute(kFusion);
@@ -262,6 +265,16 @@ std::string index_for(const ir::TensorType& output, const ir::TensorType& operan
   return aligned.has_value() ? general_index(output.shape().dims(), *aligned) : std::string{};
 }
 
+const ir::Value* held_value(const ir::Value* value) {
+  // A loop rather than one step, although layout-assign never copies a copy, so that a second
+  // pass inserting copies of its own would not leave a name the executor does not know.
+  while (value != nullptr && value->producer() != nullptr &&
+         value->producer()->op() == kMaterialise && value->producer()->operand_count() == 1) {
+    value = value->producer()->operand(0);
+  }
+  return value;
+}
+
 std::vector<std::string> FusedKernel::input_names() const {
   std::vector<std::string> names;
   names.reserve(inputs.size());
@@ -328,8 +341,9 @@ Result<Step> build_step(const ir::Node* node,
                               " operands and no arg" + std::to_string(position));
     }
     const ir::Value* operand = node->operand(next_operand++);
-    step.args.push_back({operand->name(), true});
-    if (inside.count(operand->producer()) == 0 && seen.insert(operand->name()).second) {
+    const std::string& name = held_value(operand)->name();
+    step.args.push_back({name, true});
+    if (inside.count(operand->producer()) == 0 && seen.insert(name).second) {
       const std::optional<OperandRead> read = operand_read(output, operand->type());
       if (!read.has_value()) {
         return unsupported("'" + node->op() + "' reads " + operand->type().to_string() +
@@ -338,8 +352,7 @@ Result<Step> build_step(const ir::Node* node,
       }
       // Empty for a divisor the source cannot hold, which is not a failure: the emitter writes
       // that one as a parameter and the launch supplies the number.
-      inputs.push_back(
-          {operand->name(), index_for(output, operand->type()), *read, operand->type()});
+      inputs.push_back({name, index_for(output, operand->type()), *read, operand->type()});
     }
   }
 

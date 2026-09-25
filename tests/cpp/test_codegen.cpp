@@ -56,6 +56,35 @@ TEST(ExtractTest, InputsAreTheValuesTheGroupDoesNotCompute) {
   EXPECT_EQ(kernel->dtype, ir::DType::kF32);
 }
 
+TEST(ExtractTest, AnInputLayoutAssignCopiedIsAskedForUnderItsSourcesName) {
+  // layout-assign copies a strided value before a kernel reads it, as tessiq.contiguous. The
+  // executor makes that copy itself when it packs the kernel's inputs, so the copy has no tensor of
+  // its own. The kernel asks for the value the copy was made from, and reads it packed.
+  auto graph = ir::parse(R"(graph @g(%a: f32[4,8:1,4]) -> f32[4,8] {
+  %r = aten.relu.default(%a) : f32[4,8]
+  return %r
+}
+)");
+  ASSERT_TRUE(graph.has_value()) << graph.error().to_string();
+  passes::PassManager manager;
+  ASSERT_TRUE(manager.add_from_pipeline("mark-supported,layout-assign,cluster,fuse-elementwise")
+                  .has_value());
+  ASSERT_TRUE(manager.run(**graph).has_value());
+  ASSERT_NE(ir::print(**graph).find("%a.contiguous = tessiq.contiguous(%a)"), std::string::npos);
+
+  const auto kernel = extract_kernel(**graph, 0);
+  ASSERT_TRUE(kernel.has_value()) << (kernel.has_value() ? "" : kernel.error().to_string());
+  EXPECT_EQ(kernel->input_names(), (std::vector<std::string>{"a"}));
+  EXPECT_TRUE(kernel->inputs.front().type.is_contiguous());
+  EXPECT_EQ(kernel->inputs.front().index, "i");
+
+  // The copy's name has a dot in it, which is not something a C identifier can hold.
+  const auto source = cuda_emitter().emit(*kernel);
+  ASSERT_TRUE(source.has_value()) << source.error().to_string();
+  EXPECT_EQ(source->find("contiguous"), std::string::npos) << *source;
+  EXPECT_NE(source->find("p_a"), std::string::npos) << *source;
+}
+
 TEST(ExtractTest, AValueReadOutsideTheGroupIsTheOutput) {
   auto graph = fused(R"(graph @g(%a: f32[8]) -> (f32[8], f32[8]) {
   %p = aten.relu.default(%a) : f32[8]
