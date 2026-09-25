@@ -49,7 +49,7 @@ include(Sanitizers)
 
 if(TESSIQ_ENABLE_MLIR)
   message(FATAL_ERROR
-          "TESSIQ_ENABLE_MLIR is reserved for phase 10 (see PHASES.md) and is not "
+          "TESSIQ_ENABLE_MLIR is reserved for phase 15 (see PHASES.md) and is not "
           "implemented yet. Configure without it.")
 endif()
 
