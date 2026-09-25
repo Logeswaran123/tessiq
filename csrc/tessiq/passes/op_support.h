@@ -13,9 +13,8 @@ namespace tessiq::passes {
 
 /// Which operations the backend can run itself.
 ///
-/// Partitioning asks this, and everything it says no to is left on the host. The set is data
-/// rather than a hardcoded list so that a test can narrow it to two operations and check the
-/// clustering, and so that the real answer can come from the kernel registry once one exists.
+/// `mark-supported` asks this, and leaves everything it says no to on the host. A set rather than
+/// a hard-coded list, so a test can narrow it.
 class OpSupport {
  public:
   OpSupport() = default;
@@ -30,7 +29,7 @@ class OpSupport {
 
   [[nodiscard]] std::size_t size() const { return ops_.size(); }
 
-  /// Supported operations, sorted, for diagnostics and for `tessiq-opt --list-ops`.
+  /// Supported operations, sorted, for diagnostics.
   [[nodiscard]] std::vector<std::string> names() const;
 
  private:
@@ -39,9 +38,9 @@ class OpSupport {
 
 /// The set partitioning uses when nothing else is supplied.
 ///
-/// Seeded from the generated operation table, so an operation is claimed here exactly when
-/// ops.toml says it has a kernel. It is a mutable global because partitioning reads it without
-/// being handed one; a test that wants a different answer changes it and changes it back.
+/// Seeded from the generated table with every operation ops.toml gives a kernel, plus each
+/// registered one. Mutable and global because `mark-supported` reads it without being handed
+/// one; a test that changes it changes it back.
 OpSupport& default_op_support();
 
 } // namespace tessiq::passes

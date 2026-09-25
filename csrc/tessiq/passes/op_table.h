@@ -18,10 +18,9 @@ namespace tessiq::passes {
   return std::uint32_t{1} << static_cast<unsigned>(dtype);
 }
 
-/// Every element type. An operation generated from ops.toml accepts them all unless it names its
-/// own there. For a loop tessiq writes, whether a kernel exists for a type is the emitter's
-/// question and it answers it when it compiles. A matmul or a convolution calls a library that
-/// takes only some types, and nothing asks it before the call, so those name theirs.
+/// Every element type. An operation from ops.toml accepts them all unless it names its own there.
+/// For a generated loop the emitter decides per type when it compiles; a matmul or convolution
+/// calls a library that takes only some types, so those name theirs.
 inline constexpr std::uint32_t kEveryDType = ~std::uint32_t{0};
 
 /// What a pass may do with an operation.
@@ -31,38 +30,33 @@ enum class OpCategory {
   kElementwise,
   /// Reads many positions to write one, along dimensions the node names rather than the table.
   kReduction,
-  /// Rearranges indices and computes nothing. The device runs these as metadata, so there is no
-  /// kernel and nothing to fuse: the result shares its input's storage.
+  /// Rearranges indices and computes nothing. Runs as metadata on the device: the result shares
+  /// its input's storage, so there is no kernel and nothing to fuse.
   kMovement,
   /// Reads positions it is not writing. Runs on its own however many kernels it has.
   kMatmul,
-  /// Reads its input's layout and writes the same values packed. Computes nothing, which makes it
-  /// look like a movement operation, but a movement operation shares its input's storage and this
-  /// one does not: it costs a pass over the data. That distinction decides placement, because a
-  /// unit holding nothing but views is not worth putting on a device and a unit holding a copy is.
+  /// Reads its input's layout and writes the same values packed. Unlike a movement operation it
+  /// does not share storage and costs a pass over the data, which matters for placement: a unit of
+  /// nothing but views is not worth moving to the device, and a unit holding a copy is.
   kCopy,
-  /// Reads a window of its input for each output element. A library call rather than generated
-  /// code: cuDNN chooses among several algorithms by the shapes and the card, which is the reason
-  /// to call it rather than write one.
+  /// Reads a window of its input for each output element. A cuDNN call, which picks an algorithm
+  /// for the shapes and the card.
   kConvolution,
-  /// A kernel somebody wrote and registered, rather than one the backend generates or a library
-  /// provides. Runs on its own, like a matmul. The compiler knows its operands and their types and
-  /// nothing about what it computes, so it neither fuses it nor derives its shape.
+  /// A custom operation with a kernel of its own. Runs alone, like a matmul. The compiler knows its
+  /// operands and types but not what it computes, so it neither fuses it nor derives its shape.
   kCustom,
 };
 
 /// Everything known about one spelling of one operation.
 ///
-/// One row per spelling rather than per operation, because a lookup is by the name a graph
-/// carries and an imported graph carries the ATen spelling while a hand-written one carries the
-/// short name.
+/// One row per spelling: an imported graph carries the ATen spelling and a hand-written one the
+/// short name, and a lookup is by whichever the graph carries.
 struct OpInfo {
   /// The spelling a graph carries, which is what a lookup matches.
   std::string_view name;
 
-  /// The operation this spelling is one of, as ops.toml names it. `aten.sum.dim_IntList` and
-  /// `aten.sum.default` are both `sum`, so code that has to act on which operation it is can
-  /// switch on this instead of matching every spelling of it.
+  /// The operation this spelling is one of, as ops.toml names it: `aten.sum.dim_IntList` and
+  /// `aten.sum.default` are both `sum`.
   std::string_view canonical;
 
   OpCategory category;
@@ -73,13 +67,10 @@ struct OpInfo {
   /// The scalar computation, with `$0` and `$1` for the arguments. Empty unless elementwise.
   std::string_view expression;
 
-  /// Whether the backend can run it. An operation without a kernel falls back to the host, which
-  /// is correct and costs two transfers.
+  /// Whether the backend can run it. One without a kernel runs on the host.
   bool has_kernel;
 
-  /// The element types it has a kernel for, one bit per `ir::DType`. Every type for an operation
-  /// from ops.toml unless it names its own. A registered operation names its own, because its
-  /// expression was written for them and nobody has checked it against any other.
+  /// The element types it has a kernel for, one bit per `ir::DType`.
   std::uint32_t dtypes = kEveryDType;
 
   [[nodiscard]] constexpr bool accepts(ir::DType dtype) const {
@@ -87,13 +78,8 @@ struct OpInfo {
   }
 };
 
-/// The row for `name`, or null when nothing has heard of it.
-///
-/// The table is generated from `ops.toml` by `tools/gen_ops.py`, so an operation cannot be marked
-/// fusable without saying what it computes, or given a kernel in one place and not another. Two
-/// hand-written tables holding overlapping facts is how an operation gets half-added, and that
-/// happened here before this one existed. An operation added while the program runs, through
-/// `register_op` in op_registry.h, is found here too, after the table, so every pass sees it.
+/// The row for `name`, or null. Looks in the table generated from `ops.toml` by
+/// `tools/gen_ops.py`, then among operations added with `register_op` (op_registry.h).
 [[nodiscard]] const OpInfo* find_op(std::string_view name);
 
 /// The generated row for `name`, or null. Registered operations are not looked at.

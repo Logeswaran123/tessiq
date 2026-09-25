@@ -26,10 +26,8 @@ enum class RuleKind {
   /// One tensor in, same type out: abs, relu, tanh.
   kUnaryElementwise,
   /// Two or more tensors in, broadcast shape and matching dtype out: add, mul, and a registered
-  /// operation of any arity above one.
-  ///
-  /// Also covers the one-operand form, which is what the importer produces when the second
-  /// argument was a Python scalar and became an attribute instead.
+  /// operation of any arity above one. Also covers the one-operand form the importer produces
+  /// when the second argument was a Python scalar.
   kBinaryElementwise,
   /// Reduces the dimensions the node names, dropping them or setting them to 1.
   kReduction,
@@ -37,13 +35,8 @@ enum class RuleKind {
   kMatmul,
 };
 
-/// The rule for `op`, derived from the generated operation table, or nothing if it has none.
-///
-/// There is no second list here. A rule kind is a function of what ops.toml already says: an
-/// elementwise operation takes its operands' type through unchanged, and how many operands it has
-/// is its arity. Keeping a separate table meant every operation added to ops.toml also had to be
-/// added here, and an operation that fused correctly but had no shape rule was the failure that
-/// produced.
+/// The rule for `op`, or nothing if it has none. Derived from the operation's category and arity
+/// in the op table, so an operation added to ops.toml gets its rule without a second list.
 std::optional<RuleKind> find_rule(std::string_view op) {
   const OpInfo* info = find_op(op);
   if (info == nullptr) {
@@ -55,23 +48,20 @@ std::optional<RuleKind> find_rule(std::string_view op) {
   case OpCategory::kReduction:
     return RuleKind::kReduction;
   case OpCategory::kMovement:
-    // No rule yet. A movement operation's result shape comes from its attributes, and each one
-    // reads them differently: a view takes the sizes it was given, a permute reorders the ones it
-    // has, a slice narrows one. Its layout changes too, which no rule here computes. Imported
-    // graphs carry the answer already, so shape-infer skips these rather than guessing.
+    // No rule yet. Each movement operation reads its attributes differently (a view takes new
+    // sizes, a permute reorders them, a slice narrows one) and changes the layout. Imported graphs
+    // already carry the result type.
     return std::nullopt;
   case OpCategory::kMatmul:
     return RuleKind::kMatmul;
   case OpCategory::kConvolution:
   case OpCategory::kCustom:
-    // No rule for either. A convolution's spatial extents depend on stride, padding and dilation,
-    // and the compiler knows nothing about what a registered kernel computes. Imported graphs carry
-    // both answers, so shape-infer skips them rather than repeating ATen's arithmetic or guessing.
+    // No rule for either. A convolution's extents depend on stride, padding and dilation, and a
+    // custom kernel's result is its own business. Imported graphs already carry the result type.
     return std::nullopt;
   case OpCategory::kCopy:
-    // Same shape in, same shape out, which the unary elementwise rule already says. What it does
-    // not say is that the result is packed however the input was laid out, and no rule here
-    // computes a layout. Imported graphs carry the answer, so this is the shape only.
+    // Same shape out. The result is packed whatever the input's layout, which no rule here
+    // computes, so this gives the shape only.
     return RuleKind::kUnaryElementwise;
   }
   TESSIQ_UNREACHABLE("unhandled OpCategory");
@@ -108,9 +98,8 @@ Result<std::vector<ir::TensorType>> infer_binary(std::string_view op,
   ir::Shape shape = operands.front().shape();
   for (std::size_t i = 1; i < operands.size(); ++i) {
     if (operands[i].dtype() != operands.front().dtype()) {
-      // Type promotion is torch's own set of rules, and a second copy of them here would be a
-      // second copy to keep in agreement. A graph out of AOTAutograd has already been promoted, so
-      // mixed dtypes mean something upstream is not what this pass expects.
+      // Not promoted here. AOTAutograd graphs are already promoted, so mixed dtypes mean the
+      // input is not what this pass expects.
       return unsupported(std::string(op) + " on mixed dtypes " + operands.front().to_string() +
                          " and " + operands[i].to_string() + "; promotion happens before import");
     }
@@ -163,8 +152,7 @@ Result<std::vector<ir::TensorType>> infer_reduction(std::string_view op,
     }
   }
 
-  // Reducing every dimension without keepdim leaves a rank-0 tensor, which is what torch produces
-  // for sum(x) and is a shape the IR already prints as f32[].
+  // Reducing every dimension without keepdim leaves a rank-0 tensor, as torch does for sum(x).
   return std::vector<ir::TensorType>{ir::TensorType(input.dtype(), ir::Shape(std::move(result)))};
 }
 

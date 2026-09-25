@@ -22,26 +22,22 @@ constexpr std::string_view kCluster = "tessiq.cluster";
 /// Groups neighbouring supported nodes into clusters the backend can take as a unit.
 ///
 /// Precondition: `mark-supported` has run, so every node carries `tessiq.supported`.
-/// Postcondition: every supported node carries `tessiq.cluster`; unsupported nodes carry none.
+/// Postcondition: every supported node carries `tessiq.cluster`, except those in a unit that only
+/// moves data (see `drop_units_that_only_move`).
 ///
-/// Legality rests on one thing, and it is the whole reason this is not a union-find over edges.
-/// A cluster becomes a single unit of execution, so the graph of clusters and leftover nodes has
-/// to stay acyclic. Consider:
+/// A cluster runs as one unit, so the graph of clusters and leftover nodes has to stay acyclic.
+/// That is why this is not a union-find over edges. Consider:
 ///
 ///     %a = supported(...)
 ///     %b = unsupported(%a)
 ///     %c = supported(%a)
 ///     %d = supported(%b, %c)
 ///
-/// `a`, `c` and `d` are each supported and each connected, so merging by edges puts all three in
-/// one cluster. But `b` consumes from that cluster and `d` consumes `b`, so the cluster would have
-/// to run both before and after `b`. There is no order that works, and the graph cannot be
-/// executed at all.
+/// Merging along edges puts `a`, `c` and `d` in one cluster. `b` reads from that cluster and `d`
+/// reads `b`, so the cluster would have to run both before and after `b`, and no order works.
 ///
-/// So a merge is attempted and then checked: it is kept only if the unit graph is still acyclic.
-/// That costs a traversal per candidate merge, which is affordable at the graph sizes a model
-/// produces and is worth more than speed here, because the failure it prevents is a graph that
-/// cannot run rather than one that runs slowly.
+/// So each merge is tried and kept only if the unit graph is still acyclic. That is a traversal
+/// per candidate merge, which is cheap at the sizes models produce.
 class Cluster final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "cluster"; }
@@ -54,14 +50,14 @@ class Cluster final : public Pass {
     const std::vector<ir::Node*> nodes = graph.nodes();
     TESSIQ_ASSIGN_OR_RETURN(auto supported, read_support(nodes));
 
-    // Every node starts alone. Unsupported nodes keep their own unit for the whole pass; they are
-    // never merged, but they still take part in the cycle check.
+    // Every node starts in its own unit. Unsupported nodes are never merged but still take part
+    // in the cycle check.
     std::unordered_map<const ir::Node*, std::size_t> unit;
     for (std::size_t i = 0; i < nodes.size(); ++i) {
       unit[nodes[i]] = i;
     }
 
-    // Repeat because merging two units can make a third merge legal that was not before.
+    // Merging two units can make another merge legal, so repeat until nothing changes.
     while (merge_one_round(nodes, supported, unit)) {
     }
 
@@ -72,7 +68,7 @@ class Cluster final : public Pass {
  private:
   using SupportMap = std::unordered_map<const ir::Node*, bool>;
 
-  /// Reads what mark-supported recorded, refusing to guess if it has not run.
+  /// Reads what mark-supported recorded, failing if it has not run.
   static Result<SupportMap> read_support(const std::vector<ir::Node*>& nodes) {
     SupportMap supported;
     for (const ir::Node* node : nodes) {
@@ -179,20 +175,12 @@ class Cluster final : public Pass {
     return false;
   }
 
-  /// Writes the cluster attribute, numbering clusters by where they first appear so the output is
-  /// the same every run and a golden file can pin it.
   /// Leaves a unit on the host when every operation in it only rearranges indices.
   ///
-  /// A movement operation costs nothing on either side: on a tessiq tensor it is a view, and on a
-  /// host tensor torch does the same thing. So running one on the device is worth a transfer only
-  /// when something in the same unit actually computes. A unit holding nothing but views would
-  /// move its input across, produce a different view of it, and move that back, which is two
-  /// transfers for no work.
-  ///
-  /// This is why claiming the movement operations is a placement question rather than a coverage
-  /// one. Claiming them without this made a transformer encoder block slower, because the graph
-  /// alternates between them and operations the backend cannot run, and every alternation became
-  /// a pair of transfers.
+  /// A movement operation is a view on either side, so it is worth a transfer only when something
+  /// in the same unit computes. A unit of nothing but views would copy its input to the device,
+  /// take a view, and copy it back. Movement operations often sit between operations the backend
+  /// cannot run, so claiming them alone turns each one into a pair of transfers.
   static void
   drop_units_that_only_move(const std::vector<ir::Node*>& nodes,
                             SupportMap& supported,
@@ -214,6 +202,8 @@ class Cluster final : public Pass {
     }
   }
 
+  /// Writes `tessiq.cluster`, numbering clusters in the order they first appear so the output is
+  /// the same every run.
   static Result<bool> assign(const std::vector<ir::Node*>& nodes,
                              const std::unordered_map<const ir::Node*, std::size_t>& unit,
                              const SupportMap& supported) {

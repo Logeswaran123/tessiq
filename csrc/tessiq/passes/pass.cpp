@@ -107,8 +107,8 @@ Result<std::vector<PassReport>> PassManager::run(ir::Graph& graph) {
       return std::move(changed).error().with_context(std::string(pass->name()));
     }
 
-    // Debug builds only: verification walks the whole graph, which would dominate a release
-    // pipeline. A pass that corrupts the IR is caught here, next to the pass that did it.
+    // Debug builds only, since it walks the whole graph. A pass that corrupts the IR is caught
+    // right after it runs.
 #ifndef NDEBUG
     if (const auto valid = ir::verify(graph); !valid) {
       return valid.error().with_context(std::string(pass->name()) + " left the graph invalid");
