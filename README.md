@@ -7,11 +7,13 @@ a chip behind `model.to(...)` and `torch.compile`.
 Named after *tessera*, the Latin word for a mosaic tile, which is what the compiler makes of a
 graph: pieces cut to fit, then set into one surface. Said `/ˈtɛs.ɪk/`.
 
-Phases 1 to 6 of 10 are done. Tensors allocate, transfer and compute on two backends, each with
-its own caching allocator. `torch.compile(model, backend="tessiq")` captures a graph, imports it
-into the IR, partitions it into the parts the backend claims, groups the elementwise chains, and
-generates a CUDA kernel for each group which it compiles with NVRTC and caches on disk. Forward
-and backward both go through it, and a graph compiled once is not compiled again.
+Phases 0 to 12 of [15](PHASES.md) are done. Tensors allocate, transfer and compute on two
+backends, each with its own caching allocator. `torch.compile(model, backend="tessiq")` captures a
+graph, imports it into the IR, decides what the backend takes, and compiles a kernel for each part:
+fused loops and reductions it generates and compiles with NVRTC, matmuls through cuBLAS,
+convolutions through cuDNN, and custom operations defined in
+[`csrc/custom_ops/`](csrc/custom_ops/). Forward and backward both go through it, and a graph
+compiled once is not compiled again.
 
 ```python
 import torch
@@ -49,14 +51,15 @@ graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
 [`docs/passes.md`](docs/passes.md) lists the passes a compile runs and the order it runs them in,
 and how to add one.
 
-**Anything outside a fused chain still runs on the host.** An op the backend has no kernel for
-reaches PyTorch's CPU implementation through the fallback, which costs two transfers. What is fast
-is what fuses: a chain of elementwise operations becomes one kernel, its intermediates never leave
-a register, and the generated code is cached as a cubin between runs. Reductions get a kernel of
-their own, since they read a whole axis to write one element and cannot share that loop.
-Thirty-seven of the 38 operations the compiler knows have kernels; only matmul does not.
-[`docs/op_coverage.md`](docs/op_coverage.md) is generated from [`ops.toml`](ops.toml) and lists all
-of them. [PHASES.md](PHASES.md) has the full breakdown.
+**What runs on the device.** All 51 operations the compiler knows have kernels. A chain of
+elementwise operations becomes one kernel, its intermediates never leave a register, and the
+generated code is cached as a cubin between runs. Reductions get a kernel of their own, since they
+read a whole axis to write one element and cannot share that loop. Matmuls call cuBLAS and
+convolutions call cuDNN, both float32 only for now. Anything else, an operation of a type its kernel
+does not take included, reaches PyTorch's CPU implementation through the fallback, which costs two
+transfers. [`docs/op_coverage.md`](docs/op_coverage.md) is generated from [`ops.toml`](ops.toml)
+and lists all of them. A custom operation brings a kernel of its own, and can stand in for a torch
+operation or for a computation a model writes out; see [`csrc/custom_ops/`](csrc/custom_ops/).
 
 **A shape that changes costs one compile, not one per shape.** Dynamo captures concrete shapes the
 first time it sees a function and recompiles with symbolic ones the second time a dimension
@@ -70,18 +73,17 @@ axis, which needs an extent per axis written into the source.
 
 `(a*b + c).relu().sigmoid()` on 4M floats on an RTX 5080. The generated kernel is good and the
 path around it is not, so both are measured. From
-[`bench/against_torch.py`](bench/against_torch.py), with the data already on the device:
+[`bench/against_torch.py`](bench/against_torch.py), with the data already on the device, medians of
+five runs:
 
 | | | |
 |---|---|---|
-| tessiq generated kernel | 0.035 ms | 1766 GB/s |
-| `torch.compile` inductor | 0.064 ms | 975 GB/s |
+| tessiq generated kernel | 0.074 ms | 904 GB/s |
+| `torch.compile` inductor | 0.089 ms | 756 GB/s |
 
-Three loads, four operations in registers, one store, and near the bandwidth the card can sustain.
-Measure the whole call from host tensors instead and PyTorch wins by 60x, because tessiq moves 48
-MB to the device and 16 MB back every call and the kernel is one percent of what that costs. Only
-part of a graph is claimed today, so every unclaimed operation pulls its operands back to the
-host. Matmul is still on that list.
+Three loads, four operations in registers, one store. Measure the whole call from host tensors
+instead and PyTorch wins by 18x, because tessiq moves 48 MB to the device and 16 MB back every call
+and the kernel is about 7% of that call.
 
 Within tessiq, a kernel beats running the same graph without one by 5.7x
 ([`bench/fusion.py`](bench/fusion.py)). Compilation costs 440 us and a cached recipe costs 110 us
@@ -103,13 +105,15 @@ that, because a block of 256 threads combining 64 elements leaves most of them i
 [`tools/model_coverage.py`](tools/model_coverage.py):
 
 ```
-residual block: 3 of 7 operations on the device (43%), 3 claimable
-  aten.convolution.default                             2
-  aten._native_batch_norm_legit_no_training.default    2
+residual block: 37 of 41 operations on the device (90%), 37 claimable
+  left on the host                                 count
+  aten._to_copy.default                                4
 
-encoder block: 76 of 80 operations on the device (95%), 76 claimable
-  aten.clone.default                                   4
+encoder block: 76 of 76 operations on the device (100%), 76 claimable
 ```
+
+The four left on the residual block are float32 to float32 casts that the batch norm decomposition
+puts on its running statistics.
 
 The two numbers differ on purpose. **Claimable** is what the backend has an implementation for.
 **On the device** is what partitioning puts there, which is fewer: a movement operation costs
@@ -119,44 +123,44 @@ rather than paying two transfers to rearrange indices somewhere else.
 Both blocks give the numbers eager gives, on the reference backend and on a GPU.
 
 **A whole block is a different measurement, and a less flattering one.** A 512-wide encoder block
-over 128 steps, from [`bench/against_torch.py`](bench/against_torch.py):
+over 128 steps at batch 8, from [`bench/against_torch.py`](bench/against_torch.py), medians of five
+runs:
 
 | | | |
 |---|---|---|
-| tessiq | 5.5 ms | |
-| torch on the same GPU, moving the input too | 0.90 ms | 6.1x faster |
-| torch on the same GPU, everything resident | 0.52 ms | 10.6x faster |
-| `torch.compile` inductor, resident | 0.46 ms | 11.8x faster |
-| torch eager on the CPU | 12.0 ms | 2.2x slower |
+| tessiq | 1.17 ms | |
+| torch on the same GPU, moving the input too | 0.83 ms | 1.4x faster |
+| torch on the same GPU, everything resident | 0.61 ms | 1.9x faster |
+| `torch.compile` inductor, resident | 0.54 ms | 2.2x faster |
+| torch eager on the CPU | 9.1 ms | 7.8x slower |
 
-Ahead of the CPU and a long way behind the card it is running on.
+Well ahead of the CPU, and about twice as slow as the card it runs on can manage.
 
 **The weights used to cross on every call**, because AOTAutograd lifts parameters to graph inputs
 and they arrive as ordinary arguments. The executor keeps the device copy of an input that has not
 changed, checked against its version counter so a parameter an optimizer writes to crosses again.
 That was 2 ms.
 
-**What is left is the transfers**, and there is now a profiler to say so. From
-[`bench/where_the_time_goes.py`](bench/where_the_time_goes.py) on the same block:
+**What is left is the host.** From [`bench/where_the_time_goes.py`](bench/where_the_time_goes.py)
+on the same block:
 
 ```
-              count        time   share       moved
-kernel           28      2.37 ms     41%
-transfer         29      2.01 ms     35%     38.0 MB
-interpreted      41      1.35 ms     24%
+              count        host   share      device       moved
+interpreted      41      0.40 ms     40%
+kernel           25      0.40 ms     40%
+transfer          1      0.19 ms     19%                  2.0 MB
+total            67      1.00 ms
 ```
 
-**Thirty-eight megabytes cross for a two megabyte input**, and seven of the eight slowest steps of
-the call are transfers.
-
-`interpreted` is the third of the graph that has no kernel and goes one operation at a time through
-PyTorch's dispatcher. All of it is placed on the device, so none of it is a round trip, and it
-costs about fourteen microseconds a step whatever the tensors are: a view of two megabytes costs
-14.2 and a view of ten kilobytes costs 10.8. That is the price of interpreting a graph rather than
-running it, and it is paid per operation.
+One transfer is left, the 2 MB result coming back. The rest of the call is the host issuing 25
+kernels and interpreting 41 steps that have no kernel: views, permutes and clones going one
+operation at a time through PyTorch's dispatcher, at about ten microseconds a step whatever the
+tensors are. That is the price of interpreting a graph rather than running it, and it is paid per
+operation. Phase 10 measured it: the device is idle for most of the call, waiting for the host to
+issue the next piece of work.
 
 The generated code is not what is behind: on a single chain it is
-[1641 GB/s against Inductor's 775](bench/against_torch.py). Everything around it is.
+[904 GB/s against Inductor's 756](bench/against_torch.py). Everything around it is.
 
 ## How it fits together
 
@@ -167,16 +171,16 @@ The generated code is not what is behind: on a single chain it is
    Dynamo → FX → AOTAutograd                   aten op → dispatch
               │                                        │
               v                                        │
-       Tessiq IR ──> passes ──> lowering ──> recipe   │
-              │        canonicalize                    │
-              │        shape infer                     │
-              │        layout                          │
-              │        fuse                            │
-              │        schedule                        │
-              │        memory plan                     │
+       Tessiq IR ──> passes ──> memory plan ──> recipe │
+              │        rewrites, overrides             │
+              │        mark-supported                  │
+              │        layout-assign                   │
+              │        cluster                         │
+              │        fuse-elementwise                │
               v                                        v
-        ┌─────────────── kernel registry ───────────────┐
-        │  CPU reference              CUDA + NVRTC      │
+        ┌──────────────────── kernels ──────────────────┐
+        │  CPU reference     CUDA: NVRTC, cuBLAS,       │
+        │                    cuDNN, custom operations   │
         └───────────────────────────────────────────────┘
 ```
 
@@ -218,13 +222,14 @@ pre-commit install --hook-type commit-msg
 
 | Path | |
 |---|---|
-| [`csrc/`](csrc/) | C++/CUDA core: runtime, IR, passes, lowering, codegen, kernels |
+| [`csrc/`](csrc/) | C++/CUDA core: runtime, IR, passes, codegen, and the PyTorch integration |
+| [`csrc/custom_ops/`](csrc/custom_ops/) | Custom operations, one directory each |
 | [`python/tessiq/`](python/tessiq/) | Python API and the `torch.compile` backend |
 | [`ops.toml`](ops.toml) | Every operation the compiler knows, and what generates the rest from it |
 | [`tools/`](tools/) | `gen_ops.py`, `tessiq-opt`, `tessiq_explain.py`, `model_coverage.py` |
 | [`tests/`](tests/) | gtest suites and golden pass tests; Python accuracy and end-to-end tests |
 | [`bench/`](bench/) | Benchmarks, and the scripts behind any number published here |
-| [`docs/`](docs/) | Architecture, IR spec, pass reference, design notes |
+| [`docs/`](docs/) | The pass pipeline, operation coverage, design notes |
 
 ## Standards
 
