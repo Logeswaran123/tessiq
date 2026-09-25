@@ -204,7 +204,8 @@ torch.compile(model, backend="tessiq", options={"device": "tessiq:1", "rewrites"
 tessiq.explain(model, x, device=tessiq.gpu, rewrites=["rms_norm"])
 ```
 
-`tessiq.library.rewrites()` lists what has one.
+`tessiq.library.rewrites()` lists what has one. [docs/passes.md](../../docs/passes.md) shows where
+rewrites and overrides sit among the compiler's other passes.
 
 ## What the definition decides
 

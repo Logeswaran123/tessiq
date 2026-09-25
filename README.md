@@ -46,6 +46,9 @@ graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
 }
 ```
 
+[`docs/passes.md`](docs/passes.md) lists the passes a compile runs and the order it runs them in,
+and how to add one.
+
 **Anything outside a fused chain still runs on the host.** An op the backend has no kernel for
 reaches PyTorch's CPU implementation through the fallback, which costs two transfers. What is fast
 is what fuses: a chain of elementwise operations becomes one kernel, its intermediates never leave
