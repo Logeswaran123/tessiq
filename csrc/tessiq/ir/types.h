@@ -13,10 +13,8 @@
 
 namespace tessiq::ir {
 
-/// Element types the IR can carry.
-///
-/// Deliberately smaller than torch's set. An op set that has to reason about every dtype torch
-/// supports is an op set nobody can write a pass against; anything missing falls back to the host.
+/// Element types the IR can carry. Smaller than torch's set on purpose; a graph using any other
+/// type is not imported and runs on the host.
 enum class DType {
   kF16,
   kBF16,
@@ -35,13 +33,10 @@ Result<DType> parse_dtype(std::string_view name);
 /// Bytes per element.
 std::size_t dtype_size(DType dtype);
 
-/// True for the floating-point types, which is the distinction most passes actually care about.
+/// True for the floating-point types.
 bool is_float(DType dtype);
 
 /// A dimension whose size is not known until run time.
-///
-/// Shapes carry these from the start rather than gaining them later, because a shape type that
-/// cannot express "unknown" forces every dynamic-shape decision into a side table.
 inline constexpr std::int64_t kDynamic = -1;
 
 /// Tensor shape. An empty dim list is a scalar, which is distinct from a 1-element vector.
@@ -74,32 +69,25 @@ class Shape {
   std::vector<std::int64_t> dims_;
 };
 
-/// The type of a value: element type plus shape.
-///
-/// Shape and dtype live on the type rather than in a side table, which is what lets a pass ask a
-/// value what it is without consulting anything else, and what makes the textual form readable.
 /// How a tensor's elements are laid out: the step between consecutive indices on each axis, in
-/// elements.
-///
-/// Empty means contiguous, which is the packed row-major order and what almost every value has.
-/// Keeping that as the absent case rather than a computed vector means the common type prints and
-/// compares exactly as it did before layouts existed, and a strided value stands out in the IR.
+/// elements. Empty means contiguous, packed row-major, which almost every value is.
 using Strides = std::vector<std::int64_t>;
 
 /// The strides a contiguous tensor of `shape` has. Empty for a rank-0 shape.
 ///
-/// A dynamic extent counts as 1, since the strides outside it cannot be known either and a
-/// placeholder keeps the rank right.
+/// A dynamic extent counts as 1: the strides outside it are unknown anyway, and a placeholder keeps
+/// the rank right.
 [[nodiscard]] Strides contiguous_strides(const Shape& shape);
 
+/// The type of a value: element type, shape and layout.
 class TensorType {
  public:
   TensorType() = default;
 
   TensorType(DType dtype, Shape shape) : dtype_(dtype), shape_(std::move(shape)) {}
 
-  /// Normalises `strides`: a layout equal to the contiguous one is recorded as contiguous, so the
-  /// two ways of spelling it are one type.
+  /// A layout equal to the contiguous one is stored as contiguous, so both spellings compare
+  /// equal.
   TensorType(DType dtype, Shape shape, Strides strides);
 
   [[nodiscard]] DType dtype() const { return dtype_; }
@@ -137,9 +125,8 @@ Result<TensorType> parse_tensor_type(std::string_view text);
 
 /// Parses a whole `std::string_view` as an integer, rejecting trailing characters.
 ///
-/// The from_chars idiom takes a begin and an end pointer, which clang-tidy reads as an unbounded
-/// data() call. Keeping it in one place means the suppression is written once rather than at
-/// every call site.
+/// Wraps from_chars, whose pointer arithmetic needs a clang-tidy suppression, so the suppression
+/// is written once.
 Result<std::int64_t> parse_int(std::string_view text);
 
 /// Parses a whole `std::string_view` as a double, rejecting trailing characters.

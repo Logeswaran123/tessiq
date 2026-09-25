@@ -9,9 +9,7 @@
 //     return %d
 //   }
 //
-// Having a text form is what makes a pass testable as a file in and a file out, reviewable as a
-// diff, and debuggable by printing. It is the reason the IR is its own thing rather than a
-// decoration on someone else's graph structure.
+// Pass tests are written in it: a file in, a file out, and the difference is the test.
 
 #pragma once
 

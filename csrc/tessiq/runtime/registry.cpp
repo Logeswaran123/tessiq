@@ -53,8 +53,7 @@ class Registry {
       devices_.push_back(std::move(device));
     }
 
-    // One allocator per device. A single pooled allocator would report a memory total that
-    // belongs to no particular device, which is worse than no number at all.
+    // One allocator per device, so memory statistics are per device.
     allocators_.reserve(devices_.size());
     for (const auto& device : devices_) {
       allocators_.push_back(std::make_unique<CachingAllocator>(device.get()));
@@ -67,11 +66,7 @@ class Registry {
   std::vector<std::unique_ptr<CachingAllocator>> allocators_;
 };
 
-/// The index this thread allocates on.
-///
-/// Thread-local because PyTorch's device guard is: two threads can be mid-op on two devices, and
-/// c10's allocator interface takes no device argument, so this is how an allocation knows where
-/// it belongs.
+/// The index this thread allocates on. See current_device_index().
 int& thread_device_index() {
   static thread_local int index = 0;
   return index;

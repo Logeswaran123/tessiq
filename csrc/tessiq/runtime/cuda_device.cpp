@@ -28,9 +28,8 @@ Error cuda_error(cudaError_t status, std::string_view what) {
 
 /// Wraps the driver, one instance per physical device.
 ///
-/// Every entry point sets the device first. The CUDA runtime keeps a per-thread current device,
-/// and tessiq's own current index is a separate notion, so relying on ambient state here would
-/// make correctness depend on which thread called last.
+/// Every entry point sets the CUDA device first. The runtime's current device is per thread and
+/// separate from tessiq's current index, so nothing here relies on whichever thread called last.
 class CudaDevice final : public Device {
  public:
   explicit CudaDevice(int ordinal) : ordinal_(ordinal) {}
@@ -51,8 +50,8 @@ class CudaDevice final : public Device {
   Result<void*> raw_allocate(std::size_t bytes) override {
     TESSIQ_RETURN_IF_ERROR(activate());
     void* ptr = nullptr;
-    // cudaMalloc returns memory aligned to at least 256 bytes, and in practice to the page. That
-    // satisfies kDeviceAlignment, which the Device contract requires us to guarantee.
+    // cudaMalloc documents 256-byte alignment and in practice returns page-aligned memory, which
+    // meets kDeviceAlignment.
     if (const cudaError_t status = cudaMalloc(&ptr, bytes); status != cudaSuccess) {
       if (status == cudaErrorMemoryAllocation) {
         return resource_exhausted("cuda device " + std::to_string(ordinal_) +
@@ -64,8 +63,8 @@ class CudaDevice final : public Device {
   }
 
   void raw_deallocate(void* ptr, std::size_t /*bytes*/) noexcept override {
-    // Runs from destructors, so it cannot fail. A failure here means the context is already gone,
-    // which is not something the caller can act on.
+    // Runs from destructors, so errors are ignored: a failure here means the context is already
+    // gone.
     static_cast<void>(cudaSetDevice(ordinal_));
     static_cast<void>(cudaFree(ptr));
   }
@@ -116,9 +115,8 @@ class CudaDevice final : public Device {
     }
     TESSIQ_RETURN_IF_ERROR(activate());
 
-    // Async on our own stream, then synchronised by the caller. Nothing above this layer overlaps
-    // transfers with compute yet, so the win is not latency; it is that every transfer is ordered
-    // against the same stream the kernels will use once they exist.
+    // Queued on this device's stream and synchronised by the caller. The stream is a blocking one,
+    // so the copy is ordered against kernels on the legacy default stream.
     if (const cudaError_t status = cudaMemcpyAsync(dst, src, bytes, direction, stream_);
         status != cudaSuccess) {
       return cuda_error(status, "cudaMemcpyAsync");
@@ -136,8 +134,8 @@ std::vector<std::unique_ptr<Device>> discover_cuda_devices() {
   int count = 0;
   const cudaError_t status = cudaGetDeviceCount(&count);
   if (status != cudaSuccess) {
-    // No driver, no device, or a driver/runtime mismatch. All of them mean the same thing here:
-    // there is no CUDA to offer, and the CPU reference carries on.
+    // No driver, no device, or a driver/runtime mismatch: no CUDA devices, and the CPU reference
+    // is still there.
     TESSIQ_LOG(kInfo, kLogModule) << "no cuda devices: " << cudaGetErrorName(status) << " ("
                                   << cudaGetErrorString(status) << ")";
     return {};

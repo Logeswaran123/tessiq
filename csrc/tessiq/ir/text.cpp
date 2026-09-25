@@ -62,8 +62,7 @@ Error at_line(std::size_t line, const std::string& message) {
   return invalid_argument("line " + std::to_string(line) + ": " + message);
 }
 
-/// Parses one attribute value. The spelling decides the type, which is why the printer takes care
-/// to keep a whole-number double looking like a float.
+/// Parses one attribute value.
 Result<Attribute> parse_attribute_value(std::string_view text) {
   if (text == "true") {
     return Attribute{true};
@@ -245,7 +244,7 @@ std::size_t matching_paren(std::string_view text, std::size_t open) {
   return std::string_view::npos;
 }
 
-/// `graph @name(%a: t, ...) -> ...` — creates the graph and its parameters.
+/// `graph @name(%a: t, ...) -> ...`: creates the graph and its parameters.
 Result<std::unique_ptr<Graph>> parse_header(const SourceLine& line,
                                             std::unordered_map<std::string, Value*>& scope) {
   if (line.text.substr(0, 6) != "graph ") {
@@ -381,7 +380,7 @@ Result<std::vector<TensorType>> parse_result_types(const SourceLine& line, std::
   return types;
 }
 
-/// `%a, %b` — resolves each against the scope and attaches it to the node.
+/// `%a, %b`: resolves each against the scope and attaches it to the node.
 Result<void> parse_operands(const SourceLine& line,
                             std::string_view operands,
                             const std::unordered_map<std::string, Value*>& scope,

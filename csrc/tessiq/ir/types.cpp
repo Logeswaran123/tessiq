@@ -134,9 +134,7 @@ namespace {
 ///
 /// An axis of extent 1 is skipped, because its stride is never used: there is no second index to
 /// step to. torch leaves whatever stride that axis happened to inherit, so a [1,64] tensor can
-/// arrive with strides (1,1) and be contiguous. Comparing against the computed strides exactly
-/// would call it strided, and every piece of code that reads a layout would then work from a step
-/// that means nothing.
+/// arrive with strides (1,1) and still be contiguous.
 bool is_packed(const Shape& shape, const Strides& strides) {
   if (strides.size() != shape.rank()) {
     return false;

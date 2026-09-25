@@ -65,8 +65,8 @@ class LogMessage {
 ///
 ///   TESSIQ_LOG(kDebug, "fusion") << "merged " << count << " nodes";
 ///
-/// The level test precedes argument evaluation, so a disabled statement costs nothing. Do not
-/// restructure this into a function taking a formatted string -- that is the whole point.
+/// The level is tested before the arguments are evaluated, so a disabled statement costs nothing.
+/// That is why this is a macro and not a function taking a formatted string.
 #define TESSIQ_LOG(level, module)                                                                  \
   if (!::tessiq::log_enabled(::tessiq::LogLevel::level, (module))) {                               \
   } else                                                                                           \

@@ -28,32 +28,25 @@ struct MemoryPlan {
   /// Bytes to allocate once, before the graph runs.
   std::size_t arena_bytes = 0;
 
-  /// What the same intermediates would cost with no reuse, which is every buffer alive at once.
-  /// The ratio against `arena_bytes` is what the planner is for.
+  /// What the same intermediates would cost with no reuse, every buffer alive at once.
   std::size_t naive_bytes = 0;
 
   std::vector<Allocation> allocations;
 
-  /// Values the plan could not size, because a dynamic dimension has no byte count until the
-  /// graph runs. They are left out of the arena rather than guessed at, so a plan with any of
-  /// these describes part of the graph and says how much it left out.
+  /// Values left out of the arena because a dynamic dimension gives them no size until the graph
+  /// runs.
   std::size_t unsized = 0;
 
-  /// Human-readable, one line per allocation, for `tessiq-opt --memory-plan` and for tests that
-  /// would rather compare text than walk a structure.
+  /// One line per allocation, for `tessiq-opt --memory-plan` and tests.
   [[nodiscard]] std::string to_string() const;
 };
 
 /// Assigns every intermediate an offset in a single arena, reusing space between values whose
 /// live ranges do not overlap.
 ///
-/// `alignment` is the caller's, because the IR does not know what hardware it is planning for. It
-/// must be a power of two. Passing the device's own alignment is what lets a kernel assume an
-/// aligned pointer instead of testing for one.
-///
-/// A value whose shape is not static is counted in `unsized` and left out, because a plan built
-/// on a guessed size would hand a kernel a buffer smaller than what it writes. Everything else is
-/// placed as usual, so a graph that is dynamic in part still gets a plan for the rest.
+/// `alignment` is the device's and must be a power of two, so a kernel can assume an aligned
+/// pointer. A value whose shape is not static is counted in `unsized` and left out rather than
+/// sized by a guess; the rest of the graph is still planned.
 Result<MemoryPlan> plan_memory(const Graph& graph, std::size_t alignment);
 
 } // namespace tessiq::ir

@@ -40,9 +40,8 @@ CachingAllocator::CachingAllocator(Device* device) : device_(device) {
 }
 
 CachingAllocator::~CachingAllocator() {
-  // Blocks still in use at teardown are usually a leak, but not always: at interpreter shutdown
-  // this allocator can be destroyed before the tensors that hold its memory. Logged at debug
-  // rather than warn so that a routine shutdown does not cry wolf.
+  // Blocks still in use at teardown are usually a leak, but at interpreter shutdown this allocator
+  // can be destroyed before the tensors holding its memory, so this is logged at debug.
   if (stats_.allocated_bytes != 0) {
     TESSIQ_LOG(kDebug, kLogModule)
         << "destroyed with " << stats_.allocated_bytes << " bytes still allocated across "
@@ -74,8 +73,7 @@ Result<void*> CachingAllocator::allocate(std::size_t bytes) {
 
   auto raw = device_->raw_allocate(rounded);
   if (!raw) {
-    // Cached blocks are memory we are holding for ourselves. Give them back and retry once
-    // before reporting failure, since the caller cannot know to do this on our behalf.
+    // Release the cache and retry once before reporting failure.
     const std::size_t released = [this] {
       std::size_t total = 0;
       for (auto& [size, blocks] : free_blocks_) {

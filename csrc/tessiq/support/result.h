@@ -34,7 +34,7 @@ class [[nodiscard]] Result {
  public:
   using value_type = T;
 
-  // Implicit by design: `return value;` and `return unsupported("...");` should both just work.
+  // Implicit, so that `return value;` and `return unsupported("...");` both compile.
   Result(T value) : storage_(std::move(value)) {} // NOLINT(google-explicit-constructor)
 
   Result(Error error) : storage_(std::move(error)) {} // NOLINT(google-explicit-constructor)
@@ -43,8 +43,7 @@ class [[nodiscard]] Result {
 
   explicit operator bool() const noexcept { return has_value(); }
 
-  /// Precondition: has_value(). Violating it is a programmer error, not a recoverable one -- the
-  /// caller was obliged to check first.
+  /// Precondition: has_value(). Checked in debug builds only; calling it on an error is a bug.
   [[nodiscard]] const T& value() const& {
     TESSIQ_DCHECK(has_value(), "Result::value() called on an error Result: " + error().to_string());
     return std::get<T>(storage_);
@@ -107,9 +106,7 @@ class [[nodiscard]] Result<void> {
   /// Precondition: !has_value().
   [[nodiscard]] const Error& error() const& {
     TESSIQ_DCHECK(!has_value(), "Result::error() called on a successful Result");
-    // Guarded by the precondition above; re-checking in release would turn a programmer error
-    // into a silently different result.
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access): guarded by the DCHECK above.
     return *error_;
   }
 

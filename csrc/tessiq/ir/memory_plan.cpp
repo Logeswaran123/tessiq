@@ -97,9 +97,8 @@ Result<MemoryPlan> plan_memory(const Graph& graph, std::size_t alignment) {
   MemoryPlan plan;
   std::vector<Placed> placed;
 
-  // Definition order, which is the order compute_liveness returns node results in. Placing in a
-  // fixed order is what makes the plan reproducible, and a reproducible plan is one a test can
-  // compare against a file.
+  // Definition order, which is the order compute_liveness returns them in. A fixed order makes the
+  // plan reproducible, so tests can compare it against a file.
   for (const LiveRange& range : ranges) {
     if (range.is_parameter || range.escapes) {
       continue;
