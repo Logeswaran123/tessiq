@@ -69,6 +69,27 @@ def _initial_seed() -> int:
     return torch.default_generator.initial_seed()
 
 
+class _SelectDevice:
+    """``torch.tessiq.device``: makes a device current for a block, as ``torch.cuda.device`` does.
+
+    torch uses it to move a storage onto a device, which is what ``torch.load`` does with a
+    ``map_location`` that names one. ``None`` or a negative index leaves the current device alone.
+    """
+
+    def __init__(self, device: torch.device | str | int | None) -> None:
+        unset = device is None or (isinstance(device, int) and device < 0)
+        self._index = None if unset else _resolve(device)
+        self._previous = 0
+
+    def __enter__(self) -> None:
+        self._previous = current_device()
+        if self._index is not None:
+            set_device(self._index)
+
+    def __exit__(self, *_exc: object) -> None:
+        set_device(self._previous)
+
+
 def _build_torch_device_module() -> types.ModuleType:
     """Build the module PyTorch expects to find at ``torch.<DEVICE_NAME>``.
 
@@ -80,6 +101,7 @@ def _build_torch_device_module() -> types.ModuleType:
         "is_available": _is_available,
         "device_count": device_count,
         "current_device": current_device,
+        "device": _SelectDevice,
         "set_device": set_device,
         "synchronize": synchronize,
         "empty_cache": empty_cache,

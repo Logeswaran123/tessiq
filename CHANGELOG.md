@@ -146,6 +146,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   page-locking when there is a GPU. `torch.Generator(device="tessiq")` gives a host generator,
   since random operations run on the host. A tessiq storage can be resized, and
   `torch.accelerator.synchronize()` waits for the device.
+- `torch.save` and `torch.load` work with tessiq tensors, including a `map_location` that names a
+  tessiq device. `set_` is native, and `torch.tessiq.device` selects a device for a block.
 
 ### Changed
 

@@ -9,12 +9,14 @@
 #include <ATen/EmptyTensor.h>
 #include <ATen/core/Tensor.h>
 #include <ATen/native/CPUFallback.h>
+#include <ATen/native/Resize.h>
 #include <ATen/ops/_reshape_alias_native.h>
 #include <ATen/ops/as_strided_native.h>
 #include <ATen/ops/clone_ops.h>
 #include <ATen/ops/convolution.h>
 #include <ATen/ops/empty.h>
 #include <ATen/ops/empty_strided.h>
+#include <ATen/ops/set_native.h>
 #include <ATen/ops/view_native.h>
 #include <algorithm>
 #include <c10/core/ScalarType.h>
@@ -224,9 +226,9 @@ void grow_storage(at::TensorImpl* impl, std::size_t new_bytes) {
 ///
 /// The schema returns Tensor(a!), the same tensor aliased, so this returns a const reference to
 /// the parameter.
-const at::Tensor& resize(const at::Tensor& self,
-                         at::IntArrayRef size,
-                         std::optional<at::MemoryFormat> memory_format) {
+const at::Tensor& resize_tensor(const at::Tensor& self,
+                                at::IntArrayRef size,
+                                std::optional<at::MemoryFormat> memory_format) {
   at::TensorImpl* impl = self.unsafeGetTensorImpl();
   impl->set_sizes_contiguous(size);
 
@@ -243,12 +245,45 @@ const at::Tensor& resize(const at::Tensor& self,
   return self;
 }
 
+/// Points `self` at existing storage, which is how torch rebuilds each tensor it loads. Grows the
+/// storage when the view needs more than it holds, as set_ does on CPU and CUDA.
+at::Tensor& set_storage(at::Tensor& self,
+                        at::Storage source,
+                        int64_t storage_offset,
+                        at::IntArrayRef size,
+                        at::IntArrayRef stride) {
+  at::native::checkSetStorage(self, std::move(source), storage_offset, size, stride);
+  at::TensorImpl* impl = self.unsafeGetTensorImpl();
+  impl->set_storage_offset(storage_offset);
+  // No stride, as distinct from an empty one, means contiguous.
+  if (stride.data() == nullptr) {
+    impl->set_sizes_contiguous(size);
+  } else {
+    impl->set_sizes_and_strides(size, stride);
+  }
+  const std::size_t needed = at::detail::computeStorageNbytes(
+      size, impl->strides(), impl->dtype().itemsize(), static_cast<std::size_t>(storage_offset));
+  if (needed > impl->unsafe_storage().nbytes()) {
+    reallocate_storage(impl->unsafe_storage(), needed);
+  }
+  return self;
+}
+
+/// Gives `self` an empty storage of its own, on its device.
+at::Tensor& set_empty(at::Tensor& self) {
+  c10::Storage storage(c10::Storage::use_byte_size_t(),
+                       0,
+                       get_allocator(static_cast<int>(self.device().index())),
+                       /*resizable=*/true);
+  return set_storage(self, std::move(storage), 0, {0}, {});
+}
+
 /// Copies into `dst`, resizing it to match `self` first.
 ///
 /// The CPU fallback calls this to bring results back.
 at::Tensor copy_from_and_resize(const at::Tensor& self, const at::Tensor& dst) {
   if (dst.sizes() != self.sizes()) {
-    resize(dst, self.sizes(), std::nullopt);
+    resize_tensor(dst, self.sizes(), std::nullopt);
   }
   return copy_from(self, dst, /*non_blocking=*/false);
 }
@@ -322,7 +357,13 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("empty_strided", &empty_strided);
   m.impl("_copy_from", &copy_from);
   m.impl("_copy_from_and_resize", &copy_from_and_resize);
-  m.impl("resize_", &resize);
+  m.impl("resize_", &resize_tensor);
+  // set_ points a tensor at a storage, and the fallback would point a host copy at it instead.
+  // The two overloads ATen implements generically redispatch to set_storage.
+  m.impl("set_.source_Storage", &at::native::set_);
+  m.impl("set_.source_Storage_storage_offset", &set_storage);
+  m.impl("set_.source_Tensor", &at::native::set_tensor_);
+  m.impl("set_", &set_empty);
   m.impl("clone", &clone);
   m.impl("convolution_overrideable", &convolution_overrideable);
 

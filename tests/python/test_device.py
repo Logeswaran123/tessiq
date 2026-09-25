@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import threading
 from collections.abc import Callable, Iterator
 
@@ -419,6 +420,72 @@ def test_torch_can_tell_which_device_a_pointer_is_on(device: torch.device) -> No
     assert _C._device_of_pointer(x.untyped_storage().data_ptr()) == device.index
     with pytest.raises(RuntimeError, match="tessiq did not allocate"):
         _C._device_of_pointer(torch.empty(16).data_ptr())
+
+
+# --- saving, loading and set_ -------------------------------------------------------------------
+
+
+def test_a_checkpoint_loads_onto_a_tessiq_device(device: torch.device) -> None:
+    state = {
+        "weight": torch.randn(3, 4),
+        "transposed": torch.randn(4, 3).t(),
+        "index": torch.arange(5),
+    }
+    buffer = io.BytesIO()
+    torch.save(state, buffer)
+    buffer.seek(0)
+    loaded = torch.load(buffer, map_location=device)
+    for name, tensor in state.items():
+        assert loaded[name].device == device, name
+        assert loaded[name].stride() == tensor.stride(), name
+        assert torch.equal(loaded[name].cpu(), tensor), name
+
+
+def test_a_tessiq_tensor_saves_and_loads_back(device: torch.device) -> None:
+    x = torch.arange(6.0, device=device).reshape(2, 3)
+    buffer = io.BytesIO()
+    torch.save(x, buffer)
+    buffer.seek(0)
+    assert torch.equal(torch.load(buffer, map_location="cpu"), x.cpu())
+    buffer.seek(0)
+    again = torch.load(buffer)
+    assert again.device == device
+    assert torch.equal(again.cpu(), x.cpu())
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+def test_torch_tessiq_device_selects_a_device_for_a_block() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    with torch.tessiq.device(tessiq.gpu):  # type: ignore[attr-defined]
+        assert tessiq.current_device() == tessiq.gpu.index
+    assert tessiq.current_device() == 0
+    with torch.tessiq.device(None):  # type: ignore[attr-defined]
+        assert tessiq.current_device() == 0
+
+
+def test_set_points_a_tensor_at_existing_storage(device: torch.device) -> None:
+    x = torch.arange(6.0, device=device)
+    view = torch.empty(0, device=device).set_(x.untyped_storage(), 1, (2,), (2,))
+    assert torch.equal(view.cpu(), torch.tensor([1.0, 3.0]))
+    shared = torch.empty(0, device=device).set_(x)  # type: ignore[call-overload]
+    assert shared.untyped_storage().data_ptr() == x.untyped_storage().data_ptr()
+
+
+def test_set_grows_a_storage_the_view_outruns(device: torch.device) -> None:
+    small = torch.arange(2.0, device=device)
+    grown = torch.empty(0, device=device).set_(small.untyped_storage(), 0, (4,), (1,))
+    assert grown.untyped_storage().nbytes() == 16
+    assert torch.equal(grown[:2].cpu(), torch.arange(2.0))
+
+
+def test_set_with_no_source_empties_a_tensor(device: torch.device) -> None:
+    x = torch.arange(4.0, device=device)
+    x.set_()  # type: ignore[call-overload]
+    assert x.shape == (0,)
+    assert x.device == device
 
 
 # --- views ---------------------------------------------------------------------------------------
