@@ -141,6 +141,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `docs/passes.md`, on the passes a compile runs, in what order and why, and how to add one.
 - `ops.toml` can name the element types an operation takes. The matmuls and the convolution name
   float32, since cuBLAS and cuDNN are float32 only here.
+- `tessiq.current_device()`, `set_device()` and `synchronize()`, which `torch.tessiq` uses too.
+- torch's PrivateUse1 hooks. `pin_memory()` and a DataLoader with `pin_memory=True` work,
+  page-locking when there is a GPU. `torch.Generator(device="tessiq")` gives a host generator,
+  since random operations run on the host. A tessiq storage can be resized, and
+  `torch.accelerator.synchronize()` waits for the device.
+- `torch.save` and `torch.load` work with tessiq tensors, including a `map_location` that names a
+  tessiq device. `set_` is native, and `torch.tessiq.device` selects a device for a block.
+- `torch.accelerator`'s memory functions: `memory_allocated`, `max_memory_allocated`,
+  `memory_reserved`, `memory_stats`, the two resets, `empty_cache` and `get_memory_info`.
 
 ### Changed
 
@@ -159,3 +168,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - The IR could print a string attribute holding a comma and not read it back.
 - A float64 matmul or convolution compiled for the GPU was claimed and then refused by cuBLAS or
   cuDNN when it was called. It runs on the host now.
+- A fusion group compiled for more than one shape sized its result from its first input. When that
+  input broadcast, as in `a + b` with `a` of shape `[n, 1]` and `b` of shape `[1, 32]`, the result
+  came back as `[n, 1]` with no error whenever `n` was a multiple of 32, and the call raised
+  otherwise.
+- `torch.tessiq.synchronize()` returned without waiting, and `torch.tessiq.set_device()` was
+  ignored. A GPU device's `synchronize()` also waited only for transfers and not for kernels.
+- `torch.arange` on a GPU, and any other operation whose output the fallback resizes, failed with
+  `cudaMemcpyAsync: invalid argument`. `resize_` allocated on the thread's current device rather
+  than the output's.
+- A lazily cloned tessiq tensor on a GPU crashed the process when its copy was made with no device
+  guard set, as by `untyped_storage().data_ptr()`. The allocator allocated and copied on the
+  current device rather than the tensor's.

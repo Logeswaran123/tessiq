@@ -3,6 +3,8 @@
 //
 // The CPU reference backend.
 
+#include <unistd.h>
+
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -57,6 +59,18 @@ class CpuDevice final : public Device {
   }
 
   Result<void> synchronize() override { return ok(); }
+
+  /// The host's physical memory, since that is what this device allocates from.
+  Result<MemoryInfo> memory_info() override {
+    const long page = sysconf(_SC_PAGESIZE);
+    const long total = sysconf(_SC_PHYS_PAGES);
+    const long available = sysconf(_SC_AVPHYS_PAGES);
+    if (page <= 0 || total <= 0 || available < 0) {
+      return unsupported("the host did not report its memory");
+    }
+    return MemoryInfo{static_cast<std::size_t>(available) * static_cast<std::size_t>(page),
+                      static_cast<std::size_t>(total) * static_cast<std::size_t>(page)};
+  }
 
  private:
   static Result<void> copy(void* dst, const void* src, std::size_t bytes) {

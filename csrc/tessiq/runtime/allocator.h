@@ -15,7 +15,10 @@
 
 namespace tessiq {
 
-/// Counters for the Python memory-stats API and for leak assertions in tests.
+/// Counters for the memory-stats APIs and for leak assertions in tests.
+///
+/// Current values and peaks change only with what is allocated; reset_peak_stats() lowers each
+/// peak to its current value. The totals and counts accumulate until reset_accumulated_stats().
 struct AllocatorStats {
   /// Bytes currently handed out to callers.
   std::size_t allocated_bytes = 0;
@@ -23,12 +26,31 @@ struct AllocatorStats {
   std::size_t reserved_bytes = 0;
   std::size_t peak_allocated_bytes = 0;
   std::size_t peak_reserved_bytes = 0;
+  /// Blocks currently handed out to callers. Non-zero at exit means a leak.
+  std::uint64_t live_blocks = 0;
+  std::uint64_t peak_live_blocks = 0;
+  /// Blocks taken from the device and not yet given back, in use or cached.
+  std::uint64_t reserved_blocks = 0;
+  std::uint64_t peak_reserved_blocks = 0;
+
   std::uint64_t allocation_count = 0;
   std::uint64_t deallocation_count = 0;
   /// Requests served from a cached block.
   std::uint64_t cache_hits = 0;
   /// Requests that had to call Device::raw_allocate.
   std::uint64_t cache_misses = 0;
+  /// Blocks given back to the device.
+  std::uint64_t device_frees = 0;
+  /// Failed device allocations that released the cache and tried again, and requests that failed
+  /// for want of memory in the end.
+  std::uint64_t retries = 0;
+  std::uint64_t out_of_memory = 0;
+  /// Bytes handed out and given back by callers.
+  std::uint64_t allocated_bytes_total = 0;
+  std::uint64_t freed_bytes_total = 0;
+  /// Bytes taken from and given back to the device.
+  std::uint64_t reserved_bytes_total = 0;
+  std::uint64_t released_bytes_total = 0;
 };
 
 /// Sub-allocates device memory, keeping freed blocks for reuse.
@@ -73,6 +95,12 @@ class CachingAllocator {
 
   [[nodiscard]] AllocatorStats stats() const;
 
+  /// Lowers every peak to its current value.
+  void reset_peak_stats();
+
+  /// Zeroes the counts and totals. Current values and peaks are untouched.
+  void reset_accumulated_stats();
+
   /// Rounds `bytes` up to its size class. Public for tests.
   [[nodiscard]] static std::size_t round_size(std::size_t bytes);
 
@@ -81,6 +109,13 @@ class CachingAllocator {
     void* ptr = nullptr;
     std::size_t size = 0;
   };
+
+  /// Gives every cached block back to the device. Returns the bytes released. Called with mutex_
+  /// held.
+  std::size_t release_cached();
+
+  /// Counts a block of `bytes` handed to a caller. Called with mutex_ held.
+  void handed_out(std::size_t bytes);
 
   Device* device_;
 

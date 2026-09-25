@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import io
+import threading
+from collections.abc import Callable, Iterator
 
 import pytest
 import torch
 
 import tessiq
+from tessiq import _C
+from tessiq.device import cuda_ordinal
 
 DEVICE = tessiq.DEVICE_NAME
 
@@ -237,6 +241,296 @@ def test_live_blocks_balance_out() -> None:
     assert tessiq.memory_stats().live_blocks == before + 8
     del tensors
     assert tessiq.memory_stats().live_blocks == before
+
+
+# --- the current device and synchronising ---------------------------------------------------------
+
+
+@pytest.fixture
+def _restore_current_device() -> Iterator[None]:
+    previous = tessiq.current_device()
+    yield
+    tessiq.set_device(previous)
+
+
+def test_the_current_device_is_the_reference_by_default() -> None:
+    assert tessiq.current_device() == 0
+    assert torch.tessiq.current_device() == 0  # type: ignore[attr-defined]
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+def test_set_device_decides_where_an_unqualified_tensor_lands() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    torch.tessiq.set_device(tessiq.gpu)  # type: ignore[attr-defined]
+    assert tessiq.current_device() == tessiq.gpu.index
+    assert torch.empty(4, device=DEVICE).device == tessiq.gpu
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+def test_torch_accelerator_and_tessiq_agree_on_the_current_device() -> None:
+    # torch.accelerator goes through the device guard, and tessiq through the runtime. Both are
+    # the same per-thread index.
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    torch.accelerator.set_device_index(tessiq.gpu.index)
+    assert tessiq.current_device() == tessiq.gpu.index
+    tessiq.set_device(tessiq.cpu)
+    assert torch.accelerator.current_device_index() == 0
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+def test_the_current_device_belongs_to_one_thread() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    tessiq.set_device(tessiq.gpu)
+    seen: list[int] = []
+    other = threading.Thread(target=lambda: seen.append(tessiq.current_device()))
+    other.start()
+    other.join()
+    assert seen == [0]
+
+
+def test_a_device_that_does_not_exist_is_refused() -> None:
+    missing = tessiq.device_count()
+    with pytest.raises(ValueError, match=f"no tessiq device at index {missing}"):
+        tessiq.set_device(missing)
+    with pytest.raises(ValueError, match=f"no tessiq device at index {missing}"):
+        tessiq.synchronize(missing)
+    assert tessiq.current_device() == 0
+
+
+def test_synchronizing_the_reference_does_nothing() -> None:
+    tessiq.synchronize(tessiq.cpu)
+    torch.tessiq.synchronize()  # type: ignore[attr-defined]
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+@pytest.mark.parametrize("how", ["named", "current", "accelerator"])
+def test_synchronize_waits_for_queued_kernels(how: str) -> None:
+    # A launch returns once it is queued, and every launch goes on the legacy default stream.
+    # Packing a large transposed view a hundred times queues tens of milliseconds of work there,
+    # and synchronize has to wait for all of it, not only for the stream transfers use.
+    if tessiq.gpu_count() == 0 or not torch.cuda.is_available():
+        pytest.skip("needs a gpu")
+
+    x = torch.randn(4096, 4096, device=tessiq.gpu)
+    for _ in range(100):
+        x.t().contiguous()
+
+    if how == "named":
+        torch.tessiq.synchronize(tessiq.gpu)  # type: ignore[attr-defined]
+    elif how == "current":
+        tessiq.set_device(tessiq.gpu)
+        tessiq.synchronize()
+    else:
+        torch.accelerator.synchronize(tessiq.gpu)
+    assert torch.cuda.default_stream(cuda_ordinal(tessiq.gpu)).query()
+
+
+# --- what torch asks of the backend besides running ops ----------------------------------------
+
+
+def test_pin_memory_gives_a_pinned_host_copy() -> None:
+    host = torch.randn(1024)
+    pinned = host.pin_memory()
+    assert pinned.is_pinned()
+    assert not host.is_pinned()
+    assert pinned.device.type == "cpu"
+    assert torch.equal(pinned, host)
+
+
+def test_a_tensor_can_be_created_pinned() -> None:
+    # torch uses CUDA's pinned allocator here whenever CUDA is present, and tessiq's otherwise.
+    # Either way tessiq has to recognise the memory as pinned.
+    assert torch.empty(16, pin_memory=True).is_pinned()
+
+
+def test_a_data_loader_pins_its_batches() -> None:
+    dataset = torch.utils.data.TensorDataset(torch.randn(8, 3))
+    loader = torch.utils.data.DataLoader(dataset, batch_size=4, pin_memory=True)
+    assert all(batch.is_pinned() for (batch,) in loader)
+
+
+@pytest.mark.cuda
+def test_a_pinned_tensor_can_cross_without_blocking() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    host = torch.randn(1 << 20).pin_memory()
+    staged = host.to(tessiq.gpu, non_blocking=True)
+    tessiq.synchronize(tessiq.gpu)
+    assert torch.equal(staged.cpu(), host)
+
+
+def test_a_tessiq_generator_draws_what_a_host_generator_does(device: torch.device) -> None:
+    # Random operations run on the host through the fallback, so tessiq's generators are host
+    # generators.
+    generator = torch.Generator(device=DEVICE).manual_seed(3)
+    assert generator.device == torch.device("cpu")
+    drawn = torch.randn(6, device=device, generator=generator)
+    assert torch.equal(drawn.cpu(), torch.randn(6, generator=torch.Generator().manual_seed(3)))
+
+
+def test_resizing_a_storage_keeps_what_it_held(device: torch.device) -> None:
+    x = torch.arange(8.0, device=device)
+    storage = x.untyped_storage()
+
+    storage.resize_(64)
+    assert storage.nbytes() == 64
+    assert storage.device == x.device
+    assert torch.equal(x.cpu(), torch.arange(8.0))
+
+    storage.resize_(16)
+    assert torch.equal(x.as_strided((4,), (1,)).cpu(), torch.arange(4.0))
+
+
+def test_an_op_that_resizes_its_output_allocates_on_that_device(device: torch.device) -> None:
+    # arange writes into an empty output that the fallback resizes. resize_ runs with no device
+    # guard, so it has to allocate on the output's device rather than the current one.
+    assert torch.equal(torch.arange(8.0, device=device).cpu(), torch.arange(8.0))
+
+
+@pytest.mark.parametrize("touch", ["write", "data_ptr"])
+def test_a_lazy_clone_is_copied_on_its_own_device(device: torch.device, touch: str) -> None:
+    # A lazy clone shares storage until something asks for writable memory, and the copy made
+    # then goes through the allocator. Reading data_ptr() asks with no device guard set.
+    x = torch.arange(4.0, device=device)
+    y = torch._lazy_clone(x)
+    if touch == "write":
+        y.add_(1)
+        expected = torch.arange(4.0) + 1
+    else:
+        y.untyped_storage().data_ptr()
+        expected = torch.arange(4.0)
+    assert y.untyped_storage().device == device
+    assert torch.equal(y.cpu(), expected)
+    assert torch.equal(x.cpu(), torch.arange(4.0))
+
+
+def test_torch_can_tell_which_device_a_pointer_is_on(device: torch.device) -> None:
+    x = torch.empty(16, device=device)
+    assert _C._device_of_pointer(x.untyped_storage().data_ptr()) == device.index
+    with pytest.raises(RuntimeError, match="tessiq did not allocate"):
+        _C._device_of_pointer(torch.empty(16).data_ptr())
+
+
+# --- the torch.accelerator memory functions ------------------------------------------------------
+
+
+def test_torch_accelerator_reads_tessiq_s_counters(device: torch.device) -> None:
+    before = torch.accelerator.memory_allocated(device)
+    assert before == tessiq.memory_allocated(device)
+    x = torch.empty(1 << 16, device=device)
+    assert torch.accelerator.memory_allocated(device) == tessiq.memory_allocated(device) > before
+    assert torch.accelerator.memory_reserved(device) == tessiq.memory_reserved(device)
+    peak = torch.accelerator.max_memory_allocated(device)
+    assert peak >= torch.accelerator.memory_allocated(device)
+    del x
+
+
+def test_torch_accelerator_resets_the_peak(device: torch.device) -> None:
+    x = torch.empty(1 << 18, device=device)
+    del x
+    torch.accelerator.reset_peak_memory_stats(device)
+    peak = torch.accelerator.max_memory_allocated(device)
+    assert peak == torch.accelerator.memory_allocated(device)
+
+
+def test_torch_accelerator_resets_the_totals(device: torch.device) -> None:
+    kept = torch.empty(16, device=device)
+    torch.accelerator.reset_accumulated_memory_stats(device)
+    stats = torch.accelerator.memory_stats(device)
+    assert stats["allocation.all.allocated"] == 0
+    assert stats["allocation.all.current"] == tessiq.memory_stats(device).live_blocks
+    del kept
+
+
+def test_torch_accelerator_empties_the_cache(device: torch.device) -> None:
+    x = torch.empty(1 << 16, device=device)
+    del x
+    torch.accelerator.empty_cache()
+    reserved = torch.accelerator.memory_reserved(device)
+    assert reserved == torch.accelerator.memory_allocated(device)
+
+
+def test_torch_accelerator_reports_free_memory(device: torch.device) -> None:
+    free, total = torch.accelerator.get_memory_info(device)
+    assert 0 <= free <= total
+    assert total > 0
+
+
+# --- saving, loading and set_ -------------------------------------------------------------------
+
+
+def test_a_checkpoint_loads_onto_a_tessiq_device(device: torch.device) -> None:
+    state = {
+        "weight": torch.randn(3, 4),
+        "transposed": torch.randn(4, 3).t(),
+        "index": torch.arange(5),
+    }
+    buffer = io.BytesIO()
+    torch.save(state, buffer)
+    buffer.seek(0)
+    loaded = torch.load(buffer, map_location=device)
+    for name, tensor in state.items():
+        assert loaded[name].device == device, name
+        assert loaded[name].stride() == tensor.stride(), name
+        assert torch.equal(loaded[name].cpu(), tensor), name
+
+
+def test_a_tessiq_tensor_saves_and_loads_back(device: torch.device) -> None:
+    x = torch.arange(6.0, device=device).reshape(2, 3)
+    buffer = io.BytesIO()
+    torch.save(x, buffer)
+    buffer.seek(0)
+    assert torch.equal(torch.load(buffer, map_location="cpu"), x.cpu())
+    buffer.seek(0)
+    again = torch.load(buffer)
+    assert again.device == device
+    assert torch.equal(again.cpu(), x.cpu())
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("_restore_current_device")
+def test_torch_tessiq_device_selects_a_device_for_a_block() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    with torch.tessiq.device(tessiq.gpu):  # type: ignore[attr-defined]
+        assert tessiq.current_device() == tessiq.gpu.index
+    assert tessiq.current_device() == 0
+    with torch.tessiq.device(None):  # type: ignore[attr-defined]
+        assert tessiq.current_device() == 0
+
+
+def test_set_points_a_tensor_at_existing_storage(device: torch.device) -> None:
+    x = torch.arange(6.0, device=device)
+    view = torch.empty(0, device=device).set_(x.untyped_storage(), 1, (2,), (2,))
+    assert torch.equal(view.cpu(), torch.tensor([1.0, 3.0]))
+    shared = torch.empty(0, device=device).set_(x)  # type: ignore[call-overload]
+    assert shared.untyped_storage().data_ptr() == x.untyped_storage().data_ptr()
+
+
+def test_set_grows_a_storage_the_view_outruns(device: torch.device) -> None:
+    small = torch.arange(2.0, device=device)
+    grown = torch.empty(0, device=device).set_(small.untyped_storage(), 0, (4,), (1,))
+    assert grown.untyped_storage().nbytes() == 16
+    assert torch.equal(grown[:2].cpu(), torch.arange(2.0))
+
+
+def test_set_with_no_source_empties_a_tensor(device: torch.device) -> None:
+    x = torch.arange(4.0, device=device)
+    x.set_()  # type: ignore[call-overload]
+    assert x.shape == (0,)
+    assert x.device == device
 
 
 # --- views ---------------------------------------------------------------------------------------

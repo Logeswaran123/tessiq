@@ -30,7 +30,7 @@ def model() -> nn.Module:
 
 
 def captured(
-    fn: Callable[..., object], example: torch.Tensor, *, dynamic: bool
+    fn: Callable[..., object], *examples: torch.Tensor, dynamic: bool
 ) -> torch.fx.GraphModule:
     """The graph the backend receives, which is after AOTAutograd rather than before it.
 
@@ -49,7 +49,7 @@ def captured(
             fn,
             backend=aot_autograd(fw_compiler=collect, decompositions=decompositions()),
             dynamic=dynamic,
-        )(example)
+        )(*examples)
     return graphs[0]
 
 
@@ -258,3 +258,59 @@ def test_the_work_stays_on_the_device_between_kernels() -> None:
         crossings[label] = sum(1 for e in collected.events if e.category == "transfer")
 
     assert crossings["symbolic"] == crossings["concrete"], crossings
+
+
+def add_relu(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return torch.relu(a + b)
+
+
+#: Groups whose first input broadcasts, so it does not have the result's shape. 64 and 96 rows are
+#: multiples of the 32 columns, which is when a result sized from the first input got past the
+#: launch's checks; 7 is not.
+BROADCAST_FIRST = [
+    pytest.param(lambda rows: ((rows, 1), (1, 32)), id="outer"),
+    pytest.param(lambda rows: ((rows, 1), (rows, 32)), id="row"),
+    pytest.param(lambda rows: ((32,), (rows, 32)), id="bias"),
+]
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("shapes", BROADCAST_FIRST)
+def test_a_group_whose_first_input_broadcasts_is_sized_from_all_of_them(
+    shapes: Callable[[int], tuple[tuple[int, ...], tuple[int, ...]]],
+) -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    from tessiq import profiler
+
+    compiled = torch.compile(
+        add_relu, backend="tessiq", dynamic=True, options={"device": str(tessiq.gpu)}
+    )
+    for rows in (64, 96, 7):
+        first, second = shapes(rows)
+        a, b = torch.randn(*first), torch.randn(*second)
+        with profiler.profile() as collected:
+            out = compiled(a, b)
+        assert any(e.category == "kernel" for e in collected.events), "no kernel ran"
+        torch.testing.assert_close(out, add_relu(a, b), rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.cuda
+def test_a_dynamic_kernel_refuses_an_output_of_the_wrong_shape() -> None:
+    # A dynamic kernel takes its element count from the output, so the output's shape is checked
+    # against the inputs'. [64,1] has an element count both inputs divide.
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+
+    from tessiq.recipe import build_recipe
+
+    graph = captured(add_relu, torch.randn(64, 1), torch.randn(1, 32), dynamic=True)
+    kernel = next(iter(build_recipe(graph, tessiq.gpu, use_cache=False).kernels.values()))
+    assert kernel.has_dynamic_extent
+
+    a = torch.randn(64, 1, device=tessiq.gpu)
+    b = torch.randn(1, 32, device=tessiq.gpu)
+    assert kernel.output_shape([a, b]) == [64, 32]
+    with pytest.raises(ValueError, match=r"shape \[64,1\]; its inputs broadcast to \[64,32\]"):
+        kernel.launch([a, b], torch.empty(64, 1, device=tessiq.gpu))

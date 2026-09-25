@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 // pybind11's torch.Tensor <-> at::Tensor conversion.
+#include <ATen/detail/PrivateUse1HooksInterface.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -265,6 +266,86 @@ void bind_custom_ops(py::module_& m) {
       "Compiles the operation's kernel, or its expression for every type it declares, now.");
 }
 
+/// Binds the devices: how many there are, which one this thread uses, waiting for one, and its
+/// allocator.
+void bind_devices(py::module_& m) {
+  m.def(
+      "device_count",
+      []() { return tessiq::device_count(); },
+      "Number of tessiq devices: the CPU reference plus every usable CUDA device.");
+
+  m.def(
+      "backend_name",
+      [](int index) {
+        auto device = tessiq::device_at(index);
+        if (!device) {
+          raise_from_error(device.error());
+        }
+        return std::string(tessiq::device_kind_name((*device)->kind()));
+      },
+      py::arg("index"),
+      "Backend behind a device index: 'cpu' for the reference, 'cuda' for a GPU.");
+
+  m.def(
+      "current_device",
+      []() { return tessiq::current_device_index(); },
+      "The device index this thread uses when none is named, as the device guard sees it.");
+
+  m.def(
+      "set_current_device",
+      [](int index) { value_or_raise(tessiq::set_current_device_index(index)); },
+      py::arg("index"),
+      "Sets the device index this thread uses when none is named. Fails for an index with no "
+      "device.");
+
+  m.def(
+      "synchronize",
+      [](int index) {
+        const auto device = tessiq::device_at(index);
+        if (!device) {
+          raise_from_error(device.error());
+        }
+        const tessiq::Result<void> done = [&device] {
+          const py::gil_scoped_release release;
+          return (*device)->synchronize();
+        }();
+        value_or_raise(done);
+      },
+      py::arg("index"),
+      "Blocks until all work queued on a device has finished.");
+
+  m.def(
+      "_device_of_pointer",
+      [](std::uintptr_t address) {
+        // NOLINTNEXTLINE(performance-no-int-to-ptr)
+        void* data = reinterpret_cast<void*>(address);
+        return at::detail::getPrivateUse1Hooks().getDeviceFromPtr(data).index();
+      },
+      py::arg("address"),
+      "Internal: the device torch's PrivateUse1 hooks give for a pointer tessiq allocated.");
+
+  m.def("empty_cache",
+        &tessiq::torch_backend::empty_cache,
+        py::arg("index"),
+        "Releases cached blocks on a device. Returns the number of bytes handed back.");
+
+  py::class_<tessiq::AllocatorStats>(m, "AllocatorStats")
+      .def_readonly("allocated_bytes", &tessiq::AllocatorStats::allocated_bytes)
+      .def_readonly("reserved_bytes", &tessiq::AllocatorStats::reserved_bytes)
+      .def_readonly("peak_allocated_bytes", &tessiq::AllocatorStats::peak_allocated_bytes)
+      .def_readonly("peak_reserved_bytes", &tessiq::AllocatorStats::peak_reserved_bytes)
+      .def_readonly("allocation_count", &tessiq::AllocatorStats::allocation_count)
+      .def_readonly("deallocation_count", &tessiq::AllocatorStats::deallocation_count)
+      .def_readonly("cache_hits", &tessiq::AllocatorStats::cache_hits)
+      .def_readonly("cache_misses", &tessiq::AllocatorStats::cache_misses)
+      .def_readonly("live_blocks", &tessiq::AllocatorStats::live_blocks);
+
+  m.def("memory_stats",
+        &tessiq::torch_backend::allocator_stats,
+        py::arg("index"),
+        "Allocator counters for one device.");
+}
+
 PYBIND11_MODULE(_C, m) {
   m.doc() = "tessiq native core";
 
@@ -290,45 +371,10 @@ PYBIND11_MODULE(_C, m) {
       "Returns the current native log level as a string.");
 
   m.def("_init_backend",
-        &tessiq::torch_backend::register_allocator,
+        &tessiq::torch_backend::register_backend,
         "Internal: makes the native backend known to PyTorch. Called during import.");
 
-  m.def(
-      "device_count",
-      []() { return tessiq::device_count(); },
-      "Number of tessiq devices: the CPU reference plus every usable CUDA device.");
-
-  m.def(
-      "backend_name",
-      [](int index) {
-        auto device = tessiq::device_at(index);
-        if (!device) {
-          raise_from_error(device.error());
-        }
-        return std::string(tessiq::device_kind_name((*device)->kind()));
-      },
-      py::arg("index"),
-      "Backend behind a device index: 'cpu' for the reference, 'cuda' for a GPU.");
-
-  m.def("empty_cache",
-        &tessiq::torch_backend::empty_cache,
-        py::arg("index"),
-        "Releases cached blocks on a device. Returns the number of bytes handed back.");
-
-  py::class_<tessiq::AllocatorStats>(m, "AllocatorStats")
-      .def_readonly("allocated_bytes", &tessiq::AllocatorStats::allocated_bytes)
-      .def_readonly("reserved_bytes", &tessiq::AllocatorStats::reserved_bytes)
-      .def_readonly("peak_allocated_bytes", &tessiq::AllocatorStats::peak_allocated_bytes)
-      .def_readonly("peak_reserved_bytes", &tessiq::AllocatorStats::peak_reserved_bytes)
-      .def_readonly("allocation_count", &tessiq::AllocatorStats::allocation_count)
-      .def_readonly("deallocation_count", &tessiq::AllocatorStats::deallocation_count)
-      .def_readonly("cache_hits", &tessiq::AllocatorStats::cache_hits)
-      .def_readonly("cache_misses", &tessiq::AllocatorStats::cache_misses);
-
-  m.def("memory_stats",
-        &tessiq::torch_backend::allocator_stats,
-        py::arg("index"),
-        "Allocator counters for one device.");
+  bind_devices(m);
 
   m.def(
       "import_fx",

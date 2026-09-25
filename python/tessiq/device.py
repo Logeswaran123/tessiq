@@ -18,7 +18,8 @@ from tessiq import _C
 #: The name PrivateUse1 is renamed to.
 DEVICE_NAME = "tessiq"
 
-#: The CPU reference backend, always present. An unqualified ``device="tessiq"`` lands here.
+#: The CPU reference backend, always present. An unqualified ``device="tessiq"`` lands here
+#: unless :func:`set_device` names another.
 #:
 #: Assigned by :func:`_register`, because ``torch.device("tessiq", 0)`` only exists once the
 #: backend has been renamed.
@@ -35,20 +36,16 @@ def _is_available() -> bool:
     return device_count() > 0
 
 
-def _current_device() -> int:
-    return 0
-
-
-def _set_device(_device: object) -> None:
-    """Accepted and ignored; ``current_device`` always reports 0."""
-
-
-def _synchronize(_device: object = None) -> None:
-    """Accepted and ignored. Does not wait for queued GPU work; copies to the host do."""
-
-
 def _is_in_bad_fork() -> bool:
     return False
+
+
+def _lazy_init() -> None:
+    """Nothing to do, since the backend registers on import.
+
+    torch calls this before a device is first used. A backend without one is never counted as
+    initialised, and ``torch.accelerator.synchronize()`` does nothing for it.
+    """
 
 
 def _manual_seed(_seed: int) -> None:
@@ -72,6 +69,27 @@ def _initial_seed() -> int:
     return torch.default_generator.initial_seed()
 
 
+class _SelectDevice:
+    """``torch.tessiq.device``: makes a device current for a block, as ``torch.cuda.device`` does.
+
+    torch uses it to move a storage onto a device, which is what ``torch.load`` does with a
+    ``map_location`` that names one. ``None`` or a negative index leaves the current device alone.
+    """
+
+    def __init__(self, device: torch.device | str | int | None) -> None:
+        unset = device is None or (isinstance(device, int) and device < 0)
+        self._index = None if unset else _resolve(device)
+        self._previous = 0
+
+    def __enter__(self) -> None:
+        self._previous = current_device()
+        if self._index is not None:
+            set_device(self._index)
+
+    def __exit__(self, *_exc: object) -> None:
+        set_device(self._previous)
+
+
 def _build_torch_device_module() -> types.ModuleType:
     """Build the module PyTorch expects to find at ``torch.<DEVICE_NAME>``.
 
@@ -82,11 +100,13 @@ def _build_torch_device_module() -> types.ModuleType:
     members = {
         "is_available": _is_available,
         "device_count": device_count,
-        "current_device": _current_device,
-        "set_device": _set_device,
-        "synchronize": _synchronize,
+        "current_device": current_device,
+        "device": _SelectDevice,
+        "set_device": set_device,
+        "synchronize": synchronize,
         "empty_cache": empty_cache,
         "_is_in_bad_fork": _is_in_bad_fork,
+        "_lazy_init": _lazy_init,
         "manual_seed": _manual_seed,
         "manual_seed_all": _manual_seed,
         "get_rng_state": _get_rng_state,
@@ -143,11 +163,8 @@ class MemoryStats:
     deallocation_count: int
     cache_hits: int
     cache_misses: int
-
-    @property
-    def live_blocks(self) -> int:
-        """Blocks handed out and not yet returned. Non-zero at exit means a leak."""
-        return self.allocation_count - self.deallocation_count
+    #: Blocks handed out and not yet returned. Non-zero at exit means a leak.
+    live_blocks: int
 
 
 def device_count() -> int:
@@ -161,15 +178,47 @@ def gpu_count() -> int:
 
 
 def _resolve(device: torch.device | str | int | None) -> int:
-    """Turn anything that names a tessiq device into its index."""
+    """Turn anything that names a tessiq device into its index. No index means the current one."""
     if device is None:
-        return 0
+        return current_device()
     if isinstance(device, int):
         return device
     resolved = torch.device(device)
     if resolved.type != DEVICE_NAME:
         raise ValueError(f"expected a {DEVICE_NAME} device, got {resolved}")
-    return resolved.index or 0
+    return current_device() if resolved.index is None else resolved.index
+
+
+def current_device() -> int:
+    """The index of the device this thread uses when none is named.
+
+    0, the CPU reference, until :func:`set_device` or ``torch.accelerator.set_device_index``
+    changes it. Each thread has its own, as with CUDA.
+    """
+    return int(_C.current_device())
+
+
+def set_device(device: torch.device | str | int) -> None:
+    """Make `device` the one this thread uses when none is named.
+
+    ``torch.empty(4, device="tessiq")`` then allocates there, and :func:`synchronize` and the
+    memory functions default to it.
+
+    Raises:
+        ValueError: If `device` names no tessiq device.
+    """
+    _C.set_current_device(_resolve(device))
+
+
+def synchronize(device: torch.device | str | int | None = None) -> None:
+    """Wait until all work queued on `device` has finished. Defaults to the current device.
+
+    A launch returns as soon as it is queued, so this is what to call before stopping a clock.
+
+    Raises:
+        ValueError: If `device` names no tessiq device.
+    """
+    _C.synchronize(_resolve(device))
 
 
 def backend_name(device: torch.device | str | int | None = None) -> str:
@@ -184,11 +233,13 @@ def cuda_ordinal(device: torch.device | str | int | None = None) -> int:
     callers can use one code path for both.
     """
     if not isinstance(device, torch.device):
-        device = torch.device(device) if device is not None else cpu
-    index = device.index or 0
-    if device.type != DEVICE_NAME or index < 1:
+        device = torch.device(device) if device is not None else torch.device(DEVICE_NAME)
+    if device.type != DEVICE_NAME:
         return -1
-    return index - 1 if backend_name(device) == "cuda" else -1
+    index = _resolve(device)
+    if index < 1:
+        return -1
+    return index - 1 if backend_name(index) == "cuda" else -1
 
 
 def memory_stats(device: torch.device | str | int | None = None) -> MemoryStats:
@@ -203,6 +254,7 @@ def memory_stats(device: torch.device | str | int | None = None) -> MemoryStats:
         deallocation_count=raw.deallocation_count,
         cache_hits=raw.cache_hits,
         cache_misses=raw.cache_misses,
+        live_blocks=raw.live_blocks,
     )
 
 

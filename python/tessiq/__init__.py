@@ -21,6 +21,7 @@ from tessiq.device import (
     MemoryStats,
     backend_name,
     cpu,
+    current_device,
     device_count,
     empty_cache,
     gpu,
@@ -29,6 +30,8 @@ from tessiq.device import (
     memory_allocated,
     memory_reserved,
     memory_stats,
+    set_device,
+    synchronize,
 )
 from tessiq.executor import execute
 from tessiq.explain import explain, explain_graph
@@ -58,6 +61,7 @@ __all__ = [
     "capture",
     "clear_cache",
     "cpu",
+    "current_device",
     "default_pipeline",
     "device_count",
     "emit_cuda",
@@ -79,7 +83,9 @@ __all__ = [
     "pass_names",
     "profile",
     "run_passes",
+    "set_device",
     "set_log_level",
+    "synchronize",
 ]
 
 #: The package version, read from the native module.

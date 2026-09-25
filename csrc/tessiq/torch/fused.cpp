@@ -47,6 +47,70 @@ divisor_for(codegen::OperandRead::Kind kind, std::int64_t operand, std::int64_t 
   return kind == codegen::OperandRead::Kind::kRepeated ? count / operand : operand;
 }
 
+std::string shape_string(c10::IntArrayRef sizes) {
+  std::string text = "[";
+  for (std::size_t i = 0; i < sizes.size(); ++i) {
+    text += (i == 0 ? "" : ",") + std::to_string(sizes[i]);
+  }
+  return text + "]";
+}
+
+/// The shapes of `tensors` broadcast together, aligned from the last axis as torch does.
+Result<std::vector<std::int64_t>> broadcast_shape(const std::vector<at::Tensor>& tensors,
+                                                  const std::string& group) {
+  std::vector<std::int64_t> shape;
+  for (const at::Tensor& tensor : tensors) {
+    const c10::IntArrayRef sizes = tensor.sizes();
+    if (sizes.size() > shape.size()) {
+      shape.insert(shape.begin(), sizes.size() - shape.size(), 1);
+    }
+    const std::size_t offset = shape.size() - sizes.size();
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+      std::int64_t& extent = shape[offset + i];
+      if (sizes[i] == extent || sizes[i] == 1) {
+        continue;
+      }
+      if (extent != 1) {
+        return invalid_argument("fusion group " + group + " was given inputs of shapes that do " +
+                                "not broadcast, including " + shape_string(sizes));
+      }
+      extent = sizes[i];
+    }
+  }
+  return shape;
+}
+
+/// A dynamic kernel's scalars: the element count, then one divisor per operand that needs one, in
+/// the emitter's parameter order.
+std::vector<std::int64_t> dynamic_scalars(const std::vector<codegen::OperandRead>& reads,
+                                          const std::vector<at::Tensor>& tensors,
+                                          std::int64_t count) {
+  std::vector<std::int64_t> scalars{count};
+  for (std::size_t i = 0; i < tensors.size(); ++i) {
+    if (i < reads.size() && !reads[i].is_known()) {
+      scalars.push_back(divisor_for(reads[i].kind, tensors[i].numel(), count));
+    }
+  }
+  return scalars;
+}
+
+/// Checks that `out` has the shape `tensors` broadcast to.
+///
+/// A dynamic kernel takes its element count from `out`, so an output of the wrong shape would pass
+/// the launch's other checks whenever every input's size divides its element count.
+Result<void> check_broadcast_output(const std::vector<at::Tensor>& tensors,
+                                    const at::Tensor& out,
+                                    const std::string& group) {
+  TESSIQ_ASSIGN_OR_RETURN(const std::vector<std::int64_t> expected,
+                          broadcast_shape(tensors, group));
+  if (out.sizes() != c10::IntArrayRef(expected)) {
+    return invalid_argument("fusion group " + group + " was given an output of shape " +
+                            shape_string(out.sizes()) + "; its inputs broadcast to " +
+                            shape_string(expected));
+  }
+  return ok();
+}
+
 } // namespace
 
 bool FusedKernel::has_dynamic_extent() const { return parts_.elements == ir::kDynamic; }
@@ -57,7 +121,7 @@ FusedKernel::output_shape(const std::vector<at::Tensor>& tensors) const {
     return invalid_argument("fusion group " + std::to_string(parts_.group) +
                             " cannot size a result from no inputs");
   }
-  return std::vector<std::int64_t>(tensors.front().sizes().begin(), tensors.front().sizes().end());
+  return broadcast_shape(tensors, std::to_string(parts_.group));
 }
 
 Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
@@ -122,14 +186,8 @@ Result<void> FusedKernel::launch(const std::vector<at::Tensor>& tensors,
   if (!dynamic) {
     return parts_.program->launch(buffers, count, stream);
   }
-
-  // The count, then one divisor per operand that needs one, in the emitter's parameter order.
-  std::vector<std::int64_t> scalars{count};
-  for (std::size_t i = 0; i < tensors.size(); ++i) {
-    if (i < reads.size() && !reads[i].is_known()) {
-      scalars.push_back(divisor_for(reads[i].kind, tensors[i].numel(), count));
-    }
-  }
+  TESSIQ_RETURN_IF_ERROR(check_broadcast_output(tensors, out, group));
+  const std::vector<std::int64_t> scalars = dynamic_scalars(reads, tensors, count);
   const auto blocks = (count + static_cast<std::int64_t>(codegen::kBlockSize) - 1) /
                       static_cast<std::int64_t>(codegen::kBlockSize);
   return parts_.program->launch(buffers, scalars, blocks, stream);

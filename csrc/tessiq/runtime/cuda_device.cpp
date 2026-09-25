@@ -83,13 +83,25 @@ class CudaDevice final : public Device {
 
   Result<void> synchronize() override {
     TESSIQ_RETURN_IF_ERROR(activate());
-    if (stream_ == nullptr) {
-      return ok();
-    }
+    // Transfers go on stream_ and every launch on the legacy default stream. Each stream waits for
+    // work queued earlier on the other, so waiting for both covers everything, whichever came last.
     if (const cudaError_t status = cudaStreamSynchronize(stream_); status != cudaSuccess) {
       return cuda_error(status, "cudaStreamSynchronize");
     }
+    if (const cudaError_t status = cudaStreamSynchronize(cudaStreamLegacy); status != cudaSuccess) {
+      return cuda_error(status, "cudaStreamSynchronize(cudaStreamLegacy)");
+    }
     return ok();
+  }
+
+  Result<MemoryInfo> memory_info() override {
+    TESSIQ_RETURN_IF_ERROR(activate());
+    MemoryInfo info;
+    if (const cudaError_t status = cudaMemGetInfo(&info.free_bytes, &info.total_bytes);
+        status != cudaSuccess) {
+      return cuda_error(status, "cudaMemGetInfo");
+    }
+    return info;
   }
 
  private:
@@ -150,6 +162,29 @@ std::vector<std::unique_ptr<Device>> discover_cuda_devices() {
   return devices;
 }
 
+Result<void*> allocate_page_locked(std::size_t bytes) {
+  void* ptr = nullptr;
+  if (const cudaError_t status = cudaHostAlloc(&ptr, bytes, cudaHostAllocPortable);
+      status != cudaSuccess) {
+    if (status == cudaErrorMemoryAllocation) {
+      return resource_exhausted("could not page-lock " + std::to_string(bytes) + " host bytes");
+    }
+    return cuda_error(status, "cudaHostAlloc");
+  }
+  return ptr;
+}
+
+void free_page_locked(void* ptr) noexcept { static_cast<void>(cudaFreeHost(ptr)); }
+
+bool is_page_locked(const void* ptr) noexcept {
+  cudaPointerAttributes attributes{};
+  if (cudaPointerGetAttributes(&attributes, ptr) != cudaSuccess) {
+    static_cast<void>(cudaGetLastError());
+    return false;
+  }
+  return attributes.type == cudaMemoryTypeHost;
+}
+
 } // namespace tessiq
 
 #else // TESSIQ_WITH_CUDA
@@ -157,6 +192,14 @@ std::vector<std::unique_ptr<Device>> discover_cuda_devices() {
 namespace tessiq {
 
 std::vector<std::unique_ptr<Device>> discover_cuda_devices() { return {}; }
+
+Result<void*> allocate_page_locked(std::size_t /*bytes*/) {
+  return unsupported("page-locked memory needs a build with CUDA");
+}
+
+void free_page_locked(void* /*ptr*/) noexcept {}
+
+bool is_page_locked(const void* /*ptr*/) noexcept { return false; }
 
 } // namespace tessiq
 

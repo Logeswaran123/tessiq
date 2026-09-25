@@ -15,6 +15,12 @@ namespace tessiq {
 /// checking. The CPU backend uses aligned_alloc; cudaMalloc returns page-aligned memory.
 inline constexpr std::size_t kDeviceAlignment = 512;
 
+/// How much of a device's memory is free, and how much there is.
+struct MemoryInfo {
+  std::size_t free_bytes = 0;
+  std::size_t total_bytes = 0;
+};
+
 /// Which backend implements a device.
 enum class DeviceKind {
   /// Reference implementation on host memory. What CUDA results are checked against, and always
@@ -64,6 +70,11 @@ class Device {
 
   /// Blocks until all work submitted to this device has completed.
   virtual Result<void> synchronize() = 0;
+
+  /// Free and total memory, as the backend reports them. Unsupported unless a backend overrides it.
+  virtual Result<MemoryInfo> memory_info() {
+    return unsupported("this device cannot report its free memory");
+  }
 
  protected:
   Device() = default;
