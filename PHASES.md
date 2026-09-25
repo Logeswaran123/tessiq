@@ -196,9 +196,10 @@ that convolve on the host are the ones that vary. The four operations left on th
 float32 to float32 casts the batch norm decomposition inserts on its running statistics.
 
 ### Phase 12: Custom operations and rewrite passes (planned)
-Adding an operation with its own device kernel from Python, without editing tessiq's C++ or
-rebuilding it, and a pattern rewriter that finds the subgraph a custom operation replaces. Each
-rewrite is its own named pass.
+Adding an operation with its own device kernel as one directory under `csrc/custom_ops/`, holding
+the kernel and the C++ that defines the operation, with nothing else in tessiq edited. Then a
+pattern rewriter that finds the subgraph a custom operation replaces. Each rewrite is its own named
+pass.
 **What happens today.** An operation declared with `torch.library.custom_op` compiles and gives
 the right answer, but the compiler has never heard of it, so it runs on the host between two device
 kernels and the data crosses the bus both ways:
@@ -224,13 +225,13 @@ recipe's kernel map, and a rebuild. The four kernel kinds that exist were each w
   the types (phase 8), and a reference implementation that is both the CPU backend's path and the
   oracle its kernel is tested against.
 - Two ways to supply the kernel. An elementwise operation gives an expression and joins fusion
-  groups like a built-in one. Anything else gives CUDA source, an entry point and a launch shape.
-  It compiles through the existing NVRTC path and cubin cache and takes its extents at the launch,
-  so it works on symbolic shapes. The source is tagged with its language, so phase 14 can add
-  Triton as a second one.
-- The PyTorch side, done by the registration: a `torch.library` operation with a fake
-  implementation for tracing, an implementation for the tessiq dispatch key so eager tensors on
-  the device run the same kernel, and the reference for the CPU.
+  groups like a built-in one. Anything else gives a `.cu` file and a C++ function that lays out
+  its launch. The build carries the file's text in the extension, and it compiles through the
+  existing NVRTC path and cubin cache for whichever GPU it runs on. It takes its extents at the
+  launch, so it works on symbolic shapes.
+- The PyTorch side, done by the definition: a `TORCH_LIBRARY` operation whose ATen reference runs
+  on the CPU and, on tensors with no data, gives the result's shape for tracing, and an
+  implementation for the tessiq dispatch key so eager tensors on the device run the same kernel.
 - A pattern rewriter. A pattern is a small IR graph, either written in the textual form or traced
   from a Python function through the backend's own decompositions, so that it matches what
   AOTAutograd emits rather than what the user typed. Each rewrite registers as its own pass,
@@ -254,10 +255,11 @@ recipe's kernel map, and a rebuild. The four kernel kinds that exist were each w
   function.
 
 **Milestone:**
-1. `demo::fast_gelu`, given as an expression, and `demo::rms_norm`, given as CUDA source that does
-   the reduction and the elementwise pass in one kernel, are each defined in one Python file in
-   the test suite with no C++ change and no rebuild. Each runs on a tessiq tensor in eager mode and
-   under `torch.compile`, and matches its reference within its declared tolerance on both backends.
+1. `tessiq::fast_gelu`, given as an expression, and `tessiq::rms_norm`, given as a CUDA kernel that
+   does the reduction and the elementwise pass in one launch, are each one directory in
+   `csrc/custom_ops/` with no change anywhere else in tessiq. Each runs on a tessiq tensor in eager
+   mode and under `torch.compile`, and matches its reference within its declared tolerance on both
+   backends.
 2. `rewrite-fast-gelu` and `rewrite-rms-norm` are separate passes with golden files, including
    inputs they must leave alone: an interior value used elsewhere, and a dtype the kernel does not
    support.
