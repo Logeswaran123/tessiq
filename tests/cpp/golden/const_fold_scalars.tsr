@@ -1,4 +1,4 @@
-// RUN: const-fold,dce
+// RUN: const-fold,dead-node-elimination
 graph @g(%x: f32[4]) -> f32[4] {
   %two = const() {value = 2.0} : f32[]
   %three = const() {value = 3.0} : f32[]

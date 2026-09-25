@@ -1,4 +1,4 @@
-// RUN: cse,dce
+// RUN: cse,dead-node-elimination
 graph @g(%a: f32[4], %b: f32[4]) -> f32[4] {
   %x = add(%a, %b) : f32[4]
   %y = add(%b, %a) : f32[4]

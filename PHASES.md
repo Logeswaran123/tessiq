@@ -79,9 +79,9 @@ debugging three unfamiliar things at once, and every one of them can produce a w
 rather than an error.
 
 ### Phase 3: IR and pass infrastructure (done)
-Graph/Node/Value, TensorType, builder, verifier, printer, parser. PassManager + registry. `dce`,
+Graph/Node/Value, TensorType, builder, verifier, printer, parser. PassManager + registry. `dead-node-elimination`,
 `cse`, `const-fold`. `tessiq-opt` CLI. Golden test harness.
-**Milestone:** `tessiq-opt --passes=dce,cse in.tsr` produces expected output; parse/print roundtrip
+**Milestone:** `tessiq-opt --passes=dead-node-elimination,cse in.tsr` produces expected output; parse/print roundtrip
 is property-tested; no torch dependency in any of it.
 
 ### Phase 4: Graph capture (done)

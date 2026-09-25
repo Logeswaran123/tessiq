@@ -454,8 +454,8 @@ Result<FusedKernel> extract_kernel(const ir::Graph& graph, std::int64_t group) {
                             std::to_string(escaping.size()) +
                             " values leaving it, which one kernel cannot write");
   }
-  // A group whose result nothing reads is dead and dce removes it. Writing the last value keeps
-  // the kernel well formed if one is met before that happens.
+  // A group whose result nothing reads is dead and dead-node-elimination removes it. Writing the
+  // last value keeps the kernel well formed if one is met before that happens.
   kernel.output = escaping.empty() ? members.back()->result(0)->name() : escaping.front();
 
   return kernel;

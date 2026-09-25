@@ -1,4 +1,4 @@
-// RUN: algebraic-simplify,dce
+// RUN: algebraic-simplify,dead-node-elimination
 // Not an identity for floats. (-0.0) + 0.0 is +0.0, so replacing the add with its operand would
 // change the sign of a zero. Integers have one zero and no such trap, which the next file shows.
 graph @g(%x: f32[4]) -> f32[4] {

@@ -38,7 +38,7 @@ tessiq.memory_stats(tessiq.gpu).allocated_bytes
 Passes are exercised as text in, text out:
 
 ```console
-$ tessiq-opt --passes=cse,dce graph.tsr
+$ tessiq-opt --passes=cse,dead-node-elimination graph.tsr
 graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
   %s0 = add(%a, %b) : f32[4,8]
   %out = mul(%s0, %s0) : f32[4,8]

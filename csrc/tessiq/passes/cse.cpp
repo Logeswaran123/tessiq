@@ -20,8 +20,9 @@ namespace {
 ///
 /// Legality: two nodes with the same op, the same operands and the same attributes compute the
 /// same function of the same inputs, so either result can stand for the other. This depends on ops
-/// being pure. The dead duplicate is left for dce rather than erased here, which keeps this pass
-/// to one job and means a duplicate whose results are still referenced elsewhere is not lost.
+/// being pure. The dead duplicate is left for dead-node-elimination rather than erased here, which
+/// keeps this pass to one job and means a duplicate whose results are still referenced elsewhere is
+/// not lost.
 class CommonSubexpressionElimination final : public Pass {
  public:
   [[nodiscard]] std::string_view name() const override { return "cse"; }
@@ -47,8 +48,8 @@ class CommonSubexpressionElimination final : public Pass {
       ir::Node* original = it->second;
       for (std::size_t i = 0; i < node->result_count(); ++i) {
         // Only a replacement that moved a use counts as a change. The duplicate node is left for
-        // dce, so a second run sees it again; reporting a change for it every time would keep a
-        // fixpoint loop spinning on a graph that has stopped moving.
+        // dead-node-elimination, so a second run sees it again; reporting a change for it every
+        // time would keep a fixpoint loop spinning on a graph that has stopped moving.
         if (is_used(graph, node->result(i))) {
           changed = true;
         }

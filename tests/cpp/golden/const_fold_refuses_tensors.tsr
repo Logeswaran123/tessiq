@@ -1,4 +1,4 @@
-// RUN: const-fold,dce
+// RUN: const-fold,dead-node-elimination
 // Folding a tensor would materialise it as a dense attribute, which belongs in a constant pool
 // rather than in the IR text.
 graph @g() -> f32[4] {

@@ -66,7 +66,7 @@ fuse-elementwise`. `layout-assign` is left out because every operand there is al
 
 | pass | what it does |
 |---|---|
-| `dce` | Removes nodes whose results nothing reads. |
+| `dead-node-elimination` | Removes nodes whose results nothing reads. |
 | `cse` | Replaces a repeated computation with the first one. |
 | `const-fold` | Evaluates scalar arithmetic on constants. |
 | `algebraic-simplify` | Replaces an operation whose result is already available, such as `x * 1`. |
@@ -135,16 +135,16 @@ Both need a rebuild, and neither needs any change outside the operation's direct
    /// Postcondition: every remaining node has at least one result that is used or returned.
    ///
    /// Legality: removing a node whose result nobody reads cannot change what the graph computes.
-   class DeadCodeElimination final : public Pass {
+   class DeadNodeElimination final : public Pass {
     public:
-     [[nodiscard]] std::string_view name() const override { return "dce"; }
+     [[nodiscard]] std::string_view name() const override { return "dead-node-elimination"; }
      [[nodiscard]] std::string_view description() const override {
        return "remove nodes whose results are never used";
      }
      Result<bool> run(ir::Graph& graph) override;
    };
 
-   TESSIQ_REGISTER_PASS(DeadCodeElimination)
+   TESSIQ_REGISTER_PASS(DeadNodeElimination)
    ```
 
 2. Add the file to `tessiq_ir` in `csrc/CMakeLists.txt`. The library is linked whole, so the

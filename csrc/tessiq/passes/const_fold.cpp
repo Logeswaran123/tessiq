@@ -77,8 +77,8 @@ class ConstantFolding final : public Pass {
       changed = true;
     }
 
-    // The folded node is left in place with no users; dce removes it. Keeping this pass to one
-    // job means a partially folded chain is still a valid graph at every step.
+    // The folded node is left in place with no users; dead-node-elimination removes it. Keeping
+    // this pass to one job means a partially folded chain is still a valid graph at every step.
     return changed;
   }
 

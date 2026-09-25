@@ -7,6 +7,7 @@
 // no GPU and no fixture. It is also the fastest way to see what a pass does to a graph you wrote
 // by hand.
 
+#include <algorithm>
 #include <cstddef>
 #include <fstream>
 #include <iostream>
@@ -36,7 +37,7 @@ Reads textual IR from a file or stdin, runs a pass pipeline, and prints the resu
   -o FILE          write to FILE instead of stdout
   -h, --help       this message
 
-  tessiq-opt --passes=const-fold,dce,cse graph.tsr
+  tessiq-opt --passes=const-fold,dead-node-elimination,cse graph.tsr
 )";
 
 struct Options {
@@ -101,13 +102,17 @@ tessiq::Result<std::string> read_input(const std::string& path) {
 }
 
 void print_pass_list() {
-  for (const std::string& name : tessiq::passes::PassRegistry::instance().names()) {
+  const std::vector<std::string> names = tessiq::passes::PassRegistry::instance().names();
+  // Padded to the widest name plus a gap, so adding a longer pass name does not collapse the
+  // column.
+  std::size_t widest = 0;
+  for (const std::string& name : names) {
+    widest = std::max(widest, name.size());
+  }
+  for (const std::string& name : names) {
     auto pass = tessiq::passes::PassRegistry::instance().create(name);
-    // Padded to the widest name plus a gap, so adding a longer pass name does not silently
-    // collapse the column.
-    constexpr std::size_t kColumn = 18;
-    const std::size_t pad = name.size() < kColumn ? kColumn - name.size() : 1;
-    std::cout << "  " << name << std::string(pad, ' ') << (*pass)->description() << "\n";
+    std::cout << "  " << name << std::string(widest + 2 - name.size(), ' ')
+              << (*pass)->description() << "\n";
   }
 }
 
