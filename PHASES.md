@@ -313,51 +313,58 @@ cluster. Building the seam first makes a Triton-sourced custom operation a new s
 rather than a sixth path wired in by hand.
 
 ### Phase 13: Precompiled kernels (planned)
-Registering a custom operation whose kernel was built ahead of time, so that it can use CUTLASS,
+A custom operation whose kernel is compiled ahead of time with nvcc, so that it can use CUTLASS,
 cuBLAS or anything else that needs host code, which phase 12's run-time compiled source cannot do.
 **Why phase 12 is not enough.** NVRTC compiles device code only. A cuBLAS call is host code with a
 handle. A CUTLASS GEMM does its setup on the host and takes long enough to compile that it is built
 with nvcc ahead of time, for the architecture of the card it will run on.
 **What it adds.**
-- A launcher: one C function per operation, in a shared library the user builds. tessiq loads it
-  and calls it with the operation's tensors, the stream to launch on, and a way to ask tessiq's
-  allocator for workspace. It implements phase 12's kernel interface, so the executor, the registry
-  and the rewriter do not change.
-- Tensors handed over as DLPack rather than `at::Tensor`. A tessiq tensor is a PrivateUse1 tensor,
-  and extension code written for CUDA checks `is_cuda()` and rejects it. DLPack is the standard for
-  passing tensors between frameworks, and it carries the pointer, shape, strides, dtype and device
-  ordinal.
-- A build helper that compiles a launcher for the architecture the driver reports and records that
-  architecture in the library, so a library built for the wrong card is refused at load with a
-  message rather than failing at the first launch, which is how the `sm_80` cubin failed in
-  phase 6.
-- A version number on the launcher interface, checked at load, so an old library and a newer
-  tessiq fail loudly instead of passing arguments one of them does not expect.
-- CUTLASS only in the tests and examples that use it. It is header-only and fetched for those
-  builds, and the backend itself does not depend on it.
+- A precompiled operation is a directory in `csrc/custom_ops/`, like every other custom operation.
+  Its `.cu` is compiled by nvcc when tessiq is built, and its `.cpp` defines the operation as
+  phase 12's do. Nothing about it lives in Python, and adding one is a directory and a rebuild.
+- A launch function that runs host code. Rather than returning a grid, a block and arguments for
+  tessiq to launch, it is given the operation's tensors, the stream to launch on, and a way to ask
+  tessiq's allocator for workspace, and it launches what it needs itself. It fits phase 12's kernel
+  interface, so the executor, the registry and the rewriter do not change.
+- Built for the card it runs on. The build compiles for the architectures CMake detects or is told,
+  and an operation whose kernel was not built for the card it is asked to run on is refused with a
+  message naming both, rather than failing at the first launch, which is how the `sm_80` cubin
+  failed in phase 6.
+- A build without nvcc still builds. A precompiled operation then has no kernel and runs its
+  reference, as every custom operation does on a machine without a GPU.
+- CUTLASS only for the operations that use it. It is header-only and fetched for those builds, and
+  the rest of the backend does not depend on it.
 
 **Rules it keeps.**
-- A launcher uses the stream it is handed and sets any library handle to that stream. Every tessiq
+- A launch uses the stream it is handed and sets any library handle to that stream. Every tessiq
   launch and the cuDNN handle use stream 0 today, and a kernel queued on another stream can run
   before its inputs exist.
 - Workspace comes from tessiq's allocator, so the memory statistics include it and running out goes
   through the allocator's release-and-retry.
-- A precompiled operation still registers a reference implementation, which is the CPU backend's
-  path and the oracle its kernel is tested against.
+- A precompiled operation registers a reference in ATen like any custom operation, which is the
+  CPU backend's path and the oracle its kernel is tested against.
+
+**What changed from the first plan.** It had the user build a shared library for tessiq to load at
+run time, with tensors handed over as DLPack, the interface versioned, and the operation registered
+from Python. Phase 12 settled that an operation lives in `csrc/custom_ops/` and that nothing about
+it lives in Python. A kernel built with the extension needs no loader, no version check and no
+DLPack: it is handed tensors the way phase 12's launch functions are. A library loaded at run time
+is still worth having for a kernel that cannot be built alongside tessiq, and would be a phase of
+its own.
 
 **Milestone:**
 1. A CUTLASS GEMM whose epilogue, the stage that runs on each output element before it is written,
-   adds the bias and applies GELU. It is built ahead of time and registered from Python.
+   adds the bias and applies GELU, in `csrc/custom_ops/`, built with nvcc.
 2. `rewrite-gemm-bias-gelu` maps `addmm` followed by GELU onto it. `tessiq-explain` shows one launch
    where there were two, the result matches eager within the operation's tolerance, and it is timed
    against the current path of a cuBLAS matmul followed by a fused GELU kernel, reported whichever
    way it goes.
-3. A second operation calls cuBLAS directly, to show that a library call registers the same way as
+3. A second operation calls cuBLAS directly, to show that a library call is defined the same way as
    a kernel.
 
 **Why here.** It needs phase 12's kernel interface, registry and rewriter, and without the rewriter
 a GEMM with a fused epilogue only helps models that call it by name. It comes before Triton because
-a Triton kernel compiled ahead of time is one more precompiled launcher.
+a Triton kernel compiled ahead of time is one more precompiled operation.
 
 ### Phase 14: Triton emitter (optional)
 Second `KernelEmitter` implementation generating Triton kernels for fused clusters; autotuning;
