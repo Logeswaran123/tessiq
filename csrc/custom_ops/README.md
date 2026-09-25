@@ -6,17 +6,19 @@ both called directly and inside `torch.compile`.
 
 ```
 custom_ops/
-    CMakeLists.txt      picks up every directory below; never needs editing
+    CMakeLists.txt              picks up every directory below; never needs editing
     rms_norm/
-        rms_norm.cu     the kernel
-        rms_norm.cpp    the operation: its schema, its reference, and how to launch the kernel
+        rms_norm.cu             the kernel
+        rms_norm.cpp            the operation: its schema, its reference, how to launch the kernel
+        rms_norm.pattern.tsr    RMSNorm written out, which its rewrite replaces with one call
     softmax/
-        softmax.cu      the kernel
-        softmax.cpp     the same, and it replaces torch's aten::_softmax
+        softmax.cu              the kernel
+        softmax.cpp             the same, and it replaces torch's aten::_softmax
     fast_gelu/
-        fast_gelu.cpp   an elementwise expression the compiler fuses, so no kernel file
+        fast_gelu.cpp           an elementwise expression the compiler fuses, so no kernel file
+        fast_gelu.pattern.tsr   the sigmoid GELU written out
     swiglu/
-        swiglu.cpp      the same, with two operands
+        swiglu.cpp              an expression with two operands
 ```
 
 Adding an operation is a new directory with those files, and a rebuild. Nothing else in tessiq is
@@ -154,6 +156,56 @@ An operation torch breaks up as soon as it is called, such as `aten::softmax.int
 replaced, because no backend ever sees it. Replace the one it becomes, as `softmax` does.
 `tessiq.library.overrides()` lists what replaces what.
 
+## Rewriting a computation written out in PyTorch
+
+Most models do not call `torch.ops.tessiq.rms_norm`. They write RMSNorm out:
+
+```python
+x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
+```
+
+A pattern lets the operation find that and take its place. `rms_norm.pattern.tsr` is the graph
+AOTAutograd hands tessiq for that line, in tessiq's textual IR:
+
+```
+graph @rms_norm(%x: f32[?], %weight: f32[?]) -> f32[?] {
+  %pow = aten.pow.Tensor_Scalar(%x) {arg1 = 2} : f32[?]
+  %mean = aten.mean.dim(%pow) {arg1 = [-1], arg2 = true} : f32[?]
+  %add = aten.add.Tensor(%mean) {arg1 = "$eps"} : f32[?]
+  %rsqrt = aten.rsqrt.default(%add) : f32[?]
+  %normed = aten.mul.Tensor(%x, %rsqrt) : f32[?]
+  %out = aten.mul.Tensor(%normed, %weight) : f32[?]
+  return %out
+}
+```
+
+and `.pattern()` in `rms_norm.cpp` declares it. The operation then has a pass, `rewrite-rms-norm`,
+that replaces each match with one call. The rules for writing one:
+
+- **Inputs are the operation's tensor arguments,** by name. `%x` and `%weight` above are
+  `rms_norm`'s `x` and `weight`.
+- **`"$name"` captures a scalar argument** from wherever the pattern has it, here `eps` from the
+  `add`. Every other attribute has to match exactly, except that `2` and `2.0` are the same number.
+- **Types are not compared,** so write them as anything, such as `f32[?]`. A match whose tensors
+  are of a type the operation does not declare is left alone.
+- **Write what AOTAutograd emits, not what the model says.** `tessiq.import_graph(tessiq.capture(
+  model, x))` prints it. `1.702 * x`, for instance, arrives as `mul(x) {arg1 = 1.702}`. The two
+  operands of `add` and `mul` match either way round.
+
+A match is refused when a value inside it is read by anything outside it or returned by the graph,
+because the call replaces those values. A training step's forward graph returns the values its
+backward graph reads, so there the rewrite finds nothing, and training runs the operations as they
+were written.
+
+A rewrite changes which operations run, so it runs only when a compile asks for it:
+
+```python
+torch.compile(model, backend="tessiq", options={"device": "tessiq:1", "rewrites": ["rms_norm"]})
+tessiq.explain(model, x, device=tessiq.gpu, rewrites=["rms_norm"])
+```
+
+`tessiq.library.rewrites()` lists what has one.
+
 ## What the definition decides
 
 - **Types.** A schema's `Tensor`, `float`, `int` and `bool` are `const at::Tensor&`, `double`,
@@ -205,6 +257,12 @@ A replacement is checked the same way:
 ```
 ImportError: invalid_argument: custom operation tessiq::softmax in csrc/custom_ops/softmax: it replaces aten::softmax.int, which torch breaks into other operations before any backend sees it; replace one of those instead
 ImportError: invalid_argument: custom operation tessiq::softmax in csrc/custom_ops/softmax: it replaces aten::_softmax, whose schema is aten::_softmax(Tensor self, int dim, bool half_to_float) -> Tensor; the two have to take the same arguments, with the same names and types, and no defaults
+```
+
+A pattern is checked against the schema:
+
+```
+ImportError: invalid_argument: custom operation tessiq::rms_norm in csrc/custom_ops/rms_norm: its pattern csrc/custom_ops/rms_norm/rms_norm.pattern.tsr has the inputs (x, w), and its tensor arguments are (x, weight); they have to be the same names
 ```
 
 The same goes for a launch function whose parameters differ from the schema, a schema that does not

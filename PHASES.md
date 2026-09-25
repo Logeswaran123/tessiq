@@ -21,7 +21,7 @@ work it describes.
 | 9 | Every operation on the device | done |
 | 10 | Where the time goes | done |
 | 11 | Convolution | done |
-| 12 | Custom operations and rewrite passes | planned |
+| 12 | Custom operations and rewrite passes | done |
 | 13 | Precompiled kernels | planned |
 | 14 | Triton emitter | optional |
 | 15 | MLIR export target | optional |
@@ -195,7 +195,7 @@ half times faster. That was one run of the old code while the machine was busy, 
 that convolve on the host are the ones that vary. The four operations left on the host are
 float32 to float32 casts the batch norm decomposition inserts on its running statistics.
 
-### Phase 12: Custom operations and rewrite passes (planned)
+### Phase 12: Custom operations and rewrite passes (done)
 Adding an operation with its own device kernel as one directory under `csrc/custom_ops/`, holding
 the kernel and the C++ that defines the operation, with nothing else in tessiq edited. Then a
 pattern rewriter that finds the subgraph a custom operation replaces. Each rewrite is its own named
@@ -272,6 +272,40 @@ recipe's kernel map, and a rebuild. The four kernel kinds that exist were each w
    rewrites named, `tessiq-explain` shows each matched subgraph as one custom launch, the result
    matches eager, the model still trains, and the time with and without the rewrites is measured
    and reported whichever way it goes.
+
+**What it found.** The three milestones hold. `RMSNormBlock` in `tests/python/test_models.py` is
+RMSNorm, a linear layer and the sigmoid GELU in plain PyTorch. Compiled with
+`options={"rewrites": ["rms_norm", "fast_gelu"]}`, the norm's four kernels become one `rms_norm`
+launch and the GELU becomes a `fast_gelu` call inside the loop it was already fused into, which
+`tools/tessiq_explain.py rmsnorm --rewrites rms_norm,fast_gelu` shows. It matches eager, trains to
+the same parameters, and against the same block compiled as written:
+
+| | kernels | device time | call |
+|---|---|---|---|
+| 8×512, rewritten | 3 | 34 us | 0.181 ms |
+| 8×512, as written | 6 | 60 us | 0.219 ms |
+| 256×4096, rewritten | 3 | 335 us | 0.801 ms |
+| 256×4096, as written | 6 | 364 us | 0.827 ms |
+
+All of the difference is the norm. The GELU was one fused loop before its rewrite too, so the rewrite
+changes the expression in that loop and not the number of launches. At the larger size the 4096 by
+4096 matmul is most of the device time, so the rewrites take 8% off it and 3% off the call. The
+figures are medians of four runs.
+
+What the plan did not expect:
+- **A rewrite does not reach training.** A training step's forward graph returns the values its
+  backward graph reads, and the rule that keeps those values intact means the patterns find
+  nothing there. That is the rule doing its job, and it makes the gain inference only until a
+  custom operation can carry its own backward.
+- **Replacing a torch operation was the more useful half.** A custom operation that declares
+  `.replaces("aten::_softmax")` needs no rewrite named, and the torch operation keeps its backward,
+  so it holds in training too. The encoder block went from 28 kernels to 25 that way.
+- **Some of the plan was not needed.** Patterns are written in the textual IR only, since nothing
+  about an operation lives in Python, and every rewrite runs only when a compile names it, because
+  neither pattern needed the other half of that rule.
+- **Two bugs in existing code surfaced.** A claimed elementwise or reduction kernel that read a
+  transposed or broadcast value never compiled, which 12.5 fixed. And a float64 matmul is claimed
+  and then refused by cuBLAS at the call, which is still open.
 
 **Why here, before Triton.** The Triton emitter needs the same kernel protocol, and the Triton
 kernel people most often write is a hand-written custom operation rather than a generated fused
