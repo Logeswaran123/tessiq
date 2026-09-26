@@ -231,6 +231,32 @@ def test_an_elementwise_kernel_agrees_with_eager(name: str) -> None:
     torch.testing.assert_close(compiled(*inputs), model(*inputs), rtol=1e-6, atol=1e-5)
 
 
+@pytest.mark.parametrize(
+    ("name", "call"),
+    [
+        ("add with alpha", lambda a, b: torch.add(a, b, alpha=2) * 2.0),
+        ("sub with alpha", lambda a, b: torch.sub(a, b, alpha=3) * 2.0),
+        (
+            "gelu's tanh approximation",
+            lambda a, b: torch.nn.functional.gelu(a, approximate="tanh") * b,
+        ),
+    ],
+)
+def test_a_keyword_argument_the_kernel_would_not_read_keeps_the_operation_on_the_host(
+    name: str, call: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+) -> None:
+    # The kernel reads positional arguments only, so it would have computed a + b and the exact
+    # GELU. The operation runs on the host and the multiply after it is the kernel.
+    inputs = (torch.randn(4096), torch.randn(4096))
+    recipe = build_recipe(captured(call, *inputs), tessiq.gpu, use_cache=False)
+    assert list(recipe.kernels) == ["mul"], f"{name}: {list(recipe.kernels)}"
+
+    compiled = torch.compile(
+        call, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(*inputs), call(*inputs), rtol=1e-6, atol=1e-5)
+
+
 # --- reductions ---------------------------------------------------------------------------------
 
 
@@ -402,6 +428,24 @@ def test_a_matmul_agrees_with_eager(
         call, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
     )
     torch.testing.assert_close(compiled(*inputs), call(*inputs), rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize(("beta", "alpha"), [(0.5, 1.0), (1.0, 2.0), (0.0, 1.0)])
+def test_an_addmm_with_a_beta_or_an_alpha_runs_on_the_host_and_agrees_with_eager(
+    beta: float, alpha: float
+) -> None:
+    # cuBLAS is called with both at one, so the kernel would compute the plain addmm.
+    def model(bias: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return torch.addmm(bias, a, b, beta=beta, alpha=alpha) * 2.0
+
+    inputs = (torch.randn(8), torch.randn(4, 16), torch.randn(16, 8))
+    recipe = build_recipe(captured(model, *inputs), tessiq.gpu, use_cache=False)
+    assert "addmm" not in recipe.kernels, list(recipe.kernels)
+
+    compiled = torch.compile(
+        model, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    torch.testing.assert_close(compiled(*inputs), model(*inputs), rtol=1e-5, atol=1e-5)
 
 
 def test_a_float64_linear_layer_runs_on_the_host_and_agrees_with_eager() -> None:

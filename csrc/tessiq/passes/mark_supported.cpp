@@ -54,11 +54,41 @@ bool accepts_the_types(const OpInfo& info, const ir::Node& node) {
   return true;
 }
 
+/// Whether an elementwise or matmul node has an argument its kernel does not read.
+///
+/// Those kernels read positional arguments, which the importer keys `arg0`, `arg1` and so on up to
+/// the operation's arity. A keyword argument keeps its own name, such as `alpha` in
+/// `torch.add(x, y, alpha=2)`, `approximate` in GELU's or `beta` in addmm's, and the kernel would
+/// compute as if it had been left out.
+bool has_an_argument_it_does_not_read(const OpInfo& info, const ir::Node& node) {
+  for (const auto& [name, value] : node.attributes()) {
+    const std::string_view key(name);
+    if (key.substr(0, 7) == "tessiq.") {
+      continue;
+    }
+    if (key.substr(0, 3) != "arg") {
+      return true;
+    }
+    int position = 0;
+    for (const char c : key.substr(3)) {
+      if (c < '0' || c > '9') {
+        return true;
+      }
+      position = (position * 10) + (c - '0');
+    }
+    if (key.size() == 3 || position >= info.arity) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Whether a kernel can be built for this node, given its element types and shapes.
 ///
 /// `OpSupport` answers for the operation and this answers for the node. It says no when a value
-/// has a type the operation does not accept, when the node is a convolution cuDNN has no plan
-/// for, or when an extent is unknown until the call and the kernel would need it compiled in.
+/// has a type the operation does not accept, when an elementwise or matmul node has an argument its
+/// kernel does not read, when the node is a convolution cuDNN has no plan for, or when an extent
+/// is unknown until the call and the kernel would need it compiled in.
 /// Matmuls, reductions and packs take their extents as arguments, and so does a loop that reads
 /// its operands at the output position or in whole runs or cycles of it. A loop that steps
 /// through a permuted operand axis by axis does not.
@@ -68,6 +98,11 @@ bool accepts_the_types(const OpInfo& info, const ir::Node& node) {
 bool has_a_kernel_for_these_types(const ir::Node& node) {
   const OpInfo* info = find_op(node.op());
   if (info != nullptr && !accepts_the_types(*info, node)) {
+    return false;
+  }
+  if (info != nullptr &&
+      (info->category == OpCategory::kElementwise || info->category == OpCategory::kMatmul) &&
+      has_an_argument_it_does_not_read(*info, node)) {
     return false;
   }
   if (info != nullptr && info->category == OpCategory::kCustom) {
