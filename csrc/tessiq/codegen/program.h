@@ -113,4 +113,11 @@ Result<std::pair<int, int>> device_capability(int ordinal);
 /// Loaded modules, for tests that want to know whether one was reused.
 [[nodiscard]] std::size_t loaded_program_count();
 
+/// Whether `stream` is capturing a CUDA graph, so that work queued on it is recorded rather than
+/// run.
+Result<bool> is_capturing(Stream stream);
+
+/// Blocks until the work queued on `stream` has finished.
+Result<void> synchronize(Stream stream);
+
 } // namespace tessiq::codegen

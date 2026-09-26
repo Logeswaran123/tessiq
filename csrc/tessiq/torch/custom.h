@@ -77,10 +77,15 @@ struct CustomOverride {
 /// sign that a model is on the slow path.
 [[nodiscard]] Result<std::int64_t> custom_op_fallbacks(std::string_view name);
 
+/// Every custom operation whose host code this build compiled, as `tessiq::<name>`, sorted.
+[[nodiscard]] std::vector<std::string> precompiled_op_names();
+
 /// Compiles custom operation `name` for CUDA device `ordinal` now, rather than on its first call.
 ///
 /// A kernel is compiled; an expression is compiled once for each type it declares. The error of one
-/// that does not compile names the operation and carries the compiler's log.
+/// that does not compile names the operation and carries the compiler's log. Host code is checked
+/// against the card instead, and the error of host code not built for it names both
+/// architectures. An operation whose host code this build did not compile has nothing to do.
 [[nodiscard]] Result<void> compile_custom_op(std::string_view name, int ordinal);
 
 /// What a custom operation is once it has been checked and registered. Private to custom.cpp.

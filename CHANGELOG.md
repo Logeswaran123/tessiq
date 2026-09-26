@@ -150,6 +150,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   tessiq device. `set_` is native, and `torch.tessiq.device` selects a device for a block.
 - `torch.accelerator`'s memory functions: `memory_allocated`, `max_memory_allocated`,
   `memory_reserved`, `memory_stats`, the two resets, `empty_cache` and `get_memory_info`.
+- Precompiled custom operations. Host code in `<name>.nvcc.cu`, declared with `.precompiled()`, is
+  compiled by nvcc when tessiq is built, for the machine's GPUs unless `CMAKE_CUDA_ARCHITECTURES`
+  says otherwise. It is handed the call's tensors, the stream and workspace from tessiq's
+  allocator, and it is refused, with both architectures named, on a card it was not built for.
+  `layer_norm` is the first: two launches, with each row's statistics in workspace between them.
 
 ### Changed
 

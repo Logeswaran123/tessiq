@@ -96,3 +96,21 @@ def test_a_matmul_goes_to_the_stream_it_is_handed() -> None:
     out = torch.empty(64, 48, device=tessiq.gpu)
     inputs = [a.to(tessiq.gpu), b.to(tessiq.gpu)]
     torch.testing.assert_close(replayed(kernel, inputs, out).cpu(), a @ b)
+
+
+def test_precompiled_host_code_goes_to_the_stream_it_is_handed() -> None:
+    if "tessiq::layer_norm" not in tessiq.library.precompiled():
+        pytest.skip("this build had no nvcc, so layer_norm has no host code")
+
+    def normalised(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        out: torch.Tensor = torch.ops.tessiq.layer_norm(x, weight, bias, 1e-5)
+        return out
+
+    x, weight, bias = torch.randn(64, 128), torch.randn(128), torch.randn(128)
+    recipe = build_recipe(captured(normalised, x, weight, bias), tessiq.gpu, use_cache=False)
+    (kernel,) = recipe.kernels.values()
+
+    out = torch.empty(64, 128, device=tessiq.gpu)
+    inputs = [x.to(tessiq.gpu), weight.to(tessiq.gpu), bias.to(tessiq.gpu)]
+    expected = torch.nn.functional.layer_norm(x, (128,), weight, bias, 1e-5)
+    torch.testing.assert_close(replayed(kernel, inputs, out).cpu(), expected, rtol=1e-5, atol=1e-5)

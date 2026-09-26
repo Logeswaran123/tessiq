@@ -107,6 +107,7 @@ add_library(tessiq_codegen STATIC
   tessiq/codegen/kernel.cpp
   tessiq/codegen/nvrtc.cpp
   tessiq/codegen/pack.cpp
+  tessiq/codegen/precompiled.cpp
   tessiq/codegen/program.cpp
   tessiq/codegen/reduction.cpp
   tessiq/codegen/timing.cpp)

@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,6 +32,7 @@
 #include <torch/library.h>
 
 #include "tessiq/codegen/call.h"
+#include "tessiq/codegen/precompiled.h"
 #include "tessiq/codegen/program.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/ir/types.h"
@@ -39,6 +41,7 @@
 #include "tessiq/passes/pass.h"
 #include "tessiq/passes/replace_op.h"
 #include "tessiq/passes/rewrite.h"
+#include "tessiq/runtime/allocator.h"
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/support/result.h"
@@ -77,8 +80,11 @@ struct RegisteredOp {
   /// The same torch operation as a graph spells it (`aten._softmax.default`).
   std::string replaced_spelling;
 
-  /// The kernel file's text. Empty for an operation defined by an expression.
+  /// The kernel file's text. Empty unless the operation's kernel is compiled at run time.
   std::string_view source;
+
+  /// The operation's host code, when it declares some and this build compiled it.
+  const codegen::Precompiled* precompiled = nullptr;
 
   /// The schema as parsed when the definition was checked, handed to torch to register.
   std::unique_ptr<c10::FunctionSchema> schema;
@@ -93,8 +99,15 @@ struct RegisteredOp {
   std::map<int, const codegen::Program*> programs;
   /// The expression compiled for each element type and CUDA ordinal. Guarded by `mutex`.
   std::map<std::pair<at::ScalarType, int>, std::shared_ptr<Kernel>> expressions;
+  /// The CUDA ordinals the host code has been checked to load on. Guarded by `mutex`.
+  std::set<int> loads_on;
 
-  [[nodiscard]] bool has_kernel() const { return !source.empty(); }
+  [[nodiscard]] bool has_kernel() const { return !source.empty() || precompiled != nullptr; }
+
+  /// Whether a call can run on a GPU at all: false for host code this build did not compile.
+  [[nodiscard]] bool runs_on_gpu() const {
+    return has_kernel() || !definition->expression_text().empty();
+  }
 };
 
 namespace {
@@ -351,10 +364,16 @@ Result<std::unique_ptr<RegisteredOp>> check_definition(const CustomOp& op) {
 
   const bool has_expression = !op.expression_text().empty();
   const bool has_launch = static_cast<bool>(op.launch_function());
-  if (has_expression == has_launch) {
+  const int kinds = static_cast<int>(has_expression) + static_cast<int>(has_launch) +
+                    static_cast<int>(op.is_precompiled());
+  if (kinds != 1) {
     return invalid_argument(
         std::string("it needs one of .launch(fn), for a kernel in a .cu file, ") +
-        "or .expression(text), and it has " + (has_launch ? "both" : "neither"));
+        ".expression(text), or .precompiled(), for host code in a .nvcc.cu " + "file, and it has " +
+        (kinds == 0 ? "none" : std::to_string(kinds)));
+  }
+  if (op.is_precompiled()) {
+    checked->precompiled = codegen::find_precompiled(op.name());
   }
   if (has_expression && std::cmp_not_equal(checked->arity, checked->parameters.size())) {
     return invalid_argument("an operation defined by an expression takes only tensors");
@@ -405,6 +424,9 @@ std::optional<int> cuda_ordinal_of(const c10::Device& device) {
 /// Every tensor has to be on the same GPU and of a type the operation declares. An expression is
 /// compiled for one element type, so its operands also have to share one.
 std::optional<int> runnable_on(const RegisteredOp& op, const std::vector<c10::IValue>& arguments) {
+  if (!op.runs_on_gpu()) {
+    return std::nullopt;
+  }
   const std::vector<at::ScalarType>& declared = op.definition->element_types();
   std::optional<c10::Device> device;
   std::optional<at::ScalarType> dtype;
@@ -477,6 +499,120 @@ expression_for(RegisteredOp& op, at::ScalarType dtype, int ordinal) {
   return *compiled;
 }
 
+/// Makes `op`'s kernel ready to run on CUDA device `ordinal`: compiles a `.cu` kernel, or checks
+/// that host code was built for the card's architecture.
+Result<void> ready_on(RegisteredOp& op, int ordinal) {
+  if (op.precompiled == nullptr) {
+    TESSIQ_RETURN_IF_ERROR(program_for(op, ordinal));
+    return ok();
+  }
+  const std::scoped_lock guard(op.mutex);
+  if (!op.loads_on.contains(ordinal)) {
+    TESSIQ_RETURN_IF_ERROR(codegen::check_runs_on(*op.precompiled, ordinal));
+    op.loads_on.insert(ordinal);
+  }
+  return ok();
+}
+
+codegen::ElementType element_type(at::ScalarType type) {
+  switch (type) {
+  case at::kFloat:
+    return codegen::ElementType::kFloat32;
+  case at::kDouble:
+    return codegen::ElementType::kFloat64;
+  case at::kHalf:
+    return codegen::ElementType::kFloat16;
+  case at::kBFloat16:
+    return codegen::ElementType::kBFloat16;
+  case at::kInt:
+    return codegen::ElementType::kInt32;
+  case at::kLong:
+    return codegen::ElementType::kInt64;
+  case at::kBool:
+    return codegen::ElementType::kBool;
+  default:
+    return codegen::ElementType::kOther;
+  }
+}
+
+codegen::DeviceTensor device_tensor(const at::Tensor& tensor) {
+  codegen::DeviceTensor device;
+  device.data = tensor.data_ptr();
+  device.sizes.assign(tensor.sizes().begin(), tensor.sizes().end());
+  device.type = element_type(tensor.scalar_type());
+  return device;
+}
+
+/// Gives back the workspace a call took on tessiq device `index`, once nothing still reads it.
+///
+/// Every launch tessiq makes goes on the legacy default stream, which is ordered against the rest
+/// of the device's work, so a block given back is not handed out again before this call's work
+/// finishes. Work on any other stream lacks that ordering, so the stream is waited for first. A
+/// stream capturing a CUDA graph cannot be waited for, and every replay of the graph reads the
+/// blocks again, so those are kept for the life of the process.
+Result<void> give_back(const std::vector<void*>& blocks, int index, codegen::Stream stream) {
+  if (blocks.empty()) {
+    return ok();
+  }
+  if (stream.handle != nullptr) {
+    TESSIQ_ASSIGN_OR_RETURN(const bool capturing, codegen::is_capturing(stream));
+    if (capturing) {
+      TESSIQ_LOG(kDebug, kLogModule)
+          << "keeping " << blocks.size() << " workspace block(s) that a CUDA graph captured";
+      return ok();
+    }
+    TESSIQ_RETURN_IF_ERROR(codegen::synchronize(stream));
+  }
+  CachingAllocator& allocator = allocator_at(index);
+  for (void* block : blocks) {
+    allocator.deallocate(block);
+  }
+  return ok();
+}
+
+/// Runs `op`'s host code over `arguments`, whose tensors are packed, writing `out`.
+///
+/// False, having queued nothing, when the host code declines the call.
+Result<bool> run_host_code(RegisteredOp& op,
+                           const std::vector<c10::IValue>& arguments,
+                           const at::Tensor& out,
+                           int ordinal,
+                           codegen::Stream stream) {
+  TESSIQ_RETURN_IF_ERROR(ready_on(op, ordinal));
+  std::vector<codegen::DeviceTensor> inputs;
+  std::vector<codegen::Scalar> scalars;
+  for (const c10::IValue& argument : arguments) {
+    if (argument.isTensor()) {
+      inputs.push_back(device_tensor(argument.toTensor()));
+    } else if (argument.isDouble()) {
+      scalars.emplace_back(argument.toDouble());
+    } else if (argument.isInt()) {
+      scalars.emplace_back(argument.toInt());
+    } else {
+      scalars.emplace_back(argument.toBool());
+    }
+  }
+  const int index = static_cast<int>(out.device().index());
+  codegen::Call call(std::move(inputs),
+                     std::move(scalars),
+                     device_tensor(out),
+                     stream.handle,
+                     ordinal,
+                     [index](std::size_t bytes) -> void* {
+                       const Result<void*> block = allocator_at(index).allocate(bytes);
+                       return block.has_value() ? *block : nullptr;
+                     });
+  const Result<void> ran = codegen::run_precompiled(*op.precompiled, call);
+  TESSIQ_RETURN_IF_ERROR(give_back(call.workspaces(), index, stream));
+  TESSIQ_RETURN_IF_ERROR(ran);
+  if (call.declined()) {
+    TESSIQ_LOG(kDebug, kLogModule)
+        << op.qualified << " declines a call, so it runs its reference: " << call.reason();
+    return false;
+  }
+  return true;
+}
+
 /// Launches `op`'s kernel over `arguments`, whose tensors are packed, writing `out`.
 ///
 /// Returns false, having launched nothing, when the launch function refuses the arguments with
@@ -491,6 +627,9 @@ Result<bool> launch_kernel(RegisteredOp& op,
   if (out.numel() == 0) {
     // Nothing to compute, and a launch of no blocks is an error.
     return true;
+  }
+  if (op.precompiled != nullptr) {
+    return run_host_code(op, arguments, out, ordinal, stream);
   }
   custom_ops::Launch launch;
   try {
@@ -770,12 +909,27 @@ Result<void> register_rewrite(const RegisteredOp& op) {
   return ok();
 }
 
+/// How `op` runs, for the log.
+std::string how_it_runs(const RegisteredOp& op) {
+  if (op.precompiled != nullptr) {
+    return "with host code built for " + codegen::architecture_names(op.precompiled->architectures);
+  }
+  if (!op.runs_on_gpu()) {
+    return "with no host code in this build, so it runs its reference";
+  }
+  return op.has_kernel() ? "with a kernel" : "as an expression";
+}
+
 Result<void> register_one(const CustomOp& definition) {
   TESSIQ_ASSIGN_OR_RETURN(std::unique_ptr<RegisteredOp> op, check_definition(definition));
   if (find_qualified(op->qualified) != nullptr) {
     return invalid_argument("it is defined twice");
   }
-  TESSIQ_RETURN_IF_ERROR(register_with_compiler(*op));
+  // Host code this build did not compile leaves nothing for the compiler to claim, so the
+  // operation stays on the host, where its reference runs.
+  if (op->runs_on_gpu()) {
+    TESSIQ_RETURN_IF_ERROR(register_with_compiler(*op));
+  }
   TESSIQ_RETURN_IF_ERROR(register_with_torch(*op));
   if (!op->replaced.empty()) {
     TESSIQ_RETURN_IF_ERROR(register_replacement(*op));
@@ -783,8 +937,7 @@ Result<void> register_one(const CustomOp& definition) {
   if (!definition.pattern_file().empty()) {
     TESSIQ_RETURN_IF_ERROR(register_rewrite(*op));
   }
-  TESSIQ_LOG(kDebug, kLogModule) << "registered " << op->qualified
-                                 << (op->has_kernel() ? " with a kernel" : " as an expression");
+  TESSIQ_LOG(kDebug, kLogModule) << "registered " << op->qualified << " " << how_it_runs(*op);
   const std::string qualified = op->qualified;
   registered_ops().emplace(qualified, std::move(op));
   return ok();
@@ -923,7 +1076,32 @@ Result<void> register_custom_ops() {
                                              definition->directory());
     }
   }
+
+  // Host code nothing declares would never run, and two files for one operation would leave which
+  // one runs to the order they load in.
+  std::set<std::string_view> seen;
+  for (const codegen::Precompiled* entry : codegen::precompiled_operations()) {
+    const std::string qualified = std::string(kNamespace) + "::" + std::string(entry->name);
+    if (!seen.insert(entry->name).second) {
+      return invalid_argument("two .nvcc.cu files register host code for " + qualified);
+    }
+    const RegisteredOp* op = find_qualified(qualified);
+    if (op == nullptr || !op->definition->is_precompiled()) {
+      return invalid_argument("a .nvcc.cu file registers host code for " + qualified +
+                              ", which no .cpp defines with .precompiled()");
+    }
+  }
   return ok();
+}
+
+std::vector<std::string> precompiled_op_names() {
+  std::vector<std::string> names;
+  for (const auto& [qualified, op] : registered_ops()) {
+    if (op->precompiled != nullptr) {
+      names.push_back(qualified);
+    }
+  }
+  return names;
 }
 
 std::vector<std::string> custom_op_names() {
@@ -968,7 +1146,9 @@ Result<void> compile_custom_op(std::string_view name, int ordinal) {
     return not_found(std::string(name) + " is not a custom operation");
   }
   if (op->has_kernel()) {
-    TESSIQ_RETURN_IF_ERROR(program_for(*op, ordinal));
+    return ready_on(*op, ordinal);
+  }
+  if (!op->runs_on_gpu()) {
     return ok();
   }
   for (const at::ScalarType dtype : op->definition->element_types()) {
@@ -1039,7 +1219,7 @@ Result<std::vector<std::shared_ptr<Kernel>>> custom_kernels(const ir::Graph& gra
                                      << " with arguments its schema does not declare";
       continue;
     }
-    TESSIQ_RETURN_IF_ERROR(program_for(*op, ordinal));
+    TESSIQ_RETURN_IF_ERROR(ready_on(*op, ordinal));
     kernels.push_back(
         std::make_shared<CustomKernel>(std::move(call), op, std::move(*scalars), ordinal));
   }
