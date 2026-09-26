@@ -1,49 +1,41 @@
 # Custom operations
 
-Each directory here is one operation that ships with tessiq. It is compiled into the extension,
-registered when `tessiq` is imported, and called as `torch.ops.tessiq.<name>`. It runs on the GPU
-both called directly and inside `torch.compile`.
+Each directory here is one operation. It is compiled into the extension, registered on
+`import tessiq`, and callable as `torch.ops.tessiq.<name>`, eagerly on tessiq tensors and inside
+`torch.compile`. Adding one is a new directory and a rebuild; nothing else in tessiq changes.
 
 ```
 custom_ops/
-    CMakeLists.txt              picks up every directory below; never needs editing
+    CMakeLists.txt                      picks up every directory; never needs editing
     rms_norm/
-        rms_norm.cu             the kernel
-        rms_norm.cpp            the operation: its schema, its reference, how to launch the kernel
-        rms_norm.pattern.tsr    RMSNorm written out, which its rewrite replaces with one call
-    softmax/
-        softmax.cu              the kernel
-        softmax.cpp             the same, and it replaces torch's aten::_softmax
+        rms_norm.cpp                    schema, reference, launch function
+        rms_norm.cu                     kernel, compiled at run time with NVRTC
+        rms_norm.pattern.tsr            RMSNorm written out, for its rewrite
+    softmax/                            .cu kernel; replaces aten::_softmax
+    fast_gelu/                          elementwise expression, plus a pattern
+    swiglu/                             elementwise expression with two operands
     layer_norm/
-        layer_norm.nvcc.cu      host code and two kernels, which nvcc compiles when tessiq is built
-        layer_norm.cpp          the operation, declared .precompiled()
-    gemm_bias_gelu/
-        gemm_bias_gelu.nvcc.cu        a CUTLASS GEMM whose epilogue adds the bias and applies GELU
-        gemm_bias_gelu.cpp            the operation, declared .precompiled()
-        gemm_bias_gelu.pattern.tsr    a linear layer followed by GELU, which its rewrite replaces
-    gemm_bias_gelu_tanh/
-        gemm_bias_gelu_tanh.nvcc.cu       one cuBLASLt call, and no kernel of its own
-        gemm_bias_gelu_tanh.cpp           the operation, declared .precompiled()
-        gemm_bias_gelu_tanh.pattern.tsr   a linear layer followed by the tanh GELU
-    fast_gelu/
-        fast_gelu.cpp           an elementwise expression the compiler fuses, so no kernel file
-        fast_gelu.pattern.tsr   the sigmoid GELU written out
-    swiglu/
-        swiglu.cpp              an expression with two operands
+        layer_norm.cpp                  declared .precompiled()
+        layer_norm.nvcc.cu              host code, compiled by nvcc at build time
+    gemm_bias_gelu/                     CUTLASS host code, plus a pattern
+    gemm_bias_gelu_tanh/                cuBLASLt host code, plus a pattern
 ```
 
-Adding an operation is a new directory with those files, and a rebuild. Nothing else in tessiq is
-edited.
+An operation's kernel is one of:
 
-## Adding a kernel
+| Kind | Declared with | Built |
+|---|---|---|
+| CUDA kernel in `<name>.cu` | `.launch(fn)` | NVRTC, on first use on each GPU |
+| Elementwise expression | `.expression(text)` | Fused into the compiler's generated loops |
+| Host code in `<name>.nvcc.cu` | `.precompiled()` | nvcc, at build time |
 
-Take a hypothetical `scale_rows`, which multiplies each row of a matrix by its own factor.
+## A CUDA kernel
 
-**1. Make a directory named after the operation.** Create `custom_ops/scale_rows/`.
+Take `scale_rows`, which multiplies each row of a matrix by its own factor.
 
-**2. Write the kernel in `scale_rows.cu`.** Declare it `extern "C" __global__` and give it the
-operation's name. Its parameters come in a fixed order: a pointer to each tensor argument in schema
-order, then a pointer to the result, then the launch arguments.
+`scale_rows/scale_rows.cu` holds an `extern "C" __global__` function named after the operation.
+Its parameters are a pointer per tensor argument in schema order, then the result, then the launch
+arguments:
 
 ```cuda
 extern "C" __global__ void scale_rows(const float* x, const float* factors, float* out,
@@ -55,13 +47,10 @@ extern "C" __global__ void scale_rows(const float* x, const float* factors, floa
 }
 ```
 
-Every tensor the kernel receives is packed, so it can index each one from its first element. The
-file is compiled on its own with NVRTC, for whichever GPU it runs on, the first time it runs there.
-It cannot `#include` other files of yours.
+Tensors arrive packed, so index from the first element. The file is compiled on its own and can't
+`#include` other project files.
 
-**3. Define the operation in `scale_rows.cpp`.** The reference says what the operation computes, in
-ATen. The launch function takes the same arguments followed by the result, and says how to launch
-the kernel over them:
+`scale_rows/scale_rows.cpp` gives the schema, the ATen reference, and how to launch:
 
 ```cpp
 #include <ATen/ATen.h>
@@ -73,12 +62,11 @@ namespace {
 
 using tessiq::custom_ops::Launch;
 
-// What the kernel computes, in ATen.
 at::Tensor scale_rows(const at::Tensor& x, const at::Tensor& factors) {
   return x * factors.unsqueeze(-1);
 }
 
-// One block of 256 threads per row.
+// One 256-thread block per row.
 Launch launch(const at::Tensor& x, const at::Tensor& /*factors*/, const at::Tensor& /*out*/) {
   Launch launch;
   launch.grid = {static_cast<std::uint32_t>(x.size(0)), 1, 1};
@@ -94,19 +82,18 @@ TESSIQ_CUSTOM_OP(scale_rows, "(Tensor x, Tensor factors) -> Tensor")
     .launch(launch);
 ```
 
-That is the whole definition. The kernel is found by name: `scale_rows.cu` in the same directory,
-entry point `scale_rows`. If yours is named differently, add `.kernel("other.cu", "other_name")`.
+The kernel is found by name. Use `.kernel("other.cu", "entry")` if it lives elsewhere. After
+`pip install -e . --no-build-isolation`, `tessiq.library.check("tessiq::scale_rows")` compiles the
+kernel and raises with the NVRTC log on failure. The test suite checks every operation this way.
 
-**4. Rebuild and check.** `pip install -e . --no-build-isolation` picks up the new directory. Then
-`torch.ops.tessiq.scale_rows` exists, and `tessiq.library.check("tessiq::scale_rows")` compiles the
-kernel and raises with the compiler's log if it does not compile. The test suite compiles every
-operation here, so a broken kernel fails there rather than in someone's model.
+Launch arguments are typed: each entry must have the C++ type of the kernel parameter it fills
+(`std::int64_t` for `long long`, `std::int32_t` for `int`, `float`, `double`). Pass
+`static_cast<float>(eps)` for a `float` parameter.
 
-## Adding an elementwise operation
+## An elementwise expression
 
-An operation that computes each element of its result from the elements at the same position, such
-as an activation function, needs no kernel. Give an expression instead, and the compiler writes it
-into the same loop as the operations around it:
+An operation that computes each output element from the inputs at the same position needs no
+kernel. Its expression is fused into the surrounding loop:
 
 ```cpp
 at::Tensor fast_gelu(const at::Tensor& x) { return x * (1.702 * x).sigmoid(); }
@@ -117,20 +104,15 @@ TESSIQ_CUSTOM_OP(fast_gelu, "(Tensor x) -> Tensor")
     .dtypes({at::kFloat, at::kDouble});
 ```
 
-`$0` is the first operand's element and `$1` the second's. Write constants as `scalar_t(1.702)`,
-never as a bare `1.702`, which C++ reads as a double and which turns a float32 kernel into double
-arithmetic. The registration refuses the bare form. Every argument of such an operation is a
-tensor, and they broadcast against each other like the operands of torch's own `add`.
+`$0`, `$1` are the operands. Write constants as `scalar_t(1.702)`; a bare `1.702` is a double and
+would promote float32 math, so registration rejects it. All arguments are tensors and broadcast
+like `torch.add`'s.
 
-## Adding host code
+## Host code
 
-A `.cu` kernel is compiled at run time with NVRTC, which compiles device code only. An operation that
-needs host code puts it in `<name>.nvcc.cu` instead, which nvcc compiles when tessiq is built. Host
-code can launch several kernels, keep workspace between them, call a library, or use a header NVRTC
-does not have. `layer_norm` launches one kernel for each row's statistics and another to apply them,
-with the statistics in workspace between the two.
-
-**1. Declare it** in `layer_norm.cpp`, with `.precompiled()` where a kernel would have `.launch()`:
+NVRTC only compiles device code. An operation that needs host code (several launches, workspace
+between them, a library call, headers NVRTC lacks) declares `.precompiled()` and puts the code in
+`<name>.nvcc.cu`, which nvcc compiles at build time:
 
 ```cpp
 TESSIQ_CUSTOM_OP(layer_norm, "(Tensor x, Tensor weight, Tensor bias, float eps) -> Tensor")
@@ -139,9 +121,6 @@ TESSIQ_CUSTOM_OP(layer_norm, "(Tensor x, Tensor weight, Tensor bias, float eps) 
     .dtypes({at::kFloat});
 ```
 
-**2. Write the host code** in `layer_norm.nvcc.cu`. It includes `tessiq/codegen/precompiled.h`, which
-has no torch in it, and registers one function with `TESSIQ_PRECOMPILED`:
-
 ```cuda
 #include "tessiq/codegen/precompiled.h"
 
@@ -149,7 +128,6 @@ namespace {
 
 void run(tessiq::codegen::Call& call) {
   const tessiq::codegen::DeviceTensor& x = call.input(0);
-  const tessiq::codegen::DeviceTensor& weight = call.input(1);
   ...
   if (weight.numel() != columns || bias.numel() != columns) {
     call.decline("the kernel reads one weight and one bias per column");
@@ -169,92 +147,53 @@ void run(tessiq::codegen::Call& call) {
 TESSIQ_PRECOMPILED(layer_norm, run)
 ```
 
-The `Call` holds:
+`precompiled.h` has no PyTorch dependency. The `Call` provides:
 
-- **Tensors:** `input(i)`, counting only the tensor arguments, and the result, `output()`. Each is
-  packed and on the call's device, as a data pointer, its sizes and an element type.
-- **Scalars:** `real(i)`, `integer(i)` and `flag(i)` for float, int and bool, counting only the
-  scalar arguments.
-- **The stream:** `stream()`, a `cudaStream_t`. Every launch and library call goes on it; work
-  queued anywhere else can run before its inputs exist.
-- **Workspace:** `workspace(bytes)`, from tessiq's allocator on the call's device, so the memory
-  statistics count it. It stays valid until the work the call queued has finished. It is null,
-  having failed the call, when the device has none to give.
-- **Declining:** `decline(reason)` hands the call to the reference, as `TORCH_CHECK` does in a
-  launch function.
+| | |
+|---|---|
+| `input(i)`, `output()` | Tensor arguments (counted separately from scalars) and the result: packed, on the call's device |
+| `real(i)`, `integer(i)`, `flag(i)` | `float`, `int` and `bool` arguments, counted separately from tensors |
+| `stream()` | The `cudaStream_t` all work must go on |
+| `device()` | The CUDA device, which is current when `run` is called |
+| `workspace(bytes)` | Memory from tessiq's allocator, valid until the queued work finishes. Null, with the call failed, if unavailable |
+| `decline(reason)` | Run the reference instead |
+| `fail(reason)` | Fail the call |
 
-The call's device is current when the function runs, and a launch that fails fails the call with
-CUDA's message.
+A launch error left after `run` returns fails the call with CUDA's message.
 
-**3. Rebuild.** nvcc compiles the file for `CMAKE_CUDA_ARCHITECTURES`, which is the GPUs in the
-machine unless the build is told otherwise:
-
-```
-pip install -e . --no-build-isolation
-pip install -e . --no-build-isolation -Ccmake.define.CMAKE_CUDA_ARCHITECTURES="89;120"
-```
-
-On a card it was not built for, the operation is refused before it runs, with both architectures
-named. That happens called directly, from `tessiq.library.check()`, and in `torch.compile`:
+Precompiled code is built for `CMAKE_CUDA_ARCHITECTURES`, `native` by default. On a GPU it wasn't
+built for, the operation is refused before it runs, eagerly, from `tessiq.library.check()` and in
+`torch.compile`:
 
 ```
 RuntimeError: external: tessiq::layer_norm was built for sm_89, and CUDA device 0 is sm_120; rebuild tessiq with CMAKE_CUDA_ARCHITECTURES including 120
 ```
 
-The check asks the CUDA runtime whether it can load the file on the card. An architecture listed
-without `-real` also carries PTX, which the driver can compile for a newer card, and that passes.
+An architecture listed without `-real` also embeds PTX, which the driver can JIT for newer GPUs.
+Without nvcc, `.nvcc.cu` files are skipped and their operations always run the reference.
+`tessiq.library.precompiled()` lists the ones that were built.
 
-`tessiq.library.precompiled()` lists the operations whose host code the build compiled. A build
-without nvcc leaves the `.nvcc.cu` files out, and their operations run the reference everywhere.
+**CUTLASS.** A `.nvcc.cu` that includes a `cutlass/` header gets CUTLASS 4.8.0 (header-only)
+downloaded at configure time. Offline, point the build at a checkout with
+`-Ccmake.define.FETCHCONTENT_SOURCE_DIR_CUTLASS=/path/to/cutlass`. `gemm_bias_gelu` uses it: a
+float32 SIMT GEMM whose epilogue applies bias and GELU before writing. It splits K across slices,
+synchronised by per-tile semaphores in workspace, when the output has too few tiles to fill the
+GPU.
 
-### Using CUTLASS
-
-A `.nvcc.cu` that includes a header from `cutlass/` gets CUTLASS 4.8.0, which is header-only,
-downloaded when tessiq is configured. A build with no such file never downloads it. On a machine
-that cannot download, point the build at a checkout:
-
-```
-pip install -e . --no-build-isolation -Ccmake.define.FETCHCONTENT_SOURCE_DIR_CUTLASS=/path/to/cutlass
-```
-
-`gemm_bias_gelu` is one. It computes `gelu(x @ weight.T + bias)` with one CUTLASS GEMM whose
-epilogue, the stage that turns each block's accumulators into output elements, adds the bias and
-applies GELU before writing. Without it a linear layer followed by GELU writes the product and a
-second kernel reads it back. Its pattern is that pair as `nn.Linear` and `F.gelu` emit it, so
-`rewrites=["gemm_bias_gelu"]` puts it in a model that never names it.
-
-It uses CUTLASS's float32 SIMT kernel rather than TF32 tensor cores, so it rounds like cuBLAS's
-SGEMM, which tessiq's matmuls call. When the output has too few tiles to fill the GPU, K is split
-into slices that take turns adding into the output, through a semaphore per tile in workspace.
-
-### Calling a library
-
-Host code can call a library instead of launching a kernel, and is declared the same way. A
-`.nvcc.cu` that includes a cuBLAS header, `cublas_v2.h` or `cublasLt.h`, has the extension linked
-against cuBLAS and cuBLASLt, the same libraries tessiq's own matmuls call.
-
-`gemm_bias_gelu_tanh` is one. It is `gemm_bias_gelu` with the tanh approximation of GELU, computed
-by one `cublasLtMatmul` whose GELU_BIAS epilogue adds the bias and applies GELU before writing. Its
-rewrite matches a linear layer followed by `F.gelu(..., approximate="tanh")`, which
-`gemm_bias_gelu`'s leaves alone. A library call has the same obligations as a launch:
-
-- **The stream.** cuBLASLt takes the stream on each call, so the call is given `call.stream()`.
-  A library whose handle holds a stream, as cuBLAS's does, has the handle set to it before the
+**Libraries.** A `.nvcc.cu` that includes `cublas_v2.h` or `cublasLt.h` is linked against cuBLAS
+and cuBLASLt. `gemm_bias_gelu_tanh` is a single `cublasLtMatmul` with the GELU_BIAS epilogue:
+- It passes `call.stream()` to each call. A cuBLAS handle holds a stream, so set it before each
   call.
-- **Workspace.** The algorithm cuBLASLt chooses says how much workspace it needs, and that much
-  comes from `call.workspace()`.
-- **Handles.** A handle costs more to create than a multiply, so there is one per device, created
-  the first time and kept.
+- It takes the workspace cuBLASLt's chosen algorithm asks for from `call.workspace()`.
+- It keeps one handle per device.
+- It caches the chosen algorithm by shape and pointer alignment. cuBLASLt assumes 256-byte
+  alignment unless told otherwise, and a tensor at an offset has less.
 
-Choosing an algorithm also takes longer than running a small one, so the choice is kept for each
-shape. It depends on how the pointers are aligned: cuBLASLt otherwise assumes 256 bytes, and a
-tensor viewed at an offset has fewer.
+## Replacing a PyTorch operation
 
-## Replacing a torch operation
-
-An operation can stand in for one of torch's own. Then a model does not have to call it by name:
-it calls the torch operation, and the custom one runs wherever it declares the types. `softmax`
-replaces `aten::_softmax`, which `torch.softmax`, `F.softmax` and `nn.Softmax` all reach:
+`.replaces()` makes a custom operation the implementation of a PyTorch one, so models get it
+without calling it by name. `softmax` replaces `aten::_softmax`, which `torch.softmax`,
+`F.softmax` and `nn.Softmax` all reach:
 
 ```cpp
 at::Tensor softmax(const at::Tensor& self, std::int64_t dim, bool half_to_float) {
@@ -268,43 +207,30 @@ TESSIQ_CUSTOM_OP(softmax, "(Tensor self, int dim, bool half_to_float) -> Tensor"
     .replaces("aten::_softmax");
 ```
 
-The schema has to take the same arguments as the torch operation's, with the same names and types,
-and the reference is usually the torch operation itself. The replacement happens in three places:
+The schema must match the PyTorch operation's argument names and types. The replacement applies
+in three places:
 
-- **Called on a tessiq tensor**, the custom operation is the torch operation's implementation on
-  tessiq's devices. For a type it does not declare, it runs the torch operation on the host, and
-  counts that in `fallbacks()`.
-- **In a compiled graph**, a pass named `override-softmax` runs first and makes each
-  `aten._softmax.default` node a `tessiq.softmax.default` node, where every tensor has a declared
-  type. `tessiq.explain` shows it in the pass-by-pass section:
+- **Eager.** On tessiq devices it is the operation's implementation. For undeclared types it runs
+  the PyTorch op on the host and counts a fallback.
+- **Compiled graphs.** An `override-softmax` pass turns `aten._softmax.default` nodes into
+  `tessiq.softmax.default` wherever the types are declared.
+- **Decomposition.** tessiq's decomposition table keeps `_softmax` whole where the custom
+  operation applies, and decomposes it elsewhere.
 
-  ```
-  override-softmax: 1 line(s) rewritten
-    -  %_softmax = aten._softmax.default(%mul) {arg1 = -1, arg2 = false} : f32[8,128]
-    +  %_softmax = tessiq.softmax.default(%mul) {arg1 = -1, arg2 = false} : f32[8,128]
-  ```
+The PyTorch operation keeps its backward, so training works. An op PyTorch decomposes before any
+backend sees it, such as `aten::softmax.int`, can't be replaced; replace what it decomposes into.
+`tessiq.library.overrides()` lists the replacements.
 
-- **Before the graph reaches tessiq**, torch would break `_softmax` into five smaller operations.
-  tessiq keeps it whole where the custom operation declares the types, so the pass has something
-  to find, and breaks it up as before everywhere else.
+## Rewriting a pattern
 
-Training still works through it. The torch operation keeps its own backward, which reads the
-result the custom kernel computed.
-
-An operation torch breaks up as soon as it is called, such as `aten::softmax.int`, cannot be
-replaced, because no backend ever sees it. Replace the one it becomes, as `softmax` does.
-`tessiq.library.overrides()` lists what replaces what.
-
-## Rewriting a computation written out in PyTorch
-
-Most models do not call `torch.ops.tessiq.rms_norm`. They write RMSNorm out:
+Models usually write RMSNorm out rather than calling `tessiq.rms_norm`:
 
 ```python
 x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
 ```
 
-A pattern lets the operation find that and take its place. `rms_norm.pattern.tsr` is the graph
-AOTAutograd hands tessiq for that line, in tessiq's textual IR:
+`rms_norm.pattern.tsr` is that expression as AOTAutograd emits it, in textual IR, and `.pattern()`
+registers a `rewrite-rms-norm` pass that replaces each match with one call:
 
 ```
 graph @rms_norm(%x: f32[?], %weight: f32[?]) -> f32[?] {
@@ -318,100 +244,63 @@ graph @rms_norm(%x: f32[?], %weight: f32[?]) -> f32[?] {
 }
 ```
 
-and `.pattern()` in `rms_norm.cpp` declares it. The operation then has a pass, `rewrite-rms-norm`,
-that replaces each match with one call. The rules for writing one:
+Rules for patterns:
 
-- **Inputs are the operation's tensor arguments,** by name. `%x` and `%weight` above are
-  `rms_norm`'s `x` and `weight`.
-- **`"$name"` captures a scalar argument** from wherever the pattern has it, here `eps` from the
-  `add`. Every other attribute has to match exactly, except that `2` and `2.0` are the same number.
-- **Types are not compared,** so write them as anything, such as `f32[?]`. A match whose tensors
-  are of a type the operation does not declare is left alone.
-- **Write what AOTAutograd emits, not what the model says.** `tessiq.import_graph(tessiq.capture(
-  model, x))` prints it. `1.702 * x`, for instance, arrives as `mul(x) {arg1 = 1.702}`. The two
-  operands of `add` and `mul` match either way round.
+- **Inputs** are named after the operation's tensor arguments.
+- **Scalars.** `"$name"` captures a scalar argument.
+- **Attributes.** Every other attribute must match exactly (`2` equals `2.0`), and a node may not
+  carry attributes the pattern lacks.
+- **Types** aren't compared. A match with undeclared dtypes is left alone.
+- **Operand order.** `add` and `mul` operands match in either order.
+- **Write what AOTAutograd emits.** `tessiq.import_graph(tessiq.capture(model, x))` shows it; for
+  example `1.702 * x` arrives as `mul(x) {arg1 = 1.702}`.
 
-A match is refused when a value inside it is read by anything outside it or returned by the graph,
-because the call replaces those values. A training step's forward graph returns the values its
-backward graph reads, so there the rewrite finds nothing, and training runs the operations as they
-were written.
+A match is refused if any interior value is used outside it or returned. Training forward graphs
+return the values backward needs, so rewrites don't fire there.
 
-A rewrite changes which operations run, so it runs only when a compile asks for it:
+Rewrites change numerics, so they only run when requested:
 
 ```python
 torch.compile(model, backend="tessiq", options={"device": "tessiq:1", "rewrites": ["rms_norm"]})
 tessiq.explain(model, x, device=tessiq.gpu, rewrites=["rms_norm"])
 ```
 
-`tessiq.library.rewrites()` lists what has one. [docs/passes.md](../../docs/passes.md) shows where
-rewrites and overrides sit among the compiler's other passes.
+[docs/passes.md](../../docs/passes.md) shows where rewrites and overrides run in the pipeline.
 
-## What the definition decides
+## Behaviour
 
-- **Types.** A schema's `Tensor`, `float`, `int` and `bool` are `const at::Tensor&`, `double`,
-  `std::int64_t` and `bool` in the reference and the launch function, which is torch's own mapping.
-- **Launch arguments are typed.** Each entry of `Launch::arguments` has the C++ type of the kernel
-  parameter it fills: `std::int64_t` for `long long`, `std::int32_t` for `int`, `float` and
-  `double`. The kernel reads the bytes as its signature says, so `static_cast<float>(eps)` for a
-  `float eps` is not optional.
-- **Element types.** `.dtypes()` lists the types the kernel was written for, float32 when not
-  given. On any other type the operation runs its reference instead, and a compiled graph keeps it
-  on the host.
-- **The result's shape and type** are the reference's. They are found by running the reference on
-  tensors that have a shape and no data, so there is nothing else to write for them.
-- **Declining a call.** A launch function can decline arguments its kernel cannot handle with
-  `TORCH_CHECK`, and host code with `call.decline()`. The call runs the reference instead, counted
-  in `fallbacks()`. `rms_norm` and `layer_norm` do this for a weight that is not one value per
-  column, which the reference would broadcast and the kernel would read past the end of. The two
-  GEMMs do the same for a bias that is not one value per column.
-- **No defaults, no backward.** A schema argument cannot have a default yet, because a compiled
-  graph leaves out an argument equal to its default. The operation has no backward, so it is for
-  inference until one is registered.
+- **Argument types.** Schema `Tensor`, `float`, `int`, `bool` map to `const at::Tensor&`,
+  `double`, `std::int64_t`, `bool` in the reference and launch function.
+- **Dtypes.** `.dtypes()` lists the types the kernel handles, float32 by default. Other types run
+  the reference, and a compiled graph keeps them on the host.
+- **Output shape and type** come from running the reference on meta tensors.
+- **Declining.** A launch function can decline with `TORCH_CHECK`, and host code with
+  `call.decline()`; the reference runs instead. `rms_norm`, `layer_norm` and the GEMMs decline a
+  weight or bias that isn't one value per column.
+- **Limitations.** Schemas can't have defaults (a compiled graph drops arguments equal to their
+  default). Operations have no backward.
 
-## Where it runs
-
-| called on | runs |
+| Called on | Runs |
 |---|---|
-| a tessiq GPU tensor, in a declared type | the kernel, expression or host code |
-| a tessiq GPU tensor, in another type | the reference, on the host |
-| the CPU reference device, `tessiq.cpu` | the reference |
-| an ordinary CPU tensor | the reference |
-| inside `torch.compile` for a GPU | a kernel, its own launch or fused with its neighbours |
+| tessiq GPU tensor, declared dtype | The kernel, expression or host code |
+| tessiq GPU tensor, other dtype | The reference, on the host |
+| `tessiq.cpu` or a plain CPU tensor | The reference |
+| `torch.compile` for a GPU | The kernel, alone or fused with its neighbours |
 
-`tessiq.library.fallbacks("tessiq::scale_rows")` counts the calls on a tessiq tensor that ran the
-reference instead of the kernel. The answer is the same either way, so this count is the only sign
-that a model is taking the slow path.
+`tessiq.library.fallbacks("tessiq::scale_rows")` counts calls on tessiq tensors that ran the
+reference instead of the kernel.
 
-## When a definition is wrong
+## Errors
 
-Loading the extension only records each definition. They are checked and registered once it has
-loaded, and the first one that does not hold together fails the import of `tessiq` with its name
-and what is wrong:
+Definitions are checked after the extension loads, and the first bad one fails `import tessiq`:
 
 ```
 ImportError: invalid_argument: custom operation tessiq::rms_norm in csrc/custom_ops/rms_norm: its reference takes (Tensor, Tensor, float) but the schema declares (Tensor, Tensor, int)
-ImportError: invalid_argument: custom operation tessiq::rms_norm in csrc/custom_ops/rms_norm: there is no kernel file csrc/custom_ops/rms_norm/rms.cu
-```
-
-A replacement is checked the same way:
-
-```
 ImportError: invalid_argument: custom operation tessiq::softmax in csrc/custom_ops/softmax: it replaces aten::softmax.int, which torch breaks into other operations before any backend sees it; replace one of those instead
-ImportError: invalid_argument: custom operation tessiq::softmax in csrc/custom_ops/softmax: it replaces aten::_softmax, whose schema is aten::_softmax(Tensor self, int dim, bool half_to_float) -> Tensor; the two have to take the same arguments, with the same names and types, and no defaults
-```
-
-A pattern is checked against the schema:
-
-```
 ImportError: invalid_argument: custom operation tessiq::rms_norm in csrc/custom_ops/rms_norm: its pattern csrc/custom_ops/rms_norm/rms_norm.pattern.tsr has the inputs (x, w), and its tensor arguments are (x, weight); they have to be the same names
-```
-
-So is host code that no definition declares:
-
-```
 ImportError: invalid_argument: a .nvcc.cu file registers host code for tessiq::layer_norm, which no .cpp defines with .precompiled()
 ```
 
-The same goes for a launch function whose parameters differ from the schema, a schema that does not
-parse, an operation given more than one of a launch function, an expression and `.precompiled()`,
-or none of them, and a replacement of an operation torch does not have.
+The same applies to a missing kernel file, a launch function whose parameters don't match the
+schema, a schema that doesn't parse, more or fewer than one of `.launch()`, `.expression()` and
+`.precompiled()`, and a replacement of an operation PyTorch doesn't have.
