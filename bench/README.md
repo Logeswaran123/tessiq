@@ -17,6 +17,10 @@ Report a distribution, not one timing, and drop the warmup.
   device and what everything around it costs the host. The kernels are replayed many times under
   one pair of stream marks, so the cost of marking divides away.
 
+- `gemm_bias_gelu.py` times a linear layer followed by GELU as cuBLAS's SGEMM and a GELU kernel,
+  and as one CUTLASS GEMM with the bias and GELU in its epilogue. It measures device time, since a
+  compiled call's copy of the result back to the host would hide the difference.
+
 - `micro/` holds per-pattern comparisons, fused against unfused.
 - `models/` holds model-level runs, fusion on and off.
 - `emitters/` compares NVRTC against Triton on the same clusters. See

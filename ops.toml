@@ -299,6 +299,16 @@ arity = 1
 expression = "erfc($0)"
 kernel = true
 
+# The exact GELU, x * Phi(x), written with erf as torch writes it. The tanh approximation carries
+# approximate = "tanh", an argument this does not read, so it stays on the host.
+[[op]]
+name = "gelu"
+aten = ["aten.gelu.default"]
+category = "elementwise"
+arity = 1
+expression = "(scalar_t(0.5) * $0 * (scalar_t(1) + erf($0 * scalar_t(0.70710678118654752440))))"
+kernel = true
+
 # --- reductions ---------------------------------------------------------------------------------
 #
 # A reduction reads many positions to write one, so it has no expression and cannot join an

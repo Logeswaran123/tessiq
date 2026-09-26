@@ -155,6 +155,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   says otherwise. It is handed the call's tensors, the stream and workspace from tessiq's
   allocator, and it is refused, with both architectures named, on a card it was not built for.
   `layer_norm` is the first: two launches, with each row's statistics in workspace between them.
+- `gemm_bias_gelu`, a CUTLASS GEMM whose epilogue adds the bias and applies GELU, and
+  `rewrite-gemm-bias-gelu`, which puts it in place of a linear layer followed by GELU. CUTLASS is
+  downloaded only for a build with a `.nvcc.cu` that includes it.
+- GELU runs on the device in a compiled graph, fused with its neighbours. Its tanh approximation
+  runs on the host.
 
 ### Changed
 
@@ -185,3 +190,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - A lazily cloned tessiq tensor on a GPU crashed the process when its copy was made with no device
   guard set, as by `untyped_storage().data_ptr()`. The allocator allocated and copied on the
   current device rather than the tensor's.
+- A compiled elementwise operation or matmul with a keyword argument computed as if it were left
+  out: `torch.add(a, b, alpha=2)` gave `a + b`, and `torch.addmm(c, a, b, beta=0.5)` gave the plain
+  addmm. Those run on the host now.

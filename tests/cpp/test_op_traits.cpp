@@ -72,7 +72,7 @@ TEST(OpTraitsTest, EverythingTheBackendSupportsHasAWayToRun) {
 TEST(OpTraitsTest, TheListIsSortedAndComplete) {
   const std::vector<std::string> names = elementwise_ops();
   EXPECT_TRUE(std::is_sorted(names.begin(), names.end()));
-  EXPECT_EQ(names.size(), 70U) << "an operation was added or removed without updating this count";
+  EXPECT_EQ(names.size(), 72U) << "an operation was added or removed without updating this count";
 }
 
 TEST(OpTraitsTest, EveryElementwiseRowCanBeEmitted) {

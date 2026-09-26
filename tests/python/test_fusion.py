@@ -101,6 +101,20 @@ def test_a_chain_of_transcendentals_is_one_group() -> None:
     assert groups(ir) == {0: 8}, ir
 
 
+def test_gelu_joins_the_group_and_its_tanh_approximation_does_not() -> None:
+    # The kernel computes the exact GELU. The tanh approximation arrives as the same operation with
+    # approximate = "tanh", which it would ignore, so that one is left out of the group.
+    def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.gelu(a) * 2.0 + torch.nn.functional.gelu(b, approximate="tanh")
+
+    ir = fused(model, torch.randn(64), torch.randn(64))
+    exact = next(line for line in ir.splitlines() if "aten.gelu.default(%arg0_1)" in line)
+    approximate = next(line for line in ir.splitlines() if 'approximate = "tanh"' in line)
+    assert "tessiq.fusion = 0" in exact, ir
+    assert "tessiq.supported = false" in approximate, ir
+    assert groups(ir) == {0: 3}, ir
+
+
 def test_a_matmul_splits_the_fused_chain_without_leaving_the_device() -> None:
     # A matmul is claimed and is not elementwise, so it ends the loop its neighbours share while
     # staying in their cluster. Two fusion groups, one cluster.

@@ -143,20 +143,17 @@ def test_in_a_compiled_graph_it_is_a_kernel_of_its_own() -> None:
 @pytest.mark.cuda
 @pytest.mark.usefixtures("host_code")
 def test_its_workspace_comes_from_tessiqs_allocator_and_goes_back() -> None:
-    rows = 4096
-    x, weight, bias = arguments(rows, 64, device=tessiq.gpu)
-    out = layer_norm(x, weight, bias, EPS)
+    x, weight, bias = arguments(4096, 64, device=tessiq.gpu)
+    layer_norm(x, weight, bias, EPS)
     tessiq.synchronize(tessiq.gpu)
-    torch.accelerator.reset_peak_memory_stats(tessiq.gpu)
     before = tessiq.memory_stats(tessiq.gpu)
 
     out = layer_norm(x, weight, bias, EPS)
     after = tessiq.memory_stats(tessiq.gpu)
-    # The previous result was freed when `out` was rebound, and the workspace when the call ended.
-    assert after.live_blocks == before.live_blocks
-    # At the peak the workspace, a mean and a reciprocal deviation per row, was held as well.
-    peak = torch.accelerator.max_memory_allocated(tessiq.gpu)
-    assert peak - after.allocated_bytes >= rows * 8
+    # Two blocks were taken, the result and the workspace holding each row's statistics, and only
+    # the result is still held.
+    assert after.allocation_count - before.allocation_count == 2
+    assert after.live_blocks == before.live_blocks + 1
     del out
 
 

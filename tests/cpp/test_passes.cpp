@@ -127,6 +127,50 @@ TEST(LayoutAssignTest, RunningItTwiceChangesNothingTheSecondTime) {
   EXPECT_EQ(ir::print(**graph), once);
 }
 
+TEST(MarkSupportedTest, AnAddmmWithABetaStaysOnTheHost) {
+  // cuBLAS is called with beta and alpha of one, so an addmm with either of its own would be
+  // computed as the plain one.
+  auto graph = ir::parse(R"(graph @g(%bias: f32[4], %a: f32[2,3], %b: f32[3,4]) -> f32[2,4] {
+  %scaled = aten.addmm.default(%bias, %a, %b) {beta = 0.5} : f32[2,4]
+  %plain = aten.addmm.default(%bias, %a, %b) : f32[2,4]
+  %sum = aten.add.Tensor(%scaled, %plain) : f32[2,4]
+  return %sum
+}
+)");
+  ASSERT_TRUE(graph.has_value()) << graph.error().to_string();
+
+  PassManager manager;
+  ASSERT_TRUE(manager.add_from_pipeline("mark-supported").has_value());
+  ASSERT_TRUE(manager.run(**graph).has_value());
+  const std::string printed = ir::print(**graph);
+  EXPECT_NE(printed.find("{beta = 0.5, tessiq.supported = false}"), std::string::npos) << printed;
+  EXPECT_NE(printed.find("%b) {tessiq.supported = true}"), std::string::npos) << printed;
+}
+
+TEST(MarkSupportedTest, AnElementwiseNodeWithAKeywordArgumentStaysOnTheHost) {
+  // The kernel reads arg0 and arg1 and would leave alpha out, computing a + b. A positional
+  // constant, arg1 of the mul, is read and is fine.
+  auto graph = ir::parse(R"(graph @g(%a: f32[8], %b: f32[8]) -> f32[8] {
+  %scaled = aten.add.Tensor(%a, %b) {alpha = 2} : f32[8]
+  %doubled = aten.mul.Tensor(%scaled) {arg1 = 2} : f32[8]
+  %past = aten.neg.default(%doubled) {arg1 = 2} : f32[8]
+  return %past
+}
+)");
+  ASSERT_TRUE(graph.has_value()) << graph.error().to_string();
+
+  PassManager manager;
+  ASSERT_TRUE(manager.add_from_pipeline("mark-supported").has_value());
+  ASSERT_TRUE(manager.run(**graph).has_value());
+  const std::string printed = ir::print(**graph);
+  EXPECT_NE(printed.find("{alpha = 2, tessiq.supported = false}"), std::string::npos) << printed;
+  EXPECT_NE(printed.find("{arg1 = 2, tessiq.supported = true}"), std::string::npos) << printed;
+  // neg takes one argument, so an arg1 is one it has no place for.
+  EXPECT_NE(printed.find("aten.neg.default(%doubled) {arg1 = 2, tessiq.supported = false}"),
+            std::string::npos)
+      << printed;
+}
+
 TEST(RegistryTest, NamesAreSorted) {
   const std::vector<std::string> names = PassRegistry::instance().names();
   EXPECT_TRUE(std::is_sorted(names.begin(), names.end()));
