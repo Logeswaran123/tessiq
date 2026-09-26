@@ -13,7 +13,8 @@
 # machine without a GPU still builds and runs the reference.
 #
 # A .nvcc.cu file is different: nvcc compiles it here, for CMAKE_CUDA_ARCHITECTURES, because it holds
-# host code as well as kernels. Without nvcc it is left out and its operation runs the reference.
+# host code as well as kernels. Without nvcc it is left out and its operation runs the reference. One
+# that includes CUTLASS headers gets them fetched for it.
 
 set(embedded_files "")
 set(precompiled_files "")
@@ -75,4 +76,37 @@ if(precompiled_files)
       "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:--Werror all-warnings>")
   endif()
   target_link_libraries(_C PRIVATE tessiq_precompiled_ops CUDA::cudart)
+
+  # CUTLASS is header-only, and is fetched only when a .nvcc.cu includes it. Which files do is read
+  # here, so editing one configures again.
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${precompiled_files})
+  set(cutlass_files "")
+  foreach(file IN LISTS precompiled_files)
+    file(STRINGS "${file}" cutlass_includes REGEX "^#include [<\"]cutlass/")
+    if(cutlass_includes)
+      list(APPEND cutlass_files "${file}")
+    endif()
+  endforeach()
+  if(cutlass_files)
+    include(FetchContent)
+    # Pinned by hash. FETCHCONTENT_SOURCE_DIR_CUTLASS points the build at a checkout instead, for a
+    # machine that cannot download. SOURCE_SUBDIR names a directory with no CMakeLists.txt, so the
+    # headers are unpacked and none of CUTLASS's own build is configured.
+    FetchContent_Declare(
+      cutlass
+      URL https://github.com/NVIDIA/cutlass/archive/refs/tags/v4.8.0.tar.gz
+      URL_HASH SHA256=b7bb2ba0473a5a5d699c62e5feb42caa11cb109ec58ba82ca458af9cd139f39b
+      SOURCE_SUBDIR include)
+    FetchContent_MakeAvailable(cutlass)
+    # CUTLASS calls constexpr host functions from device code, which nvcc allows only with
+    # --expt-relaxed-constexpr and otherwise warns about.
+    set_source_files_properties(${cutlass_files} PROPERTIES
+      INCLUDE_DIRECTORIES "${cutlass_SOURCE_DIR}/include"
+      COMPILE_OPTIONS "--expt-relaxed-constexpr")
+    foreach(file IN LISTS cutlass_files)
+      cmake_path(GET file PARENT_PATH directory)
+      cmake_path(GET directory FILENAME op)
+      message(STATUS "tessiq: tessiq::${op} uses CUTLASS, from ${cutlass_SOURCE_DIR}")
+    endforeach()
+  endif()
 endif()
