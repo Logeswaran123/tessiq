@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="634" viewBox="0 0 1000 634">
+<rect x="0" y="0" width="1000" height="634" fill="#ffffff"/>
+<text x="128" y="68.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#57606a" text-anchor="end" letter-spacing="0.4">APPLICATION</text>
+<rect x="152.0" y="30" width="266.7" height="66" rx="6" fill="#f6f8fa" stroke="#afb8c1" stroke-width="1.5"/>
+<text x="285.3" y="58.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1f2328" text-anchor="middle">Eager operations</text>
+<text x="285.3" y="78.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="12.5" fill="#57606a" text-anchor="middle" xml:space="preserve">x.to(&quot;tessiq:1&quot;)</text>
+<rect x="428.7" y="30" width="266.7" height="66" rx="6" fill="#f6f8fa" stroke="#afb8c1" stroke-width="1.5"/>
+<text x="562.0" y="58.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1f2328" text-anchor="middle">Custom operations</text>
+<text x="562.0" y="78.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="12.5" fill="#57606a" text-anchor="middle" xml:space="preserve">torch.ops.tessiq.*</text>
+<rect x="705.3" y="30" width="266.7" height="66" rx="6" fill="#f6f8fa" stroke="#afb8c1" stroke-width="1.5"/>
+<text x="838.7" y="58.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1f2328" text-anchor="middle">Compiled models</text>
+<text x="838.7" y="78.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="12.5" fill="#57606a" text-anchor="middle" xml:space="preserve">torch.compile(backend=&quot;tessiq&quot;)</text>
+<text x="128" y="146.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#57606a" text-anchor="end" letter-spacing="0.4">FRAMEWORK</text>
+<rect x="152.0" y="108" width="543.3" height="66" rx="6" fill="#fdebe7" stroke="#ee4c2c" stroke-width="1.5"/>
+<text x="423.7" y="136.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#a52a14" text-anchor="middle">ATen dispatcher</text>
+<text x="423.7" y="156.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#6e3b30" text-anchor="middle" xml:space="preserve">tessiq registered through PrivateUse1</text>
+<rect x="705.3" y="108" width="266.7" height="66" rx="6" fill="#fdebe7" stroke="#ee4c2c" stroke-width="1.5"/>
+<text x="838.7" y="136.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#a52a14" text-anchor="middle">Dynamo + AOTAutograd</text>
+<text x="838.7" y="156.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#6e3b30" text-anchor="middle" xml:space="preserve">FX graph in core ATen</text>
+<text x="128" y="224.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#57606a" text-anchor="end" letter-spacing="0.4">BACKEND</text>
+<rect x="152.0" y="186" width="266.7" height="66" rx="6" fill="#e7f0ff" stroke="#2f6fdb" stroke-width="1.5"/>
+<text x="285.3" y="214.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1a4fa8" text-anchor="middle">Device integration</text>
+<text x="285.3" y="234.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#34507a" text-anchor="middle" xml:space="preserve">copies, views, CPU fallback</text>
+<rect x="428.7" y="186" width="266.7" height="66" rx="6" fill="#e7f0ff" stroke="#2f6fdb" stroke-width="1.5"/>
+<text x="562.0" y="214.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1a4fa8" text-anchor="middle">Custom operations</text>
+<text x="562.0" y="234.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#34507a" text-anchor="middle" xml:space="preserve">kernels, expressions, host code</text>
+<rect x="705.3" y="186" width="266.7" height="66" rx="6" fill="#e7f0ff" stroke="#2f6fdb" stroke-width="1.5"/>
+<text x="838.7" y="214.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1a4fa8" text-anchor="middle">Graph compiler</text>
+<text x="838.7" y="234.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#34507a" text-anchor="middle" xml:space="preserve">IR, passes, fusion, recipes</text>
+<text x="128" y="302.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#57606a" text-anchor="end" letter-spacing="0.4">KERNELS</text>
+<rect x="152.0" y="264" width="266.7" height="66" rx="6" fill="#fdebe7" stroke="#ee4c2c" stroke-width="1.5"/>
+<text x="285.3" y="292.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#a52a14" text-anchor="middle">PyTorch CPU kernels</text>
+<text x="285.3" y="312.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#6e3b30" text-anchor="middle" xml:space="preserve">fallback and tessiq:0</text>
+<rect x="428.7" y="264" width="266.7" height="66" rx="6" fill="#eef6dc" stroke="#76b900" stroke-width="1.5"/>
+<text x="562.0" y="292.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3f6300" text-anchor="middle">NVIDIA libraries</text>
+<text x="562.0" y="312.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#4d5f2a" text-anchor="middle" xml:space="preserve">cuBLAS, cuBLASLt, cuDNN, CUTLASS</text>
+<rect x="705.3" y="264" width="266.7" height="66" rx="6" fill="#e7f0ff" stroke="#2f6fdb" stroke-width="1.5"/>
+<text x="838.7" y="292.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1a4fa8" text-anchor="middle">tessiq kernels</text>
+<text x="838.7" y="312.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#34507a" text-anchor="middle" xml:space="preserve">generated (NVRTC) and custom</text>
+<text x="128" y="380.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#57606a" text-anchor="end" letter-spacing="0.4">RUNTIME</text>
+<rect x="152.0" y="342" width="820.0" height="66" rx="6" fill="#e7f0ff" stroke="#2f6fdb" stroke-width="1.5"/>
+<text x="562.0" y="370.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1a4fa8" text-anchor="middle">tessiq runtime</text>
+<text x="562.0" y="390.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#34507a" text-anchor="middle" xml:space="preserve">tessiq:0 CPU reference, tessiq:1…N CUDA devices, a caching allocator per device</text>
+<text x="128" y="458.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#57606a" text-anchor="end" letter-spacing="0.4">DRIVER</text>
+<rect x="428.7" y="420" width="543.3" height="66" rx="6" fill="#eef6dc" stroke="#76b900" stroke-width="1.5"/>
+<text x="700.3" y="448.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#3f6300" text-anchor="middle">CUDA</text>
+<text x="700.3" y="468.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#4d5f2a" text-anchor="middle" xml:space="preserve">runtime, driver API, NVRTC</text>
+<text x="128" y="536.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#57606a" text-anchor="end" letter-spacing="0.4">HARDWARE</text>
+<rect x="152.0" y="498" width="266.7" height="66" rx="6" fill="#2d333b" stroke="#2d333b" stroke-width="1.5"/>
+<text x="285.3" y="536.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#ffffff" text-anchor="middle">Host CPU</text>
+<rect x="428.7" y="498" width="543.3" height="66" rx="6" fill="#2d333b" stroke="#2d333b" stroke-width="1.5"/>
+<text x="700.3" y="536.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#ffffff" text-anchor="middle">NVIDIA GPU</text>
+<rect x="152" y="590" width="16" height="16" rx="3" fill="#e7f0ff" stroke="#2f6fdb" stroke-width="1.5"/>
+<text x="176" y="603" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">tessiq</text>
+<rect x="264" y="590" width="16" height="16" rx="3" fill="#fdebe7" stroke="#ee4c2c" stroke-width="1.5"/>
+<text x="288" y="603" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">PyTorch</text>
+<rect x="385" y="590" width="16" height="16" rx="3" fill="#eef6dc" stroke="#76b900" stroke-width="1.5"/>
+<text x="409" y="603" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">NVIDIA</text>
+<rect x="497" y="590" width="16" height="16" rx="3" fill="#f6f8fa" stroke="#afb8c1" stroke-width="1.5"/>
+<text x="521" y="603" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">Your code</text>
+<rect x="636" y="590" width="16" height="16" rx="3" fill="#2d333b" stroke="#2d333b" stroke-width="1.5"/>
+<text x="660" y="603" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">Hardware</text>
+</svg>
