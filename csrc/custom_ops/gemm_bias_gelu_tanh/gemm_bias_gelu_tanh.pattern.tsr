@@ -1,0 +1,12 @@
+// nn.Linear followed by the tanh approximation of GELU, as AOTAutograd hands it to tessiq:
+//
+//   torch.nn.functional.gelu(torch.nn.functional.linear(x, weight, bias), approximate="tanh")
+//
+// The same graph as gemm_bias_gelu's, except for the GELU's approximate argument, so each rewrite
+// matches only its own GELU.
+graph @gemm_bias_gelu_tanh(%x: f32[?], %weight: f32[?], %bias: f32[?]) -> f32[?] {
+  %permute = aten.permute.default(%weight) {arg1 = [1,0]} : f32[?]
+  %addmm = aten.addmm.default(%bias, %x, %permute) : f32[?]
+  %gelu = aten.gelu.default(%addmm) {approximate = "tanh"} : f32[?]
+  return %gelu
+}
