@@ -117,7 +117,7 @@ def test_a_convolution_is_claimed_only_when_cudnn_would_have_a_plan() -> None:
 def test_the_coverage_document_matches_the_source() -> None:
     document = (ROOT / "docs" / "op_coverage.md").read_text()
     with_kernel = sum(1 for op in operations() if op["kernel"])
-    assert f"{with_kernel} of {len(operations())} operations can run on the device" in document
+    assert f"{with_kernel} of {len(operations())} operations run on the device" in document
     for op in operations():
         assert f"`{op['name']}`" in document, f"{op['name']} is missing from the document"
 
