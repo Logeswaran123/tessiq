@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.26)
 project(
   tessiq
   VERSION 0.0.1
-  DESCRIPTION "A from-scratch PyTorch accelerator backend: device, graph compiler, and kernels"
+  DESCRIPTION "A PyTorch backend for NVIDIA GPUs: device, graph compiler, and kernels"
   LANGUAGES CXX)
 
 # --- Options ------------------------------------------------------------------------------------

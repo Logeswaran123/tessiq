@@ -1,6 +1,6 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""tessiq: a from-scratch PyTorch accelerator backend.
+"""tessiq: a PyTorch backend for NVIDIA GPUs.
 
 Importing it registers the ``tessiq`` device and the custom operations. Compile a model with
 ``torch.compile(model, backend="tessiq")``; the functions here cover devices, memory, graph
