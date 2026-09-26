@@ -354,8 +354,15 @@ its own.
 
 **Progress.** The interface is in: `.precompiled()`, host code in `<name>.nvcc.cu` registered with
 `TESSIQ_PRECOMPILED`, workspace from the allocator, the stream it is handed, and the architecture
-check. `layer_norm` shows it with two launches and workspace between them. The CUTLASS GEMM and the
-cuBLAS operation are next.
+check. `layer_norm` shows it with two launches and workspace between them.
+
+Milestones 1 and 2 are in. `gemm_bias_gelu` is a CUTLASS float32 GEMM with the bias and GELU in its
+epilogue, splitting K through semaphores in workspace when the output has few tiles. With
+`rewrite-gemm-bias-gelu`, `tessiq-explain` shows a linear layer and GELU as one custom kernel where
+there were a GEMM and a fused GELU kernel. On an RTX 5080, `bench/gemm_bias_gelu.py` has it about
+12% faster at 4096 x 1024 -> 4096, level at 64 x 4096 -> 4096, a few percent slower at
+8192 x 768 -> 3072 and about 10% slower at 512 x 768 -> 3072. The pattern matches a 2-D input only: a batched one arrives with views
+around the addmm. The cuBLAS operation is next.
 
 **Milestone:**
 1. A CUTLASS GEMM whose epilogue, the stage that runs on each output element before it is written,

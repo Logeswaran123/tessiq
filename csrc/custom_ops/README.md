@@ -17,6 +17,10 @@ custom_ops/
     layer_norm/
         layer_norm.nvcc.cu      host code and two kernels, which nvcc compiles when tessiq is built
         layer_norm.cpp          the operation, declared .precompiled()
+    gemm_bias_gelu/
+        gemm_bias_gelu.nvcc.cu        a CUTLASS GEMM whose epilogue adds the bias and applies GELU
+        gemm_bias_gelu.cpp            the operation, declared .precompiled()
+        gemm_bias_gelu.pattern.tsr    a linear layer followed by GELU, which its rewrite replaces
     fast_gelu/
         fast_gelu.cpp           an elementwise expression the compiler fuses, so no kernel file
         fast_gelu.pattern.tsr   the sigmoid GELU written out
@@ -199,6 +203,26 @@ without `-real` also carries PTX, which the driver can compile for a newer card,
 `tessiq.library.precompiled()` lists the operations whose host code the build compiled. A build
 without nvcc leaves the `.nvcc.cu` files out, and their operations run the reference everywhere.
 
+### Using CUTLASS
+
+A `.nvcc.cu` that includes a header from `cutlass/` gets CUTLASS 4.8.0, which is header-only,
+downloaded when tessiq is configured. A build with no such file never downloads it. On a machine
+that cannot download, point the build at a checkout:
+
+```
+pip install -e . --no-build-isolation -Ccmake.define.FETCHCONTENT_SOURCE_DIR_CUTLASS=/path/to/cutlass
+```
+
+`gemm_bias_gelu` is one. It computes `gelu(x @ weight.T + bias)` with one CUTLASS GEMM whose
+epilogue, the stage that turns each block's accumulators into output elements, adds the bias and
+applies GELU before writing. Without it a linear layer followed by GELU writes the product and a
+second kernel reads it back. Its pattern is that pair as `nn.Linear` and `F.gelu` emit it, so
+`rewrites=["gemm_bias_gelu"]` puts it in a model that never names it.
+
+It uses CUTLASS's float32 SIMT kernel rather than TF32 tensor cores, so it rounds like cuBLAS's
+SGEMM, which tessiq's matmuls call. When the output has too few tiles to fill the GPU, K is split
+into slices that take turns adding into the output, through a semaphore per tile in workspace.
+
 ## Replacing a torch operation
 
 An operation can stand in for one of torch's own. Then a model does not have to call it by name:
@@ -311,7 +335,8 @@ rewrites and overrides sit among the compiler's other passes.
 - **Declining a call.** A launch function can decline arguments its kernel cannot handle with
   `TORCH_CHECK`, and host code with `call.decline()`. The call runs the reference instead, counted
   in `fallbacks()`. `rms_norm` and `layer_norm` do this for a weight that is not one value per
-  column, which the reference would broadcast and the kernel would read past the end of.
+  column, which the reference would broadcast and the kernel would read past the end of, and
+  `gemm_bias_gelu` for a bias that is not one value per column.
 - **No defaults, no backward.** A schema argument cannot have a default yet, because a compiled
   graph leaves out an argument equal to its default. The operation has no backward, so it is for
   inference until one is registered.

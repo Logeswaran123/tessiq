@@ -17,10 +17,10 @@ cluster
 fuse-elementwise
 ```
 
-With what ships today, a compile that asks for both rewrites runs:
+With what ships today, a compile that asks for every rewrite runs:
 
 ```
-rewrite-rms-norm, rewrite-fast-gelu, override-softmax,
+rewrite-rms-norm, rewrite-fast-gelu, rewrite-gemm-bias-gelu, override-softmax,
 mark-supported, layout-assign, cluster, fuse-elementwise
 ```
 
@@ -40,7 +40,7 @@ runs all three, one pass at a time, and prints what each one changed.
 |---|---|---|
 | `rewrite-<name>` | Replaces a computation written out op by op, such as RMSNorm, with one call to a custom operation. | First, so every later pass sees the custom operation and none sees the operations it absorbed. A pattern is written against the torch operations AOTAutograd emits, including one an override would replace. |
 | `override-<name>` | Makes each node of a torch operation, such as `aten._softmax`, a node of the custom operation that replaces it, where the custom operation declares the types. | Before `mark-supported`, so the node is claimed as the custom operation. |
-| `mark-supported` | Records on each node, as `tessiq.supported`, whether the backend can run it: the operation has a kernel, the dtypes are ones it takes, and its extents are ones it can handle. It changes nothing else. | Everything after it reads that annotation. It needs nothing before it. |
+| `mark-supported` | Records on each node, as `tessiq.supported`, whether the backend can run it: the operation has a kernel, the dtypes are ones it takes, its extents are ones it can handle, and an elementwise or matmul node has no keyword argument, such as `alpha` or GELU's `approximate`, that its kernel would ignore. It changes nothing else. | Everything after it reads that annotation. It needs nothing before it. |
 | `layout-assign` | Inserts a `tessiq.contiguous` copy wherever a claimed elementwise or reduction operation reads a value that is not packed. | After `mark-supported`, because only claimed readers need the copy. Before `cluster`, because the copy is a node that clustering has to see. |
 | `cluster` | Groups neighbouring claimed nodes into clusters, which run on the device as a unit, and keeps the graph of clusters free of cycles. | Needs `tessiq.supported`. |
 | `fuse-elementwise` | Within a cluster, merges chains of elementwise operations whose intermediate values have one reader into fusion groups. Each group becomes one kernel. | Needs `tessiq.cluster`. It is last because nothing after it changes the graph. |

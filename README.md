@@ -205,9 +205,10 @@ ctest --test-dir build
 
 Python 3.10+, CMake 3.26+, and a compiler with C++20 for the torch-facing code (the core is
 C++17). With the CUDA toolkit's nvcc, the precompiled custom operations are built for the GPUs in
-the machine; set `CMAKE_CUDA_ARCHITECTURES` to build for others. The extension links libtorch, so
-PyTorch is needed to import tessiq. The C++ core builds and tests without it, which is what keeps
-the compiler testable on a machine with neither torch nor a GPU:
+the machine; set `CMAKE_CUDA_ARCHITECTURES` to build for others. The one that uses CUTLASS has its
+headers downloaded when the build is configured. The extension links libtorch, so PyTorch is needed
+to import tessiq. The C++ core builds and tests without it, which is what keeps the compiler
+testable on a machine with neither torch nor a GPU:
 
 ```bash
 cmake -S . -B build -G Ninja -DTESSIQ_BUILD_PYTHON=OFF
