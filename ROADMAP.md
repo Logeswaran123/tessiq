@@ -16,8 +16,9 @@
 | 11 | Convolution | Done |
 | 12 | Custom operations, rewrite passes | Done |
 | 13 | Precompiled custom operations | Done |
-| 14 | Triton emitter | Planned, optional |
-| 15 | MLIR export | Planned, optional |
+| 14 | Eager elementwise operations on the device | Planned |
+| 15 | Eager reductions, matmuls and convolution on the device | Planned |
+| 16 | MLIR export | Planned, optional |
 
 ## Done
 
@@ -88,14 +89,40 @@ inputs.
 
 ## Planned
 
-**14. Triton emitter.** A second `Emitter` that writes fusion groups as Triton kernels, with
-autotuning, benchmarked against NVRTC on identical groups.
+Today the operations in `ops.toml` run on the device only inside compiled graphs. Called eagerly on
+a tessiq tensor, anything other than allocation, copies, views, `clone` and custom operations goes
+through the CPU fallback: a copy to the host and back per operation. Stages 14 and 15 give eager
+calls the kernels the compiler already has.
 
-**15. MLIR export.** Lower tessiq IR to `linalg` on tensors, generate ODS from `ops.toml`, and
-lower through the standard bufferization pipeline. Behind `TESSIQ_ENABLE_MLIR`, which is reserved
-and off. Custom operations export through their reference implementation.
+**14. Eager elementwise operations on the device.**
+- `gen_ops.py` registers tessiq implementations for the functional overloads of the elementwise
+  operations in `ops.toml`, so the table stays the single source.
+- Each call runs a one-node recipe, built once per operation, dtype and rank and then cached.
+  Eager elementwise custom operations already work this way
+  (`mark-supported,cluster,fuse-elementwise` in `csrc/tessiq/torch/custom.cpp`).
+- Anything the compiler would not claim falls back to the host as today:
+  - in-place and `out=` variants;
+  - dtypes the table does not list;
+  - keyword arguments the kernel does not read;
+  - operands on different devices;
+  - type promotion the kernel does not do.
 
-Existing extension points: `Emitter` (`csrc/tessiq/codegen/emitter.h`), `Kernel`
-(`csrc/tessiq/torch/kernel.h`), the op registry (`csrc/tessiq/passes/op_registry.h`) and the
-target-neutral op set in `ops.toml`. There is no lowering-target interface yet; an MLIR exporter
-would consume the IR after the pass pipeline, as `build_recipe` does.
+**Done when:** every elementwise operation in `ops.toml`, called on a GPU tensor, runs with no host
+transfer and matches PyTorch on the CPU. A benchmark in `bench/` measures eager calls against the
+fallback they replace.
+
+**15. Eager reductions, matmuls and convolution on the device.**
+- Reductions use the existing reduction kernel, which takes its extents as arguments.
+- Matmuls call cuBLAS directly, with transposes read from the strides.
+- Convolution calls cuDNN, replacing the host path in `convolution_overrideable`.
+- In-place and `out=` variants of the stage 14 operations are added where they map onto the same
+  kernels.
+
+**Done when:** the encoder and residual blocks in `tests/python/test_models.py` run eagerly on a GPU,
+match PyTorch on the CPU, and cross the host only for the operations `ops.toml` does not cover.
+
+**16. MLIR export (optional).** Lower tessiq IR to `linalg` on tensors, generate ODS from
+`ops.toml`, and lower through the standard bufferization pipeline. Behind `TESSIQ_ENABLE_MLIR`,
+which is reserved and off. Custom operations export through their reference implementation. There
+is no lowering-target interface yet; the exporter would consume the IR after the pass pipeline, as
+`build_recipe` does.
