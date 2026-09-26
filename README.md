@@ -51,7 +51,7 @@ graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
 [`docs/passes.md`](docs/passes.md) lists the passes a compile runs and the order it runs them in,
 and how to add one.
 
-**What runs on the device.** All 51 operations the compiler knows have kernels. A chain of
+**What runs on the device.** All 52 operations the compiler knows have kernels. A chain of
 elementwise operations becomes one kernel, its intermediates never leave a register, and the
 generated code is cached as a cubin between runs. Reductions get a kernel of their own, since they
 read a whole axis to write one element and cannot share that loop. Matmuls call cuBLAS and

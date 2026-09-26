@@ -172,6 +172,7 @@ DOMAINS = {
 # Operations whose call takes more than the sampled tensors.
 CALLS: dict[str, Callable[..., torch.Tensor]] = {
     "pow": lambda x: torch.pow(x, 1.7),
+    "gelu": torch.nn.functional.gelu,
 }
 
 
@@ -211,7 +212,7 @@ def second_operand(count: int = 4096) -> torch.Tensor:
 def test_an_elementwise_kernel_agrees_with_eager(name: str) -> None:
     # Driven by ops.toml, so every elementwise operation with a kernel is checked against PyTorch.
     # The trailing multiply makes a group of two, so the operation is tested fused.
-    call: Callable[..., torch.Tensor] = CALLS.get(name, getattr(torch, name))
+    call: Callable[..., torch.Tensor] = CALLS[name] if name in CALLS else getattr(torch, name)
 
     def model(*args: torch.Tensor) -> torch.Tensor:
         return call(*args) * 2.0

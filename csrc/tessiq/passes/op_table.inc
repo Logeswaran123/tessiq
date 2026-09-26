@@ -4,7 +4,7 @@
 // because the element count is one per aten spelling and not one per operation, so the
 // generator is the only thing that can keep it right.
 // clang-format off
-constexpr std::array<OpInfo, 112> kOps{{
+constexpr std::array<OpInfo, 114> kOps{{
     {"abs", "abs", OpCategory::kElementwise, 1, "fabs($0)", true},
     {"acos", "acos", OpCategory::kElementwise, 1, "acos($0)", true},
     {"add", "add", OpCategory::kElementwise, 2, "($0 + $1)", true},
@@ -38,6 +38,7 @@ constexpr std::array<OpInfo, 112> kOps{{
     {"aten.expand.default", "expand", OpCategory::kMovement, 1, "", true},
     {"aten.expm1.default", "expm1", OpCategory::kElementwise, 1, "expm1($0)", true},
     {"aten.floor.default", "floor", OpCategory::kElementwise, 1, "floor($0)", true},
+    {"aten.gelu.default", "gelu", OpCategory::kElementwise, 1, "(scalar_t(0.5) * $0 * (scalar_t(1) + erf($0 * scalar_t(0.70710678118654752440))))", true},
     {"aten.log.default", "log", OpCategory::kElementwise, 1, "log($0)", true},
     {"aten.log10.default", "log10", OpCategory::kElementwise, 1, "log10($0)", true},
     {"aten.log1p.default", "log1p", OpCategory::kElementwise, 1, "log1p($0)", true},
@@ -87,6 +88,7 @@ constexpr std::array<OpInfo, 112> kOps{{
     {"expand", "expand", OpCategory::kMovement, 1, "", true},
     {"expm1", "expm1", OpCategory::kElementwise, 1, "expm1($0)", true},
     {"floor", "floor", OpCategory::kElementwise, 1, "floor($0)", true},
+    {"gelu", "gelu", OpCategory::kElementwise, 1, "(scalar_t(0.5) * $0 * (scalar_t(1) + erf($0 * scalar_t(0.70710678118654752440))))", true},
     {"log", "log", OpCategory::kElementwise, 1, "log($0)", true},
     {"log10", "log10", OpCategory::kElementwise, 1, "log10($0)", true},
     {"log1p", "log1p", OpCategory::kElementwise, 1, "log1p($0)", true},
