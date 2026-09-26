@@ -21,6 +21,10 @@ custom_ops/
         gemm_bias_gelu.nvcc.cu        a CUTLASS GEMM whose epilogue adds the bias and applies GELU
         gemm_bias_gelu.cpp            the operation, declared .precompiled()
         gemm_bias_gelu.pattern.tsr    a linear layer followed by GELU, which its rewrite replaces
+    gemm_bias_gelu_tanh/
+        gemm_bias_gelu_tanh.nvcc.cu       one cuBLASLt call, and no kernel of its own
+        gemm_bias_gelu_tanh.cpp           the operation, declared .precompiled()
+        gemm_bias_gelu_tanh.pattern.tsr   a linear layer followed by the tanh GELU
     fast_gelu/
         fast_gelu.cpp           an elementwise expression the compiler fuses, so no kernel file
         fast_gelu.pattern.tsr   the sigmoid GELU written out
@@ -223,6 +227,29 @@ It uses CUTLASS's float32 SIMT kernel rather than TF32 tensor cores, so it round
 SGEMM, which tessiq's matmuls call. When the output has too few tiles to fill the GPU, K is split
 into slices that take turns adding into the output, through a semaphore per tile in workspace.
 
+### Calling a library
+
+Host code can call a library instead of launching a kernel, and is declared the same way. A
+`.nvcc.cu` that includes a cuBLAS header, `cublas_v2.h` or `cublasLt.h`, has the extension linked
+against cuBLAS and cuBLASLt, the same libraries tessiq's own matmuls call.
+
+`gemm_bias_gelu_tanh` is one. It is `gemm_bias_gelu` with the tanh approximation of GELU, computed
+by one `cublasLtMatmul` whose GELU_BIAS epilogue adds the bias and applies GELU before writing. Its
+rewrite matches a linear layer followed by `F.gelu(..., approximate="tanh")`, which
+`gemm_bias_gelu`'s leaves alone. A library call has the same obligations as a launch:
+
+- **The stream.** cuBLASLt takes the stream on each call, so the call is given `call.stream()`.
+  A library whose handle holds a stream, as cuBLAS's does, has the handle set to it before the
+  call.
+- **Workspace.** The algorithm cuBLASLt chooses says how much workspace it needs, and that much
+  comes from `call.workspace()`.
+- **Handles.** A handle costs more to create than a multiply, so there is one per device, created
+  the first time and kept.
+
+Choosing an algorithm also takes longer than running a small one, so the choice is kept for each
+shape. It depends on how the pointers are aligned: cuBLASLt otherwise assumes 256 bytes, and a
+tensor viewed at an offset has fewer.
+
 ## Replacing a torch operation
 
 An operation can stand in for one of torch's own. Then a model does not have to call it by name:
@@ -335,8 +362,8 @@ rewrites and overrides sit among the compiler's other passes.
 - **Declining a call.** A launch function can decline arguments its kernel cannot handle with
   `TORCH_CHECK`, and host code with `call.decline()`. The call runs the reference instead, counted
   in `fallbacks()`. `rms_norm` and `layer_norm` do this for a weight that is not one value per
-  column, which the reference would broadcast and the kernel would read past the end of, and
-  `gemm_bias_gelu` for a bias that is not one value per column.
+  column, which the reference would broadcast and the kernel would read past the end of. The two
+  GEMMs do the same for a bias that is not one value per column.
 - **No defaults, no backward.** A schema argument cannot have a default yet, because a compiled
   graph leaves out an argument equal to its default. The operation has no backward, so it is for
   inference until one is registered.

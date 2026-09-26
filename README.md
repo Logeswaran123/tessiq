@@ -59,8 +59,8 @@ convolutions call cuDNN, both float32 only for now. Anything else, an operation 
 does not take included, reaches PyTorch's CPU implementation through the fallback, which costs two
 transfers. [`docs/op_coverage.md`](docs/op_coverage.md) is generated from [`ops.toml`](ops.toml)
 and lists all of them. A custom operation brings a kernel of its own, compiled at run time or, as
-host code, when tessiq is built. It can stand in for a torch operation or for a computation a model
-writes out; see [`csrc/custom_ops/`](csrc/custom_ops/).
+host code, when tessiq is built, or calls a library such as cuBLASLt. It can stand in for a torch
+operation or for a computation a model writes out; see [`csrc/custom_ops/`](csrc/custom_ops/).
 
 **A shape that changes costs one compile, not one per shape.** Dynamo captures concrete shapes the
 first time it sees a function and recompiles with symbolic ones the second time a dimension
