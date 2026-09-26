@@ -14,7 +14,7 @@
 #
 # A .nvcc.cu file is different: nvcc compiles it here, for CMAKE_CUDA_ARCHITECTURES, because it holds
 # host code as well as kernels. Without nvcc it is left out and its operation runs the reference. One
-# that includes CUTLASS headers gets them fetched for it.
+# that includes CUTLASS headers gets them fetched for it, and one that includes cuBLAS's links it.
 
 set(embedded_files "")
 set(precompiled_files "")
@@ -77,16 +77,26 @@ if(precompiled_files)
   endif()
   target_link_libraries(_C PRIVATE tessiq_precompiled_ops CUDA::cudart)
 
-  # CUTLASS is header-only, and is fetched only when a .nvcc.cu includes it. Which files do is read
-  # here, so editing one configures again.
+  # What a .nvcc.cu uses is read from what it includes: CUTLASS, which is header-only and fetched
+  # only when some file includes it, and cuBLAS, which is linked. The files are configure
+  # dependencies, so editing one configures again.
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${precompiled_files})
   set(cutlass_files "")
+  set(uses_cublas OFF)
   foreach(file IN LISTS precompiled_files)
-    file(STRINGS "${file}" cutlass_includes REGEX "^#include [<\"]cutlass/")
-    if(cutlass_includes)
+    file(STRINGS "${file}" includes REGEX "^#include [<\"](cutlass/|cublas)")
+    if(includes MATCHES "cutlass/")
       list(APPEND cutlass_files "${file}")
     endif()
+    if(includes MATCHES "cublas")
+      set(uses_cublas ON)
+    endif()
   endforeach()
+  if(uses_cublas)
+    # The same libraries tessiq's own matmuls call. cuBLASLt is linked along with cuBLAS, which
+    # names its status codes.
+    target_link_libraries(_C PRIVATE CUDA::cublasLt CUDA::cublas)
+  endif()
   if(cutlass_files)
     include(FetchContent)
     # Pinned by hash. FETCHCONTENT_SOURCE_DIR_CUTLASS points the build at a checkout instead, for a
