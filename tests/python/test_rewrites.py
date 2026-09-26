@@ -56,6 +56,7 @@ def test_golden(path: Path) -> None:
 def test_each_pattern_has_a_pass_of_its_own() -> None:
     assert tessiq.library.rewrites() == {
         "tessiq::fast_gelu": "rewrite-fast-gelu",
+        "tessiq::gemm_bias_gelu": "rewrite-gemm-bias-gelu",
         "tessiq::rms_norm": "rewrite-rms-norm",
     }
 
@@ -72,7 +73,7 @@ def test_a_rewrite_is_asked_for_by_its_operation_or_its_pass() -> None:
 
 
 def test_asking_for_a_rewrite_nothing_has_names_the_ones_there_are() -> None:
-    with pytest.raises(ValueError, match="these do: fast_gelu, rms_norm"):
+    with pytest.raises(ValueError, match="these do: fast_gelu, gemm_bias_gelu, rms_norm"):
         tessiq.library.rewrite_passes(["layer_norm"])
 
 

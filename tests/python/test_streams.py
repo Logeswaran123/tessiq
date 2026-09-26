@@ -51,7 +51,9 @@ def captured(fn: Callable[..., Any], *inputs: torch.Tensor) -> torch.fx.GraphMod
     return graphs[0]
 
 
-def replayed(kernel: Any, inputs: list[torch.Tensor], out: torch.Tensor) -> torch.Tensor:
+def replayed(
+    kernel: Any, inputs: list[torch.Tensor], out: torch.Tensor, replays: int = 1
+) -> torch.Tensor:
     """Launches `kernel` inside a graph captured on a side stream, then replays the graph."""
     # Once outside the capture first. A library handle is created on first use, and creating one
     # allocates, which a capture does not allow.
@@ -64,10 +66,10 @@ def replayed(kernel: Any, inputs: list[torch.Tensor], out: torch.Tensor) -> torc
         graph.capture_begin()
         kernel.launch(inputs, out, stream=side.cuda_stream)
         graph.capture_end()
-    torch.cuda.synchronize()
-    out.copy_(torch.full(out.shape, float("nan")))
-
-    graph.replay()
+    for _ in range(replays):
+        torch.cuda.synchronize()
+        out.copy_(torch.full(out.shape, float("nan")))
+        graph.replay()
     torch.cuda.synchronize()
     return out
 
@@ -114,3 +116,28 @@ def test_precompiled_host_code_goes_to_the_stream_it_is_handed() -> None:
     inputs = [x.to(tessiq.gpu), weight.to(tessiq.gpu), bias.to(tessiq.gpu)]
     expected = torch.nn.functional.layer_norm(x, (128,), weight, bias, 1e-5)
     torch.testing.assert_close(replayed(kernel, inputs, out).cpu(), expected, rtol=1e-5, atol=1e-5)
+
+
+def test_a_split_k_gemm_replays_from_a_capture() -> None:
+    # K is split, so the slices take turns through a semaphore per tile in workspace, which the
+    # host code zeroes on the stream first. A capture records the zeroing and the GEMM, and keeps
+    # the workspace, since every replay reads it again.
+    if "tessiq::gemm_bias_gelu" not in tessiq.library.precompiled():
+        pytest.skip("this build had no nvcc, so gemm_bias_gelu has no host code")
+
+    def linear_gelu(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.gelu(torch.nn.functional.linear(x, weight, bias))
+
+    x, weight, bias = torch.randn(64, 2048), torch.randn(256, 2048) / 2048**0.5, torch.randn(256)
+    recipe = build_recipe(
+        captured(linear_gelu, x, weight, bias),
+        tessiq.gpu,
+        use_cache=False,
+        rewrites=["gemm_bias_gelu"],
+    )
+    (kernel,) = recipe.kernels.values()
+
+    out = torch.empty(64, 256, device=tessiq.gpu)
+    inputs = [x.to(tessiq.gpu), weight.to(tessiq.gpu), bias.to(tessiq.gpu)]
+    replayed(kernel, inputs, out, replays=3)
+    torch.testing.assert_close(out.cpu(), linear_gelu(x, weight, bias), rtol=1e-5, atol=1e-5)

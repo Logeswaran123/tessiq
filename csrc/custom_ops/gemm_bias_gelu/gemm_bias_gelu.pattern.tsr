@@ -1,0 +1,14 @@
+// nn.Linear followed by GELU, as AOTAutograd hands it to tessiq:
+//
+//   torch.nn.functional.gelu(torch.nn.functional.linear(x, weight, bias))
+//
+// linear arrives as addmm, with the weight transposed by a permute. The pattern names no attributes
+// on the addmm or the GELU, so an addmm with a beta or an alpha, and GELU's tanh approximation, are
+// left alone. A batched x arrives flattened by a view with another view after the addmm, which this
+// does not match.
+graph @gemm_bias_gelu(%x: f32[?], %weight: f32[?], %bias: f32[?]) -> f32[?] {
+  %permute = aten.permute.default(%weight) {arg1 = [1,0]} : f32[?]
+  %addmm = aten.addmm.default(%bias, %x, %permute) : f32[?]
+  %gelu = aten.gelu.default(%addmm) : f32[?]
+  return %gelu
+}
