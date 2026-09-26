@@ -160,6 +160,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   downloaded only for a build with a `.nvcc.cu` that includes it.
 - GELU runs on the device in a compiled graph, fused with its neighbours. Its tanh approximation
   runs on the host.
+- `gemm_bias_gelu_tanh`, one cuBLASLt call whose epilogue adds the bias and applies the tanh GELU,
+  and `rewrite-gemm-bias-gelu-tanh`, which puts it in place of a linear layer followed by that GELU.
+  A `.nvcc.cu` that includes a cuBLAS header has the extension linked against cuBLAS and cuBLASLt.
 
 ### Changed
 

@@ -22,7 +22,7 @@ work it describes.
 | 10 | Where the time goes | done |
 | 11 | Convolution | done |
 | 12 | Custom operations and rewrite passes | done |
-| 13 | Precompiled kernels | planned |
+| 13 | Precompiled kernels | done |
 | 14 | Triton emitter | optional |
 | 15 | MLIR export target | optional |
 
@@ -312,7 +312,7 @@ kernel people most often write is a hand-written custom operation rather than a 
 cluster. Building the seam first makes a Triton-sourced custom operation a new source language
 rather than a sixth path wired in by hand.
 
-### Phase 13: Precompiled kernels (in progress)
+### Phase 13: Precompiled kernels (done)
 A custom operation whose kernel is compiled ahead of time with nvcc, so that it can use CUTLASS,
 cuBLAS or anything else that needs host code, which phase 12's run-time compiled source cannot do.
 **Why phase 12 is not enough.** NVRTC compiles device code only. A cuBLAS call is host code with a
@@ -352,18 +352,6 @@ DLPack: it is handed tensors the way phase 12's launch functions are. A library 
 is still worth having for a kernel that cannot be built alongside tessiq, and would be a phase of
 its own.
 
-**Progress.** The interface is in: `.precompiled()`, host code in `<name>.nvcc.cu` registered with
-`TESSIQ_PRECOMPILED`, workspace from the allocator, the stream it is handed, and the architecture
-check. `layer_norm` shows it with two launches and workspace between them.
-
-Milestones 1 and 2 are in. `gemm_bias_gelu` is a CUTLASS float32 GEMM with the bias and GELU in its
-epilogue, splitting K through semaphores in workspace when the output has few tiles. With
-`rewrite-gemm-bias-gelu`, `tessiq-explain` shows a linear layer and GELU as one custom kernel where
-there were a GEMM and a fused GELU kernel. On an RTX 5080, `bench/gemm_bias_gelu.py` has it about
-12% faster at 4096 x 1024 -> 4096, level at 64 x 4096 -> 4096, a few percent slower at
-8192 x 768 -> 3072 and about 10% slower at 512 x 768 -> 3072. The pattern matches a 2-D input only: a batched one arrives with views
-around the addmm. The cuBLAS operation is next.
-
 **Milestone:**
 1. A CUTLASS GEMM whose epilogue, the stage that runs on each output element before it is written,
    adds the bias and applies GELU, in `csrc/custom_ops/`, built with nvcc.
@@ -373,6 +361,49 @@ around the addmm. The cuBLAS operation is next.
    way it goes.
 3. A second operation calls cuBLAS directly, to show that a library call is defined the same way as
    a kernel.
+
+**What it found.** The three milestones hold. A precompiled operation declares `.precompiled()` and
+puts its host code in `<name>.nvcc.cu`, registered with `TESSIQ_PRECOMPILED`. That code is handed
+the call's tensors, the stream, and workspace from tessiq's allocator, and is refused, with both
+architectures named, on a card it was not built for. `layer_norm` makes two launches with workspace
+between them.
+
+- **`gemm_bias_gelu`** is a CUTLASS float32 GEMM whose epilogue adds the bias and applies the exact
+  GELU. It splits K through semaphores in workspace when the output has few tiles.
+- **`gemm_bias_gelu_tanh`** is one cuBLASLt call with the GELU_BIAS epilogue, which computes the
+  tanh GELU. It has no kernel of its own. It is defined like the others, and it takes the
+  workspace cuBLASLt asks for from the same allocator.
+
+With their rewrites, `tessiq-explain` shows a linear layer and GELU as one custom kernel. Device
+time on an RTX 5080, from `bench/gemm_bias_gelu.py`:
+
+| m × k → n | cuBLAS + GELU kernel | `gemm_bias_gelu`, CUTLASS | `gemm_bias_gelu_tanh`, cuBLASLt |
+|---|---|---|---|
+| 512 × 768 → 3072 | 114 us | 126 us, 0.91× | 103 us, 1.11× |
+| 4096 × 1024 → 4096 | 1369 us | 1204 us, 1.14× | 1236 us, 1.11× |
+| 8192 × 768 → 3072 | 1772 us | 1840 us, 0.96× | 1580 us, 1.12× |
+| 64 × 4096 → 4096 | 104 us | 113 us, 0.93× | 97 us, 1.07× |
+
+The tanh column computes a different GELU, so it compares the two ways of fusing the epilogue
+rather than two ways of getting one answer.
+
+What the plan did not expect:
+- **The library call beat the hand-written kernel.** cuBLASLt's epilogue was faster than the
+  CUTLASS one at three of the four shapes. CUTLASS's float32 SIMT kernel trails NVIDIA's own on
+  this card, and its tensor-core route to float32 accuracy, 3xTF32, was slower still. A CUTLASS
+  kernel earns its place where cuBLASLt has no epilogue for the job, such as the exact GELU.
+- **GELU was not on the device.** The baseline the second milestone names, a cuBLAS matmul
+  followed by a fused GELU kernel, did not exist until GELU joined the elementwise table.
+- **Compiled graphs dropped keyword arguments.** `torch.add(a, b, alpha=2)` computed `a + b`, and
+  an addmm with a `beta` computed the plain one. The rewrite's tests found it, and 13.2 fixed it.
+- **The rewrites match a 2-D input only.** A batched input arrives with views around the addmm,
+  so a transformer MLP on 3-D activations is not rewritten yet.
+- **A compiled call's copy to the host outweighs these kernels.** A result of 4096 × 4096 takes
+  about 15 ms to come back, against about 1.3 ms for the kernels. That is why the benchmark times
+  the device.
+- **The architecture check covers a library call too.** `gemm_bias_gelu_tanh` launches no kernel,
+  but its file is built for `CMAKE_CUDA_ARCHITECTURES` like any other. On a card it was not built
+  for it is refused, although cuBLASLt itself would run there.
 
 **Why here.** It needs phase 12's kernel interface, registry and rewriter, and without the rewriter
 a GEMM with a fused epilogue only helps models that call it by name. It comes before Triton because

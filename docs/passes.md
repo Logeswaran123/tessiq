@@ -20,8 +20,8 @@ fuse-elementwise
 With what ships today, a compile that asks for every rewrite runs:
 
 ```
-rewrite-rms-norm, rewrite-fast-gelu, rewrite-gemm-bias-gelu, override-softmax,
-mark-supported, layout-assign, cluster, fuse-elementwise
+rewrite-rms-norm, rewrite-fast-gelu, rewrite-gemm-bias-gelu, rewrite-gemm-bias-gelu-tanh,
+override-softmax, mark-supported, layout-assign, cluster, fuse-elementwise
 ```
 
 The order is assembled in `csrc/tessiq/torch/partition.cpp`, in three steps:
