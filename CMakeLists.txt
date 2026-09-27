@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.26)
 project(
   tessiq
   VERSION 0.0.1
-  DESCRIPTION "A from-scratch PyTorch accelerator backend: device, graph compiler, and kernels"
+  DESCRIPTION "A PyTorch backend for NVIDIA GPUs: device, graph compiler, and kernels"
   LANGUAGES CXX)
 
 # --- Options ------------------------------------------------------------------------------------
@@ -48,7 +48,7 @@ if(TESSIQ_ENABLE_CUDA)
 endif()
 
 # Reserved for the MLIR export target; not implemented yet.
-option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (PHASES.md, phase 15)" OFF)
+option(TESSIQ_ENABLE_MLIR "Build the MLIR export target (ROADMAP.md, stage 16)" OFF)
 
 set(TESSIQ_SANITIZER "" CACHE STRING
     "Comma-separated sanitizers to enable, e.g. 'address,undefined'. Empty disables them.")
@@ -77,7 +77,7 @@ include(Sanitizers)
 
 if(TESSIQ_ENABLE_MLIR)
   message(FATAL_ERROR
-          "TESSIQ_ENABLE_MLIR is reserved for phase 15 (see PHASES.md) and is not "
+          "TESSIQ_ENABLE_MLIR is reserved for stage 16 (see ROADMAP.md) and is not "
           "implemented yet. Configure without it.")
 endif()
 

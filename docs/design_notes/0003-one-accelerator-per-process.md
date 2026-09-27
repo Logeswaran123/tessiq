@@ -48,6 +48,6 @@ benchmark that trained on both would have to fork.
 **The test suite is unaffected**, because it compares tessiq against eager on the CPU, which is
 the stricter reference anyway.
 
-**This is not a bug we can fix from here.** It is a property of PyTorch supporting one accelerator
-per process and of PrivateUse1 being the way an out-of-tree backend registers. A backend built
-into PyTorch as its own device type would not have it.
+**It cannot be fixed in tessiq.** It follows from PyTorch supporting one accelerator per process
+and from PrivateUse1 being how an out-of-tree backend registers. A backend built into PyTorch as
+its own device type would not have it.

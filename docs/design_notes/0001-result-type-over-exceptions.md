@@ -30,8 +30,10 @@ Recoverable failures return `Result<T>`. It's `[[nodiscard]]`, so dropping one i
 `Error` carries an `ErrorCode` to branch on and a message for whoever reads the log;
 `with_context()` adds provenance on the way up.
 
-Exceptions live in exactly one file, `csrc/bindings/module.cpp`, where an `Error` becomes the
-Python exception a caller would expect. Nothing throws across the C ABI.
+The core does not throw. The bindings in `csrc/bindings/module.cpp` turn an `Error` into the
+Python exception a caller expects. The PyTorch integration in `csrc/tessiq/torch/` uses
+`TORCH_CHECK` where PyTorch's own interfaces expect an exception, such as a kernel registered with
+the dispatcher.
 
 Broken invariants are a separate thing again. Those are `TESSIQ_DCHECK`, because there is nothing
 useful a caller can do with "the compiler has a bug".
@@ -46,8 +48,8 @@ The cost is ceremony: every fallible call needs a check or a macro. `TESSIQ_RETU
 `TESSIQ_ASSIGN_OR_RETURN` take the edge off but don't remove it. And nothing stops someone mixing
 the two mechanisms by accident. That is a review question rather than a compiler-enforced one.
 
-Worth revisiting once `std::expected` is available across the toolchains we support, at which point
-`Result<T>` should become an alias rather than its own implementation.
+Revisit once `std::expected` is available on every supported toolchain; `Result<T>` can then
+become an alias.
 
 ## See also
 

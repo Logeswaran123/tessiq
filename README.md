@@ -1,259 +1,380 @@
 # tessiq
 
-A PyTorch accelerator backend built from scratch: a custom device, a graph compiler, and a kernel
-library. It exists to answer, in working code, what a hardware vendor actually has to build to put
-a chip behind `model.to(...)` and `torch.compile`.
+tessiq is an out-of-tree PyTorch backend for NVIDIA GPUs. It brings together the three pieces an
+accelerator needs to run PyTorch models:
 
-Named after *tessera*, the Latin word for a mosaic tile, which is what the compiler makes of a
-graph: pieces cut to fit, then set into one surface. Said `/ˈtɛs.ɪk/`.
+- **A device runtime.** It is registered as the `tessiq` device through PyTorch's PrivateUse1
+  extension point.
+- **A graph compiler.** It serves `torch.compile(model, backend="tessiq")`.
+- **A kernel library.** It holds generated CUDA kernels, cuBLAS, cuDNN, and custom operations
+  written with CUDA, CUTLASS or cuBLASLt.
 
-Phases 0 to 12 of [15](PHASES.md) are done. Tensors allocate, transfer and compute on two
-backends, each with its own caching allocator. `torch.compile(model, backend="tessiq")` captures a
-graph, imports it into the IR, decides what the backend takes, and compiles a kernel for each part:
-fused loops and reductions it generates and compiles with NVRTC, matmuls through cuBLAS,
-convolutions through cuDNN, and custom operations defined in
-[`csrc/custom_ops/`](csrc/custom_ops/). Forward and backward both go through it, and a graph
-compiled once is not compiled again.
+It is for developers building or studying accelerator backends. Every layer, from ATen dispatch
+down to the kernel launch, is in this repository. `tessiq.explain` and `tessiq-opt` show what each
+layer does, and custom operations and compiler passes extend it without changes elsewhere.
+
+> [!NOTE]
+> tessiq is under active development (version 0.0.1). It builds from source on Linux and is tested
+> on an NVIDIA RTX 5080.
+
+## Architecture
+
+![tessiq software stack: application, PyTorch, tessiq backend, kernels, runtime, CUDA and hardware layers](docs/images/architecture.svg)
+
+Each column is one way into tessiq, read top to bottom:
+
+- **Eager operations** on `tessiq` tensors go through ATen dispatch. Only allocation, copies,
+  views and `clone` have device implementations. Every other operation runs through the CPU
+  fallback, including the ones listed in [`ops.toml`](ops.toml): the inputs are copied to the host,
+  PyTorch computes the result, and it is copied back.
+- **Custom operations** called as `torch.ops.tessiq.<name>` run their own kernels on the device.
+- **Compiled models** are where the operations in `ops.toml` run on the device. `torch.compile`
+  hands the graph compiler an FX graph, which it turns into a recipe:
+  - elementwise chains are fused into generated kernels;
+  - reductions get kernels of their own;
+  - matmuls and convolutions call cuBLAS and cuDNN;
+  - rewrite passes can substitute custom operations.
+
+## Table of contents
+
+- [Features](#features)
+- [Components](#components)
+- [Supported hardware and software](#supported-hardware-and-software)
+- [Building from source](#building-from-source)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Performance](#performance)
+- [Limitations](#limitations)
+- [Running tests](#running-tests)
+- [Documentation](#documentation)
+
+## Features
+
+- `torch.compile(model, backend="tessiq")` for inference and training, including backward graphs
+  and symbolic shapes.
+- Elementwise chains fused into one generated CUDA kernel, compiled at run time for the GPU in use
+  and cached on disk.
+- Matrix multiplies through cuBLAS and convolutions through cuDNN.
+- A `tessiq` device with a caching allocator per GPU. It works with `torch.accelerator`, pinned
+  memory and `torch.save`/`torch.load`, and every ATen operation has a CPU fallback.
+- Custom operations, one directory each. Each can be called directly, replace a PyTorch
+  operation, or be rewritten into compiled models in place of the operations it computes.
+- Tools that show what the compiler did: `tessiq.explain`, `tessiq.profile` and `tessiq-opt`.
+
+## Components
+
+**Device integration** (`csrc/tessiq/torch/`, `python/tessiq/device.py`)
+- Registers `tessiq` with PyTorch: the device guard, the PrivateUse1 hooks, and the ATen kernels
+  for allocation, copies, views and `clone`.
+- Any other ATen operation on a `tessiq` tensor copies its inputs to the host, runs PyTorch's CPU
+  kernel, and copies the result back.
+
+**Graph compiler** (`csrc/tessiq/ir/`, `csrc/tessiq/passes/`, `python/tessiq/`)
+1. Imports the FX graph from `torch.compile` into an SSA IR with a textual form.
+2. Runs a pass pipeline that marks what the device can run, groups it into clusters and fuses
+   elementwise chains. [docs/passes.md](docs/passes.md) describes the pipeline.
+3. Plans one memory arena for the intermediates.
+4. Produces a recipe, which is cached. An executor runs the recipe on each call.
+
+**Custom operations** (`csrc/custom_ops/`)
+- Each operation has a schema, an ATen reference, and one of three implementations: a CUDA kernel
+  compiled with NVRTC, an elementwise expression the compiler fuses, or host code built with nvcc.
+- Operations appear as `torch.ops.tessiq.<name>`.
+  [csrc/custom_ops/README.md](csrc/custom_ops/README.md) explains how to add one.
+
+**Kernels** (`csrc/tessiq/codegen/`)
+- Generates CUDA C++ for fused elementwise loops, reductions and the pack kernel. NVRTC compiles it,
+  and the cubins are cached on disk.
+- Calls cuBLAS and cuDNN.
+- Launches everything through one `Kernel` interface, with an explicit stream.
+
+**Runtime** (`csrc/tessiq/runtime/`)
+- A `Device` interface with two backends: the CPU reference (`tessiq:0`) and CUDA (`tessiq:1`
+  onwards).
+- A caching allocator per device, and copies between host and device.
+
+## Supported hardware and software
+
+| | |
+|---|---|
+| OS | Linux, x86-64 |
+| GPU | An NVIDIA GPU supported by CUDA 12. Tested on an RTX 5080 (compute capability 12.0) |
+| Python | 3.10 or later |
+| PyTorch | 2.11, CUDA 12.8 build |
+| CUDA Toolkit | 12.x, tested with 12.8. `nvcc` is only needed for the precompiled custom operations |
+| cuDNN | 9.x, from PyTorch's `nvidia-cudnn-cu12` package. Without it, convolution runs on the host |
+| CMake | 3.26 or later |
+| C++ compiler | GCC with C++20 support. 11 and 13 are tested |
+
+Without the CUDA Toolkit, tessiq builds with only the CPU reference device.
+
+## Building from source
+
+### Setup
+
+```bash
+git clone https://github.com/Logeswaran123/tessiq.git
+cd tessiq
+pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements-dev.txt        # build, test and lint tools
+pip install -e . --no-build-isolation      # builds the C++/CUDA extension
+```
+
+> [!IMPORTANT]
+> Keep `--no-build-isolation`. The extension is compiled against the PyTorch you installed in the
+> previous step.
+
+### Verify
+
+```console
+$ python -c "import tessiq; print(tessiq.__version__, tessiq.gpu_count())"
+0.0.1 1
+```
+
+A GPU count of 0 means the CUDA backend was not built, usually because CMake did not find the
+toolkit. `pip install -v` prints the configuration summary, which then shows
+`cuda backend ....... OFF`. Point CMake at the toolkit and rebuild:
+
+```bash
+pip install -e . --no-build-isolation -Ccmake.define.CUDAToolkit_ROOT=/usr/local/cuda
+```
+
+### Configuration flags
+
+Pass flags with `-Ccmake.define.<FLAG>=<value>`:
+
+| Flag | Default | |
+|---|---|---|
+| `TESSIQ_ENABLE_CUDA` | ON if the toolkit is found | Build the CUDA backend |
+| `CMAKE_CUDA_ARCHITECTURES` | `native` | GPUs to build the precompiled custom operations for, such as `"89;120"` |
+| `FETCHCONTENT_SOURCE_DIR_CUTLASS` | unset | Use a local CUTLASS checkout instead of downloading CUTLASS 4.8.0 |
+| `TESSIQ_WARNINGS_AS_ERRORS` | ON | Treat compiler warnings as errors |
+| `TESSIQ_SANITIZER` | empty | Sanitizers to build with, such as `address,undefined` |
+
+## Quick start
+
+### Compile a model
 
 ```python
 import torch
+import tessiq
 
-model = torch.nn.Sequential(torch.nn.Linear(16, 32), torch.nn.Tanh(), torch.nn.Linear(32, 4))
-compiled = torch.compile(model, backend="tessiq")  # the name resolves without importing tessiq
+model = torch.nn.Sequential(torch.nn.Linear(16, 32), torch.nn.GELU(), torch.nn.Linear(32, 4))
+compiled = torch.compile(model, backend="tessiq", options={"device": "tessiq:1"})
+
 batch = torch.randn(8, 16)
-
-torch.allclose(compiled(batch), model(batch))
+torch.testing.assert_close(compiled(batch), model(batch))
 ```
 
-The device is usable on its own, without the compiler:
+Always pass `options={"device": ...}`. Without it, the model compiles for `tessiq:0`, the CPU
+reference device. That is useful for checking results but generates no GPU kernels.
+
+- **Inputs** can be ordinary CPU tensors or tessiq tensors. Weights and other inputs that have not
+  changed since the previous call stay on the device.
+- **Results** are returned as CPU tensors.
+- **Training** works the same way; the backward pass is compiled too.
+
+`backend="tessiq"` also works without `import tessiq`, because the backend is registered as a
+`torch_dynamo_backends` entry point.
+
+### See how a model was compiled
+
+`tessiq.explain` shows what the compiler did with a model:
 
 ```python
-import torch, tessiq
+print(tessiq.explain(model, batch, device=tessiq.gpu))
+```
 
-reference = torch.randn(1024, device=tessiq.cpu)  # host memory, the correctness oracle
-fast = reference.to(tessiq.gpu)  # real GPU memory
+```
+== summary ==
 
-torch.allclose(fast.to(tessiq.cpu), reference)
+model           Sequential on tessiq:1
+shapes          known
+operations      5
+on the device   5
+kernels         3, covering 3 operation(s)
+...
+== schedule ==
+
+  permute       aten.permute.default     interpreted on the device (moves its inputs)
+  addmm         aten.addmm.default       kernel %addmm (moves its inputs)
+  gelu          aten.gelu.default        kernel %gelu
+  permute_1     aten.permute.default     interpreted on the device (moves its inputs)
+  addmm_1       aten.addmm.default       kernel %addmm_1 (moves its inputs)
+```
+
+The report also shows the imported graph, what each pass changed, and each kernel. Every operation
+is placed one of three ways:
+
+| Placement | Meaning |
+|---|---|
+| `kernel` | It runs in a kernel |
+| `interpreted on the device` | It has no kernel, but runs on device tensors. A view moves no data |
+| `host` | It runs on the CPU, with a copy each way |
+
+### Work with tensors on the device
+
+```python
+x = torch.randn(1024, device=tessiq.gpu)  # same as device="tessiq:1"
+y = x.to(tessiq.cpu)  # the CPU reference device, tessiq:0
+z = x.cpu()  # an ordinary CPU tensor
+
 tessiq.memory_stats(tessiq.gpu).allocated_bytes
+torch.accelerator.memory_allocated(tessiq.gpu)
 ```
 
-Passes are exercised as text in, text out:
+PyTorch gives an out-of-tree backend a single device type, so tessiq tells CPU and GPU apart by
+index:
 
-```console
-$ tessiq-opt --passes=cse,dead-node-elimination graph.tsr
-graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
-  %s0 = add(%a, %b) : f32[4,8]
-  %out = mul(%s0, %s0) : f32[4,8]
-  return %out
-}
-```
-
-[`docs/passes.md`](docs/passes.md) lists the passes a compile runs and the order it runs them in,
-and how to add one.
-
-**What runs on the device.** All 52 operations the compiler knows have kernels. A chain of
-elementwise operations becomes one kernel, its intermediates never leave a register, and the
-generated code is cached as a cubin between runs. Reductions get a kernel of their own, since they
-read a whole axis to write one element and cannot share that loop. Matmuls call cuBLAS and
-convolutions call cuDNN, both float32 only for now. Anything else, an operation of a type its kernel
-does not take included, reaches PyTorch's CPU implementation through the fallback, which costs two
-transfers. [`docs/op_coverage.md`](docs/op_coverage.md) is generated from [`ops.toml`](ops.toml)
-and lists all of them. A custom operation brings a kernel of its own, compiled at run time or, as
-host code, when tessiq is built, or calls a library such as cuBLASLt. It can stand in for a torch
-operation or for a computation a model writes out; see [`csrc/custom_ops/`](csrc/custom_ops/).
-
-**A shape that changes costs one compile, not one per shape.** Dynamo captures concrete shapes the
-first time it sees a function and recompiles with symbolic ones the second time a dimension
-changes, which is its default rather than something a caller asks for. The IR records an extent it
-does not know as `?`, and every kernel takes the numbers it needs as arguments: the element count
-and a broadcast's divisor for a fused loop, three extents for a reduction, and m, n and k for a
-matmul. On the encoder block in [`tests/python/test_models.py`](tests/python/test_models.py) that
-is the same 28 kernels a fixed shape gets, and the only data to cross between host and device is
-the 128 KB result coming back. The one form left out is stepping through a permuted operand axis by
-axis, which needs an extent per axis written into the source.
-
-`(a*b + c).relu().sigmoid()` on 4M floats on an RTX 5080. The generated kernel is good and the
-path around it is not, so both are measured. From
-[`bench/against_torch.py`](bench/against_torch.py), with the data already on the device, medians of
-five runs:
-
-| | | |
+| Device | Python name | Backed by |
 |---|---|---|
-| tessiq generated kernel | 0.074 ms | 904 GB/s |
-| `torch.compile` inductor | 0.089 ms | 756 GB/s |
+| `tessiq:0` | `tessiq.cpu` | Host memory. The reference implementation GPU results are tested against |
+| `tessiq:1` | `tessiq.gpu`, `tessiq.gpu_at(0)` | The first CUDA GPU |
+| `tessiq:2`, ... | `tessiq.gpu_at(1)`, ... | Further GPUs |
 
-Three loads, four operations in registers, one store. Measure the whole call from host tensors
-instead and PyTorch wins by 18x, because tessiq moves 48 MB to the device and 16 MB back every call
-and the kernel is about 7% of that call.
+`device="tessiq"` without an index means the current tessiq device, which is `tessiq:0` until you
+call `tessiq.set_device(tessiq.gpu)`.
 
-Within tessiq, a kernel beats running the same graph without one by 5.7x
-([`bench/fusion.py`](bench/fusion.py)). Compilation costs 440 us and a cached recipe costs 110 us
-([`bench/compile_overhead.py`](bench/compile_overhead.py)).
+### Use custom operations
 
-Reductions, from [`bench/reduction.py`](bench/reduction.py), summing a 4096 by 4096 tensor with
-the data already on the device:
+tessiq ships custom operations under `torch.ops.tessiq`. You can call them directly:
 
-| | tessiq | torch |
+```python
+x = torch.randn(8, 64, device=tessiq.gpu)
+weight = torch.randn(64, device=tessiq.gpu)
+torch.ops.tessiq.rms_norm(x, weight, 1e-6)
+```
+
+Some also have a rewrite, which finds the same computation written in plain PyTorch and replaces
+it. Rewrites change numerics slightly, so you opt in per compile:
+
+```python
+compiled = torch.compile(
+    model, backend="tessiq", options={"device": "tessiq:1", "rewrites": ["gemm_bias_gelu"]}
+)
+```
+
+For the model above, this turns the first `Linear` and the `GELU` into a single CUTLASS kernel.
+
+| Operation | What it is | Rewrite matches |
 |---|---|---|
-| last axis | 1387 GB/s | 1388 GB/s |
-| first axis | 601 GB/s | 1261 GB/s |
+| `rms_norm` | RMSNorm in one kernel | RMSNorm written out |
+| `softmax` | Softmax kernel. Replaces PyTorch's float32 softmax on tessiq devices, no rewrite needed | |
+| `fast_gelu` | Sigmoid-approximated GELU, fused with neighbouring operations | `x * sigmoid(1.702 * x)` |
+| `swiglu` | `silu(gate) * up`, fused with neighbouring operations | |
+| `layer_norm` | Layer norm in two kernels | |
+| `gemm_bias_gelu` | CUTLASS GEMM with the bias and GELU fused into it | `Linear` then `GELU` |
+| `gemm_bias_gelu_tanh` | cuBLASLt GEMM with the bias and tanh GELU fused into it | `Linear` then `GELU(approximate="tanh")` |
 
-Reducing the last axis reads contiguous memory and lands where PyTorch does. Reducing the first
-reads with a stride and is 2.1x behind, and a short axis with many outputs is further behind than
-that, because a block of 256 threads combining 64 elements leaves most of them idle.
+`tessiq.library.registered()` lists them, and `tessiq.library.rewrites()` lists the rewrites.
+[`csrc/custom_ops/README.md`](csrc/custom_ops/README.md) explains how to add your own.
 
-**How much of a real model this covers is a separate question, and a smaller number.** From
-[`tools/model_coverage.py`](tools/model_coverage.py):
+## Configuration
 
-```
-residual block: 37 of 41 operations on the device (90%), 37 claimable
-  left on the host                                 count
-  aten._to_copy.default                                4
+Options to `torch.compile(..., options={...})`:
 
-encoder block: 76 of 76 operations on the device (100%), 76 claimable
-```
-
-The four left on the residual block are float32 to float32 casts that the batch norm decomposition
-puts on its running statistics.
-
-The two numbers differ on purpose. **Claimable** is what the backend has an implementation for.
-**On the device** is what partitioning puts there, which is fewer: a movement operation costs
-nothing on either side, so a group holding nothing but views is left where its input already was
-rather than paying two transfers to rearrange indices somewhere else.
-
-Both blocks give the numbers eager gives, on the reference backend and on a GPU.
-
-**A whole block is a different measurement, and a less flattering one.** A 512-wide encoder block
-over 128 steps at batch 8, from [`bench/against_torch.py`](bench/against_torch.py), medians of five
-runs:
-
-| | | |
+| Option | Default | |
 |---|---|---|
-| tessiq | 1.17 ms | |
-| torch on the same GPU, moving the input too | 0.83 ms | 1.4x faster |
-| torch on the same GPU, everything resident | 0.61 ms | 1.9x faster |
-| `torch.compile` inductor, resident | 0.54 ms | 2.2x faster |
-| torch eager on the CPU | 9.1 ms | 7.8x slower |
+| `device` | `"tessiq:0"` | The tessiq device to compile for |
+| `rewrites` | none | Custom operations whose rewrites to run, such as `["rms_norm"]` |
 
-Well ahead of the CPU, and about twice as slow as the card it runs on can manage.
+Environment variables:
 
-**The weights used to cross on every call**, because AOTAutograd lifts parameters to graph inputs
-and they arrive as ordinary arguments. The executor keeps the device copy of an input that has not
-changed, checked against its version counter so a parameter an optimizer writes to crosses again.
-That was 2 ms.
+| Variable | Default | |
+|---|---|---|
+| `TESSIQ_LOG_LEVEL` | `warn` | `error`, `warn`, `info`, `debug` or `trace` |
+| `TESSIQ_LOG_MODULES` | all | Comma-separated modules to log, such as `passes,custom_ops` |
+| `TESSIQ_CACHE_DIR` | `~/.cache/tessiq/cubin` | Where compiled kernels are cached |
 
-**What is left is the host.** From [`bench/where_the_time_goes.py`](bench/where_the_time_goes.py)
-on the same block:
+## Performance
 
-```
-              count        host   share      device       moved
-interpreted      41      0.40 ms     40%
-kernel           25      0.40 ms     40%
-transfer          1      0.19 ms     19%                  2.0 MB
-total            67      1.00 ms
-```
+These were measured on an RTX 5080 with PyTorch 2.11, and each is a median. The scripts are in
+[`bench/`](bench/).
 
-One transfer is left, the 2 MB result coming back. The rest of the call is the host issuing 25
-kernels and interpreting 41 steps that have no kernel: views, permutes and clones going one
-operation at a time through PyTorch's dispatcher, at about ten microseconds a step whatever the
-tensors are. That is the price of interpreting a graph rather than running it, and it is paid per
-operation. Phase 10 measured it: the device is idle for most of the call, waiting for the host to
-issue the next piece of work.
+**One fused kernel.** `(a * b + c).relu().sigmoid()` on 4M floats, with the data already on the
+GPU, runs as a single tessiq kernel. It is faster than Inductor's
+([`against_torch.py`](bench/against_torch.py)):
 
-The generated code is not what is behind: on a single chain it is
-[904 GB/s against Inductor's 756](bench/against_torch.py). Everything around it is.
+| | Time | Bandwidth |
+|---|---|---|
+| tessiq | 0.057 ms | 1101 GB/s |
+| `torch.compile` (Inductor) | 0.072 ms | 874 GB/s |
 
-## How it fits together
+**Linear + GELU.** GPU time for the three ways tessiq can run it
+([`gemm_bias_gelu.py`](bench/gemm_bias_gelu.py)). The cuBLASLt version computes the tanh
+approximation of GELU; the others compute the exact one.
 
-```
-  torch.compile(model, backend="tessiq")      model.to("tessiq")
-              │                                        │
-              v                                        v
-   Dynamo → FX → AOTAutograd                   aten op → dispatch
-              │                                        │
-              v                                        │
-       Tessiq IR ──> passes ──> memory plan ──> recipe │
-              │        rewrites, overrides             │
-              │        mark-supported                  │
-              │        layout-assign                   │
-              │        cluster                         │
-              │        fuse-elementwise                │
-              v                                        v
-        ┌──────────────────── kernels ──────────────────┐
-        │  CPU reference     CUDA: NVRTC, cuBLAS,       │
-        │                    cuDNN, custom operations   │
-        └───────────────────────────────────────────────┘
-```
+| m × k → n | cuBLAS, then a GELU kernel | CUTLASS `gemm_bias_gelu` | cuBLASLt `gemm_bias_gelu_tanh` |
+|---|---|---|---|
+| 512 × 768 → 3072 | 114 µs | 126 µs | 103 µs |
+| 4096 × 1024 → 4096 | 1369 µs | 1204 µs | 1236 µs |
+| 8192 × 768 → 3072 | 1772 µs | 1840 µs | 1580 µs |
+| 64 × 4096 → 4096 | 104 µs | 113 µs | 97 µs |
 
-Two ways in. `torch.compile` hands over a whole graph, which is where the compiler earns its keep.
-`.to("tessiq")` dispatches one op at a time and catches whatever the compiler declines to take.
+**A whole model block.** A transformer encoder block (512 wide, 128 steps, batch 8), called with
+its input on the host ([`against_torch.py`](bench/against_torch.py)):
 
-The CPU backend is there to be obviously right rather than fast; CUDA output is checked against it.
-The passes don't know what hardware they're targeting, so CI runs the compiler on a GPU-less runner.
+| | Time per call |
+|---|---|
+| tessiq | 1.14 ms |
+| PyTorch eager, GPU | 0.88 ms |
+| PyTorch eager, GPU, input already on the GPU | 0.53 ms |
+| `torch.compile` (Inductor), input already on the GPU | 0.48 ms |
+| PyTorch eager, CPU | 8.83 ms |
 
-## Build
+End to end, tessiq is behind PyTorch on the GPU, and most of a call is spent on the host
+([`where_the_time_goes.py`](bench/where_the_time_goes.py)):
+
+| Share of a call | |
+|---|---|
+| 42% | Steps without a kernel (views, permutes, clones), run one at a time through PyTorch's dispatcher |
+| 34% | Launching the 25 kernels |
+| 24% | Copying the result back to the host |
+
+## Limitations
+
+- **CUDA autograd in the same process.** Importing tessiq makes it PyTorch's accelerator, and
+  `backward()` on ordinary CUDA tensors then fails in the same process. See
+  [design note 0003](docs/design_notes/0003-one-accelerator-per-process.md).
+- **Results come back to the host.** Compiled calls always return CPU tensors, so a large output
+  pays a device-to-host copy on every call.
+- **Eager operations are slow.** Outside `torch.compile`, most operations on tessiq tensors go
+  through the CPU fallback.
+- **Data types.** Generated kernels support float32, float64, int32 and int64. cuBLAS, cuDNN and
+  most custom operations are float32 only, and other types run on the host.
+- **Custom operations.** They have no backward pass yet, and their schemas can't have default
+  arguments.
+- **Random numbers.** Random operations run on the host.
+
+## Running tests
 
 ```bash
-pip install -r requirements-dev.txt
-pip install -e . --no-build-isolation
-pytest
-
-cmake -S . -B build -G Ninja
-cmake --build build -j8
-ctest --test-dir build
+pytest                    # Python tests; add -m "not cuda" on a machine without a GPU
 ```
 
-Python 3.10+, CMake 3.26+, and a compiler with C++20 for the torch-facing code (the core is
-C++17). With the CUDA toolkit's nvcc, the precompiled custom operations are built for the GPUs in
-the machine; set `CMAKE_CUDA_ARCHITECTURES` to build for others. The one that uses CUTLASS has its
-headers downloaded when the build is configured. The extension links libtorch, so PyTorch is needed
-to import tessiq. The C++ core builds and tests without it, which is what keeps the compiler
-testable on a machine with neither torch nor a GPU:
+The C++ core (IR, passes, runtime) builds and tests without PyTorch:
 
 ```bash
 cmake -S . -B build -G Ninja -DTESSIQ_BUILD_PYTHON=OFF
+cmake --build build
+ctest --test-dir build
 ```
 
-If you're going to commit:
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the development setup, the checks CI runs, and code
+conventions.
 
-```bash
-pre-commit install --install-hooks
-pre-commit install --hook-type commit-msg
-```
+## Documentation
 
-## Layout
-
-| Path | |
+| | |
 |---|---|
-| [`csrc/`](csrc/) | C++/CUDA core: runtime, IR, passes, codegen, and the PyTorch integration |
-| [`csrc/custom_ops/`](csrc/custom_ops/) | Custom operations, one directory each |
-| [`python/tessiq/`](python/tessiq/) | Python API and the `torch.compile` backend |
-| [`ops.toml`](ops.toml) | Every operation the compiler knows, and what generates the rest from it |
-| [`tools/`](tools/) | `gen_ops.py`, `tessiq-opt`, `tessiq_explain.py`, `model_coverage.py` |
-| [`tests/`](tests/) | gtest suites and golden pass tests; Python accuracy and end-to-end tests |
-| [`bench/`](bench/) | Benchmarks, and the scripts behind any number published here |
-| [`docs/`](docs/) | The pass pipeline, operation coverage, design notes |
-
-## Standards
-
-`-Werror` with a wide warning set, clang-tidy, ruff, `mypy --strict` and ASan/UBSan all gate merges,
-and the pre-commit hooks run the same versions CI does. The rules that come up most: user input
-never reaches an assert, every pass states why its transformation is legal, and no performance
-claim ships without the script that produced it.
-
-[CONTRIBUTING.md](CONTRIBUTING.md) has the rest, and the commands to run every gate locally.
-
-## Benchmarks
-
-Nothing worth showing before phase 6. Numbers land here when they exist, next to the scripts that
-produced them.
-
-## Prior art
-
-Built on publicly documented work: PyTorch's out-of-tree backend mechanism and `torch.compile`
-internals, `pytorch/xla`, MLIR's pass infrastructure, IREE, TVM. Non-obvious decisions cite their
-precedent where they're made.
+| [csrc/custom_ops/README.md](csrc/custom_ops/README.md) | Writing custom operations |
+| [docs/passes.md](docs/passes.md) | The compiler's pass pipeline, and adding a pass |
+| [docs/op_coverage.md](docs/op_coverage.md) | The operations the compiler supports |
+| [docs/design_notes/](docs/design_notes/) | Design decisions |
+| [tools/README.md](tools/README.md) | `tessiq-opt`, `tessiq_explain.py`, `model_coverage.py` |
+| [bench/README.md](bench/README.md) | Benchmarks |
+| [ROADMAP.md](ROADMAP.md) | What is done and what is planned |
 
 ## License
 
-Apache-2.0.
+Apache 2.0. See [LICENSE](LICENSE).

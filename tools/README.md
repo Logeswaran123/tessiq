@@ -1,36 +1,77 @@
 # Tools
 
-| | | |
-|---|---|---|
-| `tessiq-opt` | Reads textual IR, runs a pass pipeline, prints the result | **built** |
-| `gen_ops.py` | Generates the C++ op table and `docs/op_coverage.md` from `ops.toml` | **built** |
-| `tessiq_explain.py` | Shows a model's whole compilation: graph, per-pass diffs, kernels, where each step runs | **built** |
-| `model_coverage.py` | How much of a real model the backend places on the device | **built** |
+## tessiq-opt
 
-`tessiq-opt` is the one that makes the pass suite testable. Text in, text out, no PyTorch and no
-GPU involved, so a pass test is a diffable file rather than a fixture.
+Runs a pass pipeline over textual IR. Built with the C++ core, no PyTorch needed; after a CMake
+build it's at `build/tools/tessiq-opt`. Reads a file or stdin.
 
-`tessiq_explain.py` answers the question the others make you assemble by hand. Every part of it is
-already reachable one call at a time, and lining four answers up in a text editor is enough work
-that "why is this operation on the host" usually goes unasked.
-
-```
-$ python tools/tessiq_explain.py encoder --device tessiq:1 --sections schedule
-  ...
-  expand                   aten.expand.default                interpreted on the device
-  clone                    aten.clone.default                 host (moves its inputs)
-  view_6                   aten.view.default                  interpreted on the device
-  bmm                      aten.bmm.default                   kernel %bmm
-  div                      aten.div.Tensor                    kernel %div
-  amax                     aten.amax.default                  kernel %amax
-  sub                      aten.sub.Tensor                    kernel %exp
-  exp                      aten.exp.default                   kernel %exp
+```console
+$ cat graph.tsr
+graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
+  %s0 = add(%a, %b) : f32[4,8]
+  %s1 = add(%a, %b) : f32[4,8]
+  %unused = neg(%a) : f32[4,8]
+  %out = mul(%s0, %s1) : f32[4,8]
+  return %out
+}
+$ build/tools/tessiq-opt --passes=cse,dead-node-elimination graph.tsr
+graph @demo(%a: f32[4,8], %b: f32[4,8]) -> f32[4,8] {
+  %s0 = add(%a, %b) : f32[4,8]
+  %out = mul(%s0, %s0) : f32[4,8]
+  return %out
+}
 ```
 
-Three things can happen to a step and they are easy to confuse. It can be covered by a kernel, and
-`sub` and `exp` above share one. It can sit on the device with no kernel, which for an operation
-that only takes a different view of a tensor costs almost nothing. Or it can be on the host, which
-for anything the device was holding costs a transfer each way. `clone` is the one doing that here.
+Other flags: `--list`, `--verify-only`, `--stats` (per-pass timing), `--memory-plan`, and
+`--emit-cuda` (CUDA source per fusion group). Custom-op `rewrite-*` and `override-*` passes are
+registered by the Python extension, so run those with `tessiq.run_passes()`.
 
-`tessiq.explain(model, example)` is the same report for any module rather than the blocks the test
-suite uses.
+## tessiq_explain.py
+
+Runs `tessiq.explain` on a block from `tests/python/test_models.py` (`encoder`, `residual`,
+`rmsnorm`):
+
+```bash
+python tools/tessiq_explain.py encoder --device tessiq:1
+python tools/tessiq_explain.py residual --device tessiq:1 --sections schedule
+python tools/tessiq_explain.py rmsnorm --device tessiq:1 --rewrites rms_norm,fast_gelu
+```
+
+`--device` defaults to `tessiq:0`, which has no kernels. `--sections` takes any of `summary`,
+`graph`, `passes`, `kernels`, `schedule`. `--source` prints generated CUDA, `--dynamic` reports on
+the symbolic recompile, and `--shape` overrides the input shape.
+
+The schedule shows where each op runs:
+
+```
+  convolution    aten.convolution.default   kernel %convolution (moves its inputs)
+  _to_copy       aten._to_copy.default      host
+  add            aten.add.Tensor            kernel %mul (moves its inputs)
+  sqrt           aten.sqrt.default          kernel %mul
+  mul            aten.mul.Tensor            kernel %mul
+  unsqueeze      aten.unsqueeze.default     interpreted on the device (moves its inputs)
+```
+
+`kernel %mul` means the op is covered by that kernel; `add`, `sqrt` and `mul` are fused into one.
+`interpreted on the device` means no kernel, run through the dispatcher on device tensors (cheap
+for views). `host` costs a transfer each way. `(moves its inputs)` marks steps whose arguments are
+copied to their device first.
+
+## model_coverage.py
+
+```console
+$ python tools/model_coverage.py
+residual block: 37 of 41 operations on the device (90%), 37 claimable
+  left on the host                                 count
+  aten._to_copy.default                                4
+
+encoder block: 76 of 76 operations on the device (100%), 76 claimable
+```
+
+Claimable means the backend implements it. On the device can be lower: a cluster of nothing but
+views stays where its input is.
+
+## gen_ops.py
+
+Regenerates `csrc/tessiq/passes/op_table.inc` and `docs/op_coverage.md` from `ops.toml`.
+`--check` verifies they are current; a test runs it.

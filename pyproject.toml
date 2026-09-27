@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "tessiq"
-description = "A from-scratch PyTorch accelerator backend: device, graph compiler, and kernels"
+description = "A PyTorch backend for NVIDIA GPUs: device, graph compiler, and kernels"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"

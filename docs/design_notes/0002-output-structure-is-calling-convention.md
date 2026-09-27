@@ -25,18 +25,13 @@ graph @backward(%primals_3: f32[2,4], %detach: f32[2,3], %tangents_1: f32[2,3]) 
 }
 ```
 
-Three outputs in the graph PyTorch handed over, one result in the IR. Execution is unaffected today,
-because the executor walks the FX graph and passes non-tensors through untouched, so the tuple it
-returns still has three slots in the original order.
+Three outputs in the graph PyTorch handed over, one result in the IR. The returned tuple is built
+from the recipe, and the recipe from the IR. A recipe that returns one value where the engine
+expects three does not crash: the autograd engine matches gradients to inputs by position, so a
+gradient lands on the wrong parameter.
 
-That stops being true in phase 5. Once a `Recipe` is the thing that runs, the returned tuple is
-built from the recipe rather than from FX, and the recipe is built from the IR. A recipe that
-returns one value where the engine expects three is not a crash. The autograd engine matches
-gradients to inputs by position, so the failure mode is a gradient landing on the wrong parameter.
-
-Backward graphs are not a later concern that phase 8 can own. They reach the backend now, because
-`aot_autograd` defaults `bw_compiler` to `fw_compiler` and tessiq passes only the latter. Whatever
-phase 5 builds receives them immediately.
+Every compiled graph can hit this, because `aot_autograd` defaults `bw_compiler` to `fw_compiler`
+and tessiq passes only the latter, so backward graphs go through the same path.
 
 ## Options
 
@@ -79,12 +74,10 @@ return value needs the spec as well, which is one more thing to thread through l
 The rule generalises past `None`. Nested tuples, dicts and any other structure PyTorch returns are
 all calling convention, so the spec is the place they go, and the IR stays a list of typed values.
 
-Nothing changes in phase 4. The executor walks the FX graph and already returns the right shape.
-
 Revisit if the IR ever needs to represent a graph whose results are not all tensors for reasons
 other than the calling convention, since that would be a genuine argument for option A.
 
 ## See also
 
-`import_output` in `csrc/tessiq/torch/importer.cpp`, `compile_graph` in `python/tessiq/backend.py`,
-phase 5 in `PHASES.md`.
+`import_output` in `csrc/tessiq/torch/importer.cpp`, `Recipe.output_spec` in
+`python/tessiq/recipe.py`, and `RecipeExecutor.output` in `python/tessiq/executor.py`.

@@ -17,6 +17,7 @@ from __future__ import annotations
 import statistics
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import torch
@@ -81,14 +82,7 @@ def moves_everywhere(recipe: Recipe) -> Recipe:
     Every node claims it has to move its arguments. Nothing else differs, so the gap is the
     analysis.
     """
-    return Recipe(
-        graph_module=recipe.graph_module,
-        devices=recipe.devices,
-        needs_move=frozenset(recipe.devices),
-        output_spec=recipe.output_spec,
-        arena_bytes=recipe.arena_bytes,
-        naive_bytes=recipe.naive_bytes,
-    )
+    return replace(recipe, needs_move=frozenset(recipe.devices))
 
 
 def model(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
