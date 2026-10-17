@@ -25,8 +25,7 @@ cmake -S . -B build -G Ninja && cmake --build build
 ctest --test-dir build --output-on-failure
 pytest -m "not cuda"          # drop -m to include GPU tests
 
-clang-format --dry-run --Werror $(git ls-files 'csrc/*.cpp' 'csrc/*.h' 'csrc/*.cu' 'tests/cpp/*.cpp' 'tests/cpp/*.cu')
-for f in $(git ls-files 'csrc/*.cpp' 'tests/cpp/*.cpp'); do clang-tidy -p build "$f"; done
+python tools/lint_cpp.py --build-dir build   # clang-format and clang-tidy
 ```
 
 Sanitizers, on the CPU backend:
