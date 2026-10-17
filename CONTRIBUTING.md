@@ -21,19 +21,21 @@ CI runs on GPU-less GitHub runners. To run the same locally:
 ```bash
 ruff check . && ruff format --check . && mypy
 
-cmake -S . -B build -G Ninja && cmake --build build
-ctest --test-dir build --output-on-failure
+cmake --preset dev && cmake --build --preset dev
+ctest --preset dev
 pytest -m "not cuda"          # drop -m to include GPU tests
 
-python tools/lint_cpp.py --build-dir build   # clang-format and clang-tidy
+python tools/lint_cpp.py --build-dir build/dev   # clang-format and clang-tidy
 ```
+
+`CMakePresets.json` defines `dev` (Debug), `release` (RelWithDebInfo) and `sanitizers`, each built in
+`build/<preset>`. Local variations go in an untracked `CMakeUserPresets.json`.
 
 Sanitizers, on the CPU backend:
 
 ```bash
-cmake -S . -B build-asan -G Ninja -DTESSIQ_BUILD_PYTHON=OFF -DTESSIQ_SANITIZER=address,undefined
-cmake --build build-asan
-ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-asan
+cmake --preset sanitizers && cmake --build --preset sanitizers
+ASAN_OPTIONS=detect_leaks=1 ctest --preset sanitizers
 ```
 
 On a machine with a GPU, use `detect_leaks=0`; the CUDA driver's own allocations show up as leaks.

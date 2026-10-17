@@ -1,0 +1,49 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 26, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "TESSIQ_BUILD_TESTS": "ON",
+        "TESSIQ_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Debug, with the Python extension",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "TESSIQ_BUILD_PYTHON": "ON" }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "RelWithDebInfo, with the Python extension",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "TESSIQ_BUILD_PYTHON": "ON" }
+    },
+    {
+      "name": "sanitizers",
+      "inherits": "base",
+      "displayName": "Debug C++ core under ASan and UBSan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TESSIQ_BUILD_PYTHON": "OFF",
+        "TESSIQ_SANITIZER": "address,undefined"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "sanitizers", "configurePreset": "sanitizers" }
+  ],
+  "testPresets": [
+    { "name": "base", "hidden": true, "output": { "outputOnFailure": true } },
+    { "name": "dev", "inherits": "base", "configurePreset": "dev" },
+    { "name": "release", "inherits": "base", "configurePreset": "release" },
+    { "name": "sanitizers", "inherits": "base", "configurePreset": "sanitizers" }
+  ]
+}
