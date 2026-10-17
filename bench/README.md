@@ -12,7 +12,7 @@ need a GPU.
 | [`gemm_bias_gelu.py`](gemm_bias_gelu.py) | Linear + GELU device time: cuBLAS + GELU kernel, CUTLASS `gemm_bias_gelu`, cuBLASLt `gemm_bias_gelu_tanh` |
 | [`compile_overhead.py`](compile_overhead.py) | Recipe build vs cache hit, and the cost of moving arguments at every step |
 | [`where_the_time_goes.py`](where_the_time_goes.py) | Host-side breakdown of one call into kernels, transfers and interpreted steps. Pass a path to write a Chrome trace |
-| [`where_the_gap_is.py`](where_the_gap_is.py) | Gap to eager CUDA, split into kernel device time and host time |
+| [`where_the_gap_is.py`](where_the_gap_is.py) | Gap to eager CUDA: the kernels' back-to-back device time (`tessiq.kernel_costs`, gaps between kernels included) against the call |
 
 Scripts report medians and exclude warmup. Kernel comparisons use CUPTI's record of each kernel
 ([`kernel_timing.py`](kernel_timing.py)), so a raw launch and a framework call are timed the same
