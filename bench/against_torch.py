@@ -5,16 +5,19 @@
 `fusion.py` asks what fusion buys inside tessiq. This asks whether tessiq is faster than PyTorch,
 in two halves that can point opposite ways:
 
-  kernel       The generated kernel against Inductor's, with the data already on the device.
-               This measures the code generator.
+  kernel       The generated kernel against Inductor's, with the data already on the device,
+               timed from CUPTI's records of the kernels. This measures the code generator.
   end to end   A whole `torch.compile` call against PyTorch's, from host tensors. This also
                measures everything around the kernel.
 
-Run with: python bench/against_torch.py
+The kernels run at two sizes: one held in the GPU's L2 cache and one read from DRAM.
+
+Run with: python bench/against_torch.py [--elements N ...]
 """
 
 from __future__ import annotations
 
+import argparse
 import statistics
 import sys
 import time
@@ -23,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from kernel_timing import cache_and_dram_bytes, gigabytes_per_second, kernel_microseconds
 from torch._decomp import core_aten_decompositions
 from torch._dynamo.backends.common import aot_autograd
 
@@ -82,40 +86,52 @@ def nothing() -> None:
     """No synchronise needed: the result is copied back to the host, which waits for the device."""
 
 
-def bandwidth(elements: int, milliseconds: float) -> float:
-    return elements * BYTES_PER_ELEMENT / (milliseconds * 1e-3) / 2**30
-
-
-def main() -> None:
-    if tessiq.gpu_count() == 0:
-        print("no GPU, nothing to measure")
-        return
-
-    count = 1 << 22
+def kernels(count: int) -> float:
+    """Prints the two kernels' execution time at `count` elements and returns tessiq's."""
     host = (torch.randn(count), torch.randn(count), torch.randn(count))
-    resident = tuple(x.cuda() for x in host)
-
-    print(f"torch {torch.__version__}, {count:,} elements, {RUNS} runs after {WARMUP} warmup\n")
-
-    # --- the kernel, with nothing to transfer -----------------------------------------------
     recipe = build_recipe(capture(chain, *host), tessiq.gpu, use_cache=False)
     kernel = next(iter(recipe.kernels.values()))
     ours = [x.to(tessiq.gpu) for x in host]
     out = torch.empty(count, dtype=torch.float32, device=tessiq.gpu)
+    resident = tuple(x.cuda() for x in host)
+    torch._dynamo.reset()
+    inductor = torch.compile(chain)
 
+    mine = kernel_microseconds(lambda: kernel.launch(ours, out), RUNS, WARMUP)
+    theirs = kernel_microseconds(lambda: inductor(*resident), RUNS, WARMUP)
+    moved = count * BYTES_PER_ELEMENT
+    print(f"  {count:,} elements, {moved / 2**20:,.0f} MiB moved")
+    print(
+        f"    tessiq generated       {mine:9.1f} us   {gigabytes_per_second(moved, mine):6.0f} GB/s"
+    )
+    print(
+        f"    torch.compile inductor {theirs:9.1f} us   {gigabytes_per_second(moved, theirs):6.0f} GB/s"
+    )
+    return mine
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--elements", type=int, nargs="+", help="chain sizes; default: half the L2 and 16 times it"
+    )
+    args = parser.parse_args()
+    if tessiq.gpu_count() == 0:
+        print("no GPU, nothing to measure")
+        return
+
+    sizes = args.elements or [size // BYTES_PER_ELEMENT for size in cache_and_dram_bytes()]
+    print(f"torch {torch.__version__}, medians of {RUNS} calls after {WARMUP} warm-up calls\n")
+    print("kernel execution, data already on the device")
+    mine = {count: kernels(count) for count in sizes}
+
+    # --- the whole call, from host tensors --------------------------------------------------
+    count = sizes[0]
+    host = (torch.randn(count), torch.randn(count), torch.randn(count))
+    resident = tuple(x.cuda() for x in host)
     torch._dynamo.reset()
     inductor = torch.compile(chain)
     inductor(*resident)
-
-    mine = measure(lambda: kernel.launch(ours, out), torch.cuda.synchronize)
-    theirs = measure(lambda: inductor(*resident), torch.cuda.synchronize)
-
-    print("kernel, data already on the device")
-    print(f"  tessiq generated       {mine:8.4f} ms   {bandwidth(count, mine):6.0f} GB/s")
-    print(f"  torch.compile inductor {theirs:8.4f} ms   {bandwidth(count, theirs):6.0f} GB/s")
-    print(f"  ratio                  {mine / theirs:8.2f}x\n")
-
-    # --- the whole call, from host tensors --------------------------------------------------
     torch._dynamo.reset()
     compiled = torch.compile(
         chain, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
@@ -130,14 +146,14 @@ def main() -> None:
     torch_resident = measure(lambda: inductor(*resident), torch.cuda.synchronize)
     torch_moving = measure(torch_with_transfers, torch.cuda.synchronize)
 
-    print("whole call, inputs on the host")
+    print(f"\nwhole call, inputs on the host, {count:,} elements, wall clock")
     print(f"  tessiq                 {end_to_end:8.4f} ms")
     print(
         f"  torch, already on gpu  {torch_resident:8.4f} ms   {end_to_end / torch_resident:5.0f}x"
     )
     print(f"  torch, moving too      {torch_moving:8.4f} ms   {end_to_end / torch_moving:5.2f}x")
     print(
-        f"\n  the kernel is {mine / end_to_end * 100:.0f}% of the tessiq call; "
+        f"\n  the kernel is {mine[count] / 1e3 / end_to_end * 100:.0f}% of the tessiq call; "
         "the rest is moving data across PCIe"
     )
 
