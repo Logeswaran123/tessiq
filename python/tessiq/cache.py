@@ -107,9 +107,10 @@ def signature(
 ) -> str:
     """A key identifying every graph that would compile to the same recipe.
 
-    Walks FX rather than importing to IR, since import is most of the cost being avoided. Shapes and
-    dtypes are in the key because the memory plan is built from them, the device because it decides
-    where clusters run, and the rewrites because they change which operations are compiled.
+    Walks FX rather than importing to IR, since import is most of the cost being avoided. Dtypes,
+    shapes and strides are in the key because the memory plan and the kernels are built from them,
+    the device because it decides where clusters run, and the rewrites because they change which
+    operations are compiled.
 
     Returns:
         A hex digest of all of the above.
@@ -118,7 +119,9 @@ def signature(
     for node in graph_module.graph.nodes:
         value = node.meta.get("val")
         typing = (
-            f"{value.dtype}{tuple(value.shape)}" if isinstance(value, torch.Tensor) else "untyped"
+            f"{value.dtype}{tuple(value.shape)}{value.stride()}"
+            if isinstance(value, torch.Tensor)
+            else "untyped"
         )
         arguments = ",".join(_describe(argument) for argument in node.args)
         keywords = ",".join(f"{k}={_describe(v)}" for k, v in sorted(node.kwargs.items()))

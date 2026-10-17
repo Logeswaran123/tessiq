@@ -67,6 +67,26 @@ def test_a_different_dtype_misses() -> None:
     assert tessiq.build_recipe(single) is not tessiq.build_recipe(double)
 
 
+def test_a_different_layout_misses() -> None:
+    # A matrix multiply reads its operands' layouts from the strides it was compiled with.
+    packed = captured(lambda a, w: a @ w, torch.randn(4, 4), torch.randn(4, 4))
+    transposed = captured(lambda a, w: a @ w, torch.randn(4, 4), torch.randn(4, 4).t())
+    assert tessiq.build_recipe(packed) is not tessiq.build_recipe(transposed)
+
+
+@pytest.mark.cuda
+def test_a_transposed_input_gets_its_own_recipe() -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+    torch._dynamo.reset()
+    compiled = torch.compile(
+        lambda a, w: a @ w, backend="tessiq", dynamic=False, options={"device": str(tessiq.gpu)}
+    )
+    a, w = torch.randn(4, 4), torch.randn(4, 4)
+    torch.testing.assert_close(compiled(a, w), a @ w)
+    torch.testing.assert_close(compiled(a, w.t()), a @ w.t())
+
+
 def test_a_different_structure_misses() -> None:
     relu = captured(lambda a, b: torch.relu(a + b), torch.randn(8), torch.randn(8))
     tanh = captured(lambda a, b: torch.tanh(a + b), torch.randn(8), torch.randn(8))
