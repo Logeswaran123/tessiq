@@ -88,6 +88,9 @@ Never assert on user input. Error messages say what was wrong and what would wor
 no custom operation has a rewrite called 'layer_norm'; these do: fast_gelu, gemm_bias_gelu, gemm_bias_gelu_tanh, rms_norm
 ```
 
+Discard a `Result` only where the interface cannot report failure: destructors, deleters and
+`noexcept` overrides. Anywhere else, handle it or return it.
+
 A pass either transforms a node completely or leaves it alone. The core doesn't throw; the
 PyTorch integration uses `TORCH_CHECK` where PyTorch expects it. See
 [design note 0001](docs/design_notes/0001-result-type-over-exceptions.md).
@@ -111,6 +114,8 @@ they raise. `python/tessiq/_C.pyi` is hand-written; update it with `csrc/binding
   Rewrite passes need the Python extension, so theirs are in `tests/python/golden/`.
 - GPU results are compared against the CPU reference device or eager PyTorch on the CPU.
 - GPU tests are marked `@pytest.mark.cuda`; CI skips them.
+
+[TESTING.md](TESTING.md) covers what CI runs, what needs a GPU, and the known gaps.
 
 ## Comments
 
