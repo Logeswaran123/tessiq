@@ -5,6 +5,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Fixed
+
+- Factory ops given a device index that does not exist raise `ValueError` instead of allocating
+  on the current device.
+- Running out of device memory raises `torch.OutOfMemoryError`, and a failed allocation no longer
+  leaves CUDA's last error set for the next precompiled operation to report as its own.
+- `dst[2:4].copy_(src[2:4])` overwrote all of `dst`; the direct copy now moves only the tensors'
+  own bytes.
+- A transposed input reused the recipe compiled for a packed one; the cache key includes strides.
+- `(t > 0) * t` read its boolean operand as floats, and `int32` sums wrote into an `int64` output.
+  Generated kernels are claimed only when everything they read and write has one element type.
+- `relu` mapped NaN to 0.
+- Two threads making their first call on a CUDA device could both create its stream.
+- Benchmarks compare kernels from CUPTI records at sizes clear of the L2 cache, and report GB/s
+  as 10^9 bytes per second.
+
+### Changed
+
+- CI pins actions to commit SHAs and runs on `ubuntu-24.04` with a read-only token, job timeouts,
+  actionlint and a coverage report. Dependabot keeps the pins current.
+- `CMakePresets.json` defines the dev, release, sanitizer and coverage builds, and
+  `tools/lint_cpp.py` runs clang-format and clang-tidy as CI does.
+
+## [0.13.4] - 2026-09-26
+
 ### Added
 
 - CMake/scikit-build-core build with a pybind11 extension; CI with `-Werror`, clang-format,
