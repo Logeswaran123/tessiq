@@ -121,6 +121,9 @@ struct TessiqAllocator final : c10::DeviceAllocator {
     const int index = index_.value_or(current_device_index());
     auto ptr = allocator_at(index).allocate(bytes);
     if (!ptr) {
+      TORCH_CHECK_WITH(OutOfMemoryError,
+                       ptr.error().code() != ErrorCode::kResourceExhausted,
+                       ptr.error().to_string());
       TORCH_CHECK(false, ptr.error().to_string());
     }
     // The deleter gets only the pointer, so record() maps it back to its device.

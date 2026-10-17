@@ -308,6 +308,12 @@ def test_a_device_that_does_not_exist_is_refused() -> None:
     assert tessiq.current_device() == 0
 
 
+@pytest.mark.parametrize("device", BACKENDS)
+def test_running_out_of_memory_raises_torch_out_of_memory(device: torch.device) -> None:
+    with pytest.raises(torch.OutOfMemoryError, match="could not allocate"):
+        torch.empty(1 << 50, dtype=torch.uint8, device=device)
+
+
 def test_synchronizing_the_reference_does_nothing() -> None:
     tessiq.synchronize(tessiq.cpu)
     torch.tessiq.synchronize()  # type: ignore[attr-defined]

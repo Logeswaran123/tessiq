@@ -80,7 +80,8 @@ namespace {
   case tessiq::ErrorCode::kNotFound:
     throw py::key_error(message);
   case tessiq::ErrorCode::kResourceExhausted:
-    throw std::bad_alloc();
+    PyErr_SetString(PyExc_MemoryError, message.c_str());
+    throw py::error_already_set();
   case tessiq::ErrorCode::kExternal:
   case tessiq::ErrorCode::kInternal:
     throw std::runtime_error(message);
@@ -529,6 +530,8 @@ PYBIND11_MODULE(_C, m) {
           raise_from_error(tessiq::unsupported("test error"));
         } else if (code == "not_found") {
           raise_from_error(tessiq::not_found("test error"));
+        } else if (code == "resource_exhausted") {
+          raise_from_error(tessiq::resource_exhausted("test error"));
         }
         raise_from_error(tessiq::internal_error("test error"));
       },
