@@ -314,6 +314,15 @@ def test_running_out_of_memory_raises_torch_out_of_memory(device: torch.device) 
         torch.empty(1 << 50, dtype=torch.uint8, device=device)
 
 
+@pytest.mark.parametrize("device", BACKENDS)
+@pytest.mark.parametrize("source", ["device", "host"])
+def test_copying_into_a_slice_leaves_the_rest_alone(device: torch.device, source: str) -> None:
+    dst = torch.zeros(8, device=device)
+    src = torch.arange(8.0) if source == "host" else torch.arange(8.0, device=device)
+    dst[2:4].copy_(src[2:4])
+    assert dst.cpu().tolist() == [0, 0, 2, 3, 0, 0, 0, 0]
+
+
 def test_synchronizing_the_reference_does_nothing() -> None:
     tessiq.synchronize(tessiq.cpu)
     torch.tessiq.synchronize()  # type: ignore[attr-defined]

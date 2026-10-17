@@ -89,15 +89,15 @@ at::Tensor empty_strided(at::IntArrayRef size,
                                            c10::dtype_or_default(dtype));
 }
 
-/// True when two tensors have byte-identical layouts, so one raw copy of the storage moves the
-/// data correctly whether or not either is contiguous.
+/// True when one raw copy of `a`'s bytes into `b` copies the tensor: same dtype, sizes and strides,
+/// and each tensor's elements fill one contiguous span starting at its data pointer.
 ///
 /// The common case: `.to(device)` and `.cpu()` allocate the destination with the source's strides,
-/// so a transposed or sliced tensor is copied directly rather than staged.
-bool same_layout(const at::Tensor& a, const at::Tensor& b) {
+/// so a transposed tensor or a slice is copied directly rather than staged.
+bool same_dense_layout(const at::Tensor& a, const at::Tensor& b) {
   return a.scalar_type() == b.scalar_type() && a.sizes() == b.sizes() &&
-         a.strides() == b.strides() && a.storage_offset() == b.storage_offset() &&
-         a.storage().nbytes() == b.storage().nbytes();
+         a.strides() == b.strides() && a.is_non_overlapping_and_dense() &&
+         b.is_non_overlapping_and_dense();
 }
 
 void check(const Result<void>& result) {
@@ -160,7 +160,7 @@ void from_host(const at::Tensor& host_src, const at::Tensor& dst) {
 
 /// Backs `.to()` in both directions, and copies between tessiq devices.
 ///
-/// Matching layouts copy the storage directly. Anything else is converted on the host with
+/// Matching dense layouts copy their bytes directly. Anything else is converted on the host with
 /// PyTorch's own kernels rather than a second copy of its striding and type promotion rules.
 at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blocking) {
   TORCH_CHECK(self.sizes() == dst.sizes(),
@@ -181,11 +181,11 @@ at::Tensor copy_from(const at::Tensor& self, const at::Tensor& dst, bool non_blo
     // Two tessiq devices with no shared address space (the CPU reference is not addressable from
     // a GPU at all), so the bytes go through the host.
     from_host(to_host(self), dst);
-  } else if (same_layout(self, dst)) {
+  } else if (same_dense_layout(self, dst)) {
     Device& device = src_on_device ? backing_device(self) : backing_device(dst);
-    const std::size_t bytes = self.storage().nbytes();
-    void* to = dst.storage().mutable_data();
-    const void* from = self.storage().data();
+    const std::size_t bytes = self.nbytes();
+    void* to = dst.mutable_data_ptr();
+    const void* from = self.const_data_ptr();
 
     if (src_on_device && dst_on_device) {
       check(device.copy_device_to_device(to, from, bytes));
