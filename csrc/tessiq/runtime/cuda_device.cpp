@@ -54,6 +54,9 @@ class CudaDevice final : public Device {
     // cudaMalloc documents 256-byte alignment and in practice returns page-aligned memory, which
     // meets kDeviceAlignment.
     if (const cudaError_t status = cudaMalloc(&ptr, bytes); status != cudaSuccess) {
+      // Reported here, so cleared from the runtime's last error, where the next launch check
+      // would otherwise find it.
+      static_cast<void>(cudaGetLastError());
       if (status == cudaErrorMemoryAllocation) {
         return resource_exhausted("cuda device " + std::to_string(ordinal_) +
                                   " could not allocate " + std::to_string(bytes) + " bytes");
