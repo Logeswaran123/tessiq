@@ -10,6 +10,7 @@
 #
 # Bumping a pin is a deliberate change: do it in its own commit, with the reformatting it causes.
 
+actionlint-py==1.7.12.25
 clang-format==23.1.1
 clang-tidy==22.1.8
 mypy==2.3.1

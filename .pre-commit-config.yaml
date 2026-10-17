@@ -21,6 +21,7 @@ repos:
       - id: check-merge-conflict
       - id: check-toml
       - id: check-yaml
+      - id: detect-private-key
       - id: end-of-file-fixer
       - id: mixed-line-ending
         args: [--fix=lf]
@@ -57,6 +58,13 @@ repos:
         language: system
         types_or: [c++, c, cuda]
         exclude: '^csrc/generated/'
+
+      - id: actionlint
+        name: actionlint
+        entry: actionlint
+        language: system
+        files: ^\.github/(workflows|actions)/
+        pass_filenames: false
 
       - id: mypy
         name: mypy
