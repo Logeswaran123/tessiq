@@ -1,0 +1,25 @@
+# Copyright 2026 The Tessiq Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Install pinned tooling
+description: Python, the CPU build of the pinned torch, and requirements-dev.txt.
+
+inputs:
+  python-version:
+    description: Python version to install.
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install requirements
+      shell: bash
+      run: |
+        # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The torch
+        # version is read from requirements-dev.txt so there is one pin rather than two.
+        torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
+        pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
+        pip install -r requirements-dev.txt

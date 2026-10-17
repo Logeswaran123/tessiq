@@ -27,17 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install pinned tooling
-        run: |
-          # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The
-          # version is read from requirements-dev.txt so there is one pin rather than two that
-          # can drift apart.
-          torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
-          pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements-dev.txt
+      - uses: ./.github/actions/install-tooling
       - name: ruff check
         run: ruff check .
       - name: ruff format
@@ -52,17 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install pinned tooling
-        run: |
-          # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The
-          # version is read from requirements-dev.txt so there is one pin rather than two that
-          # can drift apart.
-          torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
-          pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements-dev.txt
+      - uses: ./.github/actions/install-tooling
       - name: clang-format
         run: |
           files=$(find csrc tests/cpp -name '*.cpp' -o -name '*.h' -o -name '*.cu' \
@@ -96,17 +76,9 @@ jobs:
             build_type: Debug
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: ./.github/actions/install-tooling
         with:
           python-version: ${{ matrix.python }}
-      - name: Install pinned tooling
-        run: |
-          # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The
-          # version is read from requirements-dev.txt so there is one pin rather than two that
-          # can drift apart.
-          torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
-          pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements-dev.txt
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
@@ -129,17 +101,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install pinned tooling
-        run: |
-          # CPU wheels: the runners have no GPU and the CUDA build is several gigabytes. The
-          # version is read from requirements-dev.txt so there is one pin rather than two that
-          # can drift apart.
-          torch_pin=$(grep -oP '^torch==\K[0-9.]+' requirements-dev.txt)
-          pip install "torch==${torch_pin}" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements-dev.txt
+      - uses: ./.github/actions/install-tooling
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
