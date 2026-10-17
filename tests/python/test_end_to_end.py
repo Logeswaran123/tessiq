@@ -54,6 +54,17 @@ def test_mixed_element_types_match_eager(
     torch.testing.assert_close(compiled(t), fn(t))
 
 
+@pytest.mark.parametrize("device", DEVICES)
+def test_relu_keeps_nan(device: torch.device) -> None:
+    if device == tessiq.gpu and tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+    t = torch.tensor([-1.0, float("nan"), 2.0])
+    compiled = torch.compile(
+        torch.relu, backend="tessiq", dynamic=False, options={"device": str(device)}
+    )
+    torch.testing.assert_close(compiled(t), torch.relu(t), equal_nan=True)
+
+
 def test_an_mlp_matches_eager() -> None:
     model = mlp()
     inputs = torch.randn(8, 16)
