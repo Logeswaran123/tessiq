@@ -303,6 +303,8 @@ def test_a_device_that_does_not_exist_is_refused() -> None:
         tessiq.set_device(missing)
     with pytest.raises(ValueError, match=f"no tessiq device at index {missing}"):
         tessiq.synchronize(missing)
+    with pytest.raises(ValueError, match=f"no tessiq device at index {missing}"):
+        torch.empty(4, device=f"tessiq:{missing}")
     assert tessiq.current_device() == 0
 
 

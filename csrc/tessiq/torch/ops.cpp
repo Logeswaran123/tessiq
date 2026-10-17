@@ -40,6 +40,13 @@ constexpr std::string_view kLogModule = "ops";
 constexpr c10::DeviceType kDeviceType = c10::DeviceType::PrivateUse1;
 constexpr c10::DispatchKey kDispatchKey = c10::DispatchKey::PrivateUse1;
 
+/// `index`, if a device exists there. Raises ValueError otherwise.
+int existing(int index) {
+  const auto device = device_at(index);
+  TORCH_CHECK_VALUE(device.has_value(), device.has_value() ? "" : device.error().message());
+  return index;
+}
+
 /// The device index a factory op should allocate on.
 ///
 /// An absent or negative index, which PyTorch passes when the caller named no index, means the
@@ -49,7 +56,7 @@ int index_for(const std::optional<at::Device>& device) {
     return current_device_index();
   }
   TORCH_CHECK(device->type() == kDeviceType, "expected a tessiq device, got ", *device);
-  return static_cast<int>(device->index());
+  return existing(static_cast<int>(device->index()));
 }
 
 at::Tensor empty_memory_format(at::IntArrayRef size,
