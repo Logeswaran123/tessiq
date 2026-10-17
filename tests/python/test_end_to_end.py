@@ -8,6 +8,7 @@ These compile a model, run it and compare against eager.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 
 import pytest
 import torch
@@ -29,6 +30,28 @@ def mlp() -> torch.nn.Sequential:
 @pytest.fixture(autouse=True)
 def _fresh_dynamo() -> None:
     torch._dynamo.reset()
+
+
+DEVICES = [
+    pytest.param(tessiq.cpu, id="cpu"),
+    pytest.param(tessiq.gpu, id="gpu", marks=pytest.mark.cuda),
+]
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize(
+    "fn",
+    [lambda t: (t > 0) * t, lambda t: t.to(torch.int32).sum(dim=1)],
+    ids=["bool times float", "int32 sum"],
+)
+def test_mixed_element_types_match_eager(
+    device: torch.device, fn: Callable[[torch.Tensor], torch.Tensor]
+) -> None:
+    if device == tessiq.gpu and tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+    t = torch.randn(4, 8) * 100
+    compiled = torch.compile(fn, backend="tessiq", dynamic=False, options={"device": str(device)})
+    torch.testing.assert_close(compiled(t), fn(t))
 
 
 def test_an_mlp_matches_eager() -> None:
