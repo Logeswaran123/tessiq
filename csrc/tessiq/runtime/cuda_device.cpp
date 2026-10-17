@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -109,6 +110,7 @@ class CudaDevice final : public Device {
     if (const cudaError_t status = cudaSetDevice(ordinal_); status != cudaSuccess) {
       return cuda_error(status, "cudaSetDevice(" + std::to_string(ordinal_) + ")");
     }
+    const std::scoped_lock lock(stream_mutex_);
     if (stream_ == nullptr) {
       if (const cudaError_t status = cudaStreamCreate(&stream_); status != cudaSuccess) {
         return cuda_error(status, "cudaStreamCreate");
@@ -137,7 +139,8 @@ class CudaDevice final : public Device {
   }
 
   int ordinal_;
-  cudaStream_t stream_ = nullptr;
+  std::mutex stream_mutex_;
+  cudaStream_t stream_ = nullptr; // Created on first use, then only read.
 };
 
 } // namespace
