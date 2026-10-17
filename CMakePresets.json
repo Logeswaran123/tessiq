@@ -33,17 +33,31 @@
         "TESSIQ_BUILD_PYTHON": "OFF",
         "TESSIQ_SANITIZER": "address,undefined"
       }
+    },
+    {
+      "name": "coverage",
+      "inherits": "base",
+      "displayName": "Debug C++ core instrumented for gcov",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TESSIQ_BUILD_PYTHON": "OFF",
+        "CMAKE_CXX_FLAGS": "--coverage",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage",
+        "CMAKE_SHARED_LINKER_FLAGS": "--coverage"
+      }
     }
   ],
   "buildPresets": [
     { "name": "dev", "configurePreset": "dev" },
     { "name": "release", "configurePreset": "release" },
-    { "name": "sanitizers", "configurePreset": "sanitizers" }
+    { "name": "sanitizers", "configurePreset": "sanitizers" },
+    { "name": "coverage", "configurePreset": "coverage" }
   ],
   "testPresets": [
     { "name": "base", "hidden": true, "output": { "outputOnFailure": true } },
     { "name": "dev", "inherits": "base", "configurePreset": "dev" },
     { "name": "release", "inherits": "base", "configurePreset": "release" },
-    { "name": "sanitizers", "inherits": "base", "configurePreset": "sanitizers" }
+    { "name": "sanitizers", "inherits": "base", "configurePreset": "sanitizers" },
+    { "name": "coverage", "inherits": "base", "configurePreset": "coverage" }
   ]
 }

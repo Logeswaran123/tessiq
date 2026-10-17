@@ -76,6 +76,13 @@ markers = [
   "slow: takes more than a second",
 ]
 
+[tool.coverage.run]
+source_pkgs = ["tessiq"]
+branch = true
+
+[tool.coverage.report]
+skip_empty = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

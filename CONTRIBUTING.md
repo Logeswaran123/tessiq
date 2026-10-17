@@ -28,8 +28,16 @@ pytest -m "not cuda"          # drop -m to include GPU tests
 python tools/lint_cpp.py --build-dir build/dev   # clang-format and clang-tidy
 ```
 
-`CMakePresets.json` defines `dev` (Debug), `release` (RelWithDebInfo) and `sanitizers`, each built in
-`build/<preset>`. Local variations go in an untracked `CMakeUserPresets.json`.
+`CMakePresets.json` defines `dev` (Debug), `release` (RelWithDebInfo), `sanitizers` and `coverage`,
+each built in `build/<preset>`. Local variations go in an untracked `CMakeUserPresets.json`.
+
+Coverage, as the CI job reports it:
+
+```bash
+cmake --preset coverage && cmake --build --preset coverage && ctest --preset coverage
+gcovr --root . --filter csrc/ --print-summary build/coverage
+pytest -m "not cuda" --cov
+```
 
 Sanitizers, on the CPU backend:
 

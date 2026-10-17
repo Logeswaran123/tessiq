@@ -113,3 +113,27 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --preset sanitizers
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-tooling
+      - name: C++ coverage
+        run: |
+          cmake --preset coverage
+          cmake --build --preset coverage
+          ctest --preset coverage
+          gcovr --root . --filter csrc/ --print-summary --xml build/coverage/cpp-coverage.xml build/coverage
+      - name: Install package
+        run: pip install -e . --no-build-isolation
+      - name: Python coverage
+        run: pytest -m "not cuda" --cov --cov-report=term --cov-report=xml:build/coverage/python-coverage.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage
+          path: build/coverage/*-coverage.xml
