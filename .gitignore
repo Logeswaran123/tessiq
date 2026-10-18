@@ -4,6 +4,7 @@ _skbuild/
 dist/
 *.egg-info/
 csrc/generated/
+CMakeUserPresets.json
 
 # Python
 __pycache__/

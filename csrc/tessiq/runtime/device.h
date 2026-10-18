@@ -7,6 +7,7 @@
 #include <memory>
 #include <string_view>
 
+#include "tessiq/support/macros.h"
 #include "tessiq/support/result.h"
 
 namespace tessiq {
@@ -116,11 +117,13 @@ Device& current_device();
 /// Sets the current index for a scope and restores it on the way out.
 ///
 /// Factory ops carry their device as an argument rather than arriving under a guard, so they set
-/// the index for the allocation themselves.
+/// the index for the allocation themselves. `index` must name a device; check it with device_at
+/// where it enters the backend.
 class DeviceIndexGuard {
  public:
   explicit DeviceIndexGuard(int index) : previous_(current_device_index()) {
-    static_cast<void>(set_current_device_index(index));
+    TESSIQ_DCHECK(device_at(index).has_value(), "DeviceIndexGuard given an index with no device");
+    detail::set_current_device_index_unchecked(index);
   }
 
   // noexcept by construction: previous_ was valid when this guard was built.

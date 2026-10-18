@@ -5,8 +5,9 @@
 
 `where_the_time_goes.py` reports the host's view of one call, in which a launch returns before
 the work does. This adds the device's view: each kernel is launched many times between one pair of
-stream marks, which gives what the generated code costs the device. Next to the call's duration,
-that splits the gap into the generated code and everything around it.
+stream marks, which gives the device's time for the kernels back to back, including the gap it
+leaves between one kernel and the next. Next to the call's duration, that bounds how much of the
+call is the host issuing work.
 
 Run with: python bench/where_the_gap_is.py
 """
@@ -73,7 +74,7 @@ def main() -> None:
     ]:
         print(f"  {name:<16}{median_ms(run, sync=sync):6.2f} ms")
 
-    # What the kernels cost on an idle device, compiled from the same graph as the call above.
+    # The kernels back to back on an idle device, compiled from the same graph as the call above.
     recipe = tessiq.build_recipe(tessiq.capture(block, example), tessiq.gpu, use_cache=False)
     costs = kernel_costs(recipe)
     device_total = sum(cost.microseconds for cost in costs)
@@ -95,11 +96,11 @@ def main() -> None:
         counts[event.category] += 1
     measured = sum(host.values())
 
-    # Not parts of one whole: the device time overlaps the call's host time. A device busy for well
-    # under the call spent the difference waiting for work.
-    print(f"\nthe call takes      {call:7.0f} us on the host")
-    print(f"the device is busy  {device_total:7.0f} us of that, across {len(costs)} kernels")
-    print(f"so the device idles {100 * (1 - device_total / call):6.0f}% of the call")
+    # Back-to-back time is the least the device would take if the host issued everything at once,
+    # so the rest of the call is the most a faster host could save.
+    print(f"\nthe call takes          {call:7.0f} us on the host")
+    print(f"its kernels back to back {device_total:7.0f} us, across {len(costs)} kernels")
+    print(f"so the host accounts for up to {100 * (1 - device_total / call):.0f}% of the call")
 
     # Shares rather than microseconds, because profiling inflates the call.
     print(f"\nwhat the host spends it on, from a profiled call of {profiled:.0f} us")

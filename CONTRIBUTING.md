@@ -21,20 +21,29 @@ CI runs on GPU-less GitHub runners. To run the same locally:
 ```bash
 ruff check . && ruff format --check . && mypy
 
-cmake -S . -B build -G Ninja && cmake --build build
-ctest --test-dir build --output-on-failure
+cmake --preset dev && cmake --build --preset dev
+ctest --preset dev
 pytest -m "not cuda"          # drop -m to include GPU tests
 
-clang-format --dry-run --Werror $(git ls-files 'csrc/*.cpp' 'csrc/*.h' 'csrc/*.cu' 'tests/cpp/*.cpp' 'tests/cpp/*.cu')
-for f in $(git ls-files 'csrc/*.cpp' 'tests/cpp/*.cpp'); do clang-tidy -p build "$f"; done
+python tools/lint_cpp.py --build-dir build/dev   # clang-format and clang-tidy
+```
+
+`CMakePresets.json` defines `dev` (Debug), `release` (RelWithDebInfo), `sanitizers` and `coverage`,
+each built in `build/<preset>`. Local variations go in an untracked `CMakeUserPresets.json`.
+
+Coverage, as the CI job reports it:
+
+```bash
+cmake --preset coverage && cmake --build --preset coverage && ctest --preset coverage
+gcovr --root . --filter csrc/ --print-summary build/coverage
+pytest -m "not cuda" --cov
 ```
 
 Sanitizers, on the CPU backend:
 
 ```bash
-cmake -S . -B build-asan -G Ninja -DTESSIQ_BUILD_PYTHON=OFF -DTESSIQ_SANITIZER=address,undefined
-cmake --build build-asan
-ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-asan
+cmake --preset sanitizers && cmake --build --preset sanitizers
+ASAN_OPTIONS=detect_leaks=1 ctest --preset sanitizers
 ```
 
 On a machine with a GPU, use `detect_leaks=0`; the CUDA driver's own allocations show up as leaks.
@@ -79,6 +88,9 @@ Never assert on user input. Error messages say what was wrong and what would wor
 no custom operation has a rewrite called 'layer_norm'; these do: fast_gelu, gemm_bias_gelu, gemm_bias_gelu_tanh, rms_norm
 ```
 
+Discard a `Result` only where the interface cannot report failure: destructors, deleters and
+`noexcept` overrides. Anywhere else, handle it or return it.
+
 A pass either transforms a node completely or leaves it alone. The core doesn't throw; the
 PyTorch integration uses `TORCH_CHECK` where PyTorch expects it. See
 [design note 0001](docs/design_notes/0001-result-type-over-exceptions.md).
@@ -102,6 +114,8 @@ they raise. `python/tessiq/_C.pyi` is hand-written; update it with `csrc/binding
   Rewrite passes need the Python extension, so theirs are in `tests/python/golden/`.
 - GPU results are compared against the CPU reference device or eager PyTorch on the CPU.
 - GPU tests are marked `@pytest.mark.cuda`; CI skips them.
+
+[TESTING.md](TESTING.md) covers what CI runs, what needs a GPU, and the known gaps.
 
 ## Comments
 

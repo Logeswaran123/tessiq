@@ -1,0 +1,18 @@
+// RUN: mark-supported
+// A generated kernel loads, computes and stores one element type, so a boolean operand of a float
+// multiply, or an int32 sum that widens to int64, is left on the host.
+graph @g(%m: i1[8], %x: f32[8], %n: i32[4,8]) -> (f32[8], f32[8], i64[4], i32[4]) {
+  %mul = aten.mul.Tensor(%m, %x) : f32[8]
+  %mul_1 = aten.mul.Tensor(%x, %x) : f32[8]
+  %sum = aten.sum.dim_IntList(%n) {arg1 = [1]} : i64[4]
+  %amax = aten.amax.default(%n) {arg1 = [1]} : i32[4]
+  return %mul, %mul_1, %sum, %amax
+}
+// ---
+graph @g(%m: i1[8], %x: f32[8], %n: i32[4,8]) -> (f32[8], f32[8], i64[4], i32[4]) {
+  %mul = aten.mul.Tensor(%m, %x) {tessiq.supported = false} : f32[8]
+  %mul_1 = aten.mul.Tensor(%x, %x) {tessiq.supported = true} : f32[8]
+  %sum = aten.sum.dim_IntList(%n) {arg1 = [1], tessiq.supported = false} : i64[4]
+  %amax = aten.amax.default(%n) {arg1 = [1], tessiq.supported = true} : i32[4]
+  return %mul, %mul_1, %sum, %amax
+}

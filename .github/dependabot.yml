@@ -1,0 +1,21 @@
+# Copyright 2026 The Tessiq Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/install-tooling"]
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # One PR per pin, as requirements-dev.txt asks.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    ignore:
+      # Tied to the CUDA toolkit; see requirements-dev.txt.
+      - dependency-name: torch

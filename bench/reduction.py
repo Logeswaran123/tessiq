@@ -2,24 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """What the generated reduction kernel costs, against PyTorch's own.
 
-A reduction is memory bound: it reads the input once and writes far less. Both sides are measured
-with the data already on the device; the transfers around a call are `against_torch.py`'s
-subject.
+A reduction is memory bound: it reads the input once and writes far less. Both sides run with the
+data already on the device and are timed from CUPTI's records of their kernels; the transfers
+around a call are `against_torch.py`'s subject.
 
-Reducing the last axis walks contiguous memory, and reducing the first walks with a stride, so
-both are measured.
+Reducing the last axis walks contiguous memory, and reducing the first walks with a stride, so both
+are measured, at one size held in the GPU's L2 cache and one read from DRAM.
 
-Run with: python bench/reduction.py
+Run with: python bench/reduction.py [--elements N ...]
 """
 
 from __future__ import annotations
 
-import statistics
-import time
+import argparse
 from collections.abc import Callable
+from math import isqrt
 from typing import Any
 
 import torch
+from kernel_timing import cache_and_dram_bytes, gigabytes_per_second, kernel_microseconds
 from torch._decomp import core_aten_decompositions
 from torch._dynamo.backends.common import aot_autograd
 
@@ -29,12 +30,12 @@ from tessiq.recipe import build_recipe
 RUNS = 300
 WARMUP = 100
 
-#: Shapes and the axis to reduce, with why each one is here.
-CASES = [
-    ((4096, 4096), 1, "last axis, contiguous"),
-    ((4096, 4096), 0, "first axis, strided"),
-    ((1024, 16384), 1, "long axis, few outputs"),
-    ((262144, 64), 1, "short axis, many outputs"),
+#: The shape for `n` elements, the axis to reduce, and why each case is here.
+CASES: list[tuple[Callable[[int], tuple[int, int]], int, str]] = [
+    (lambda n: (isqrt(n), n // isqrt(n)), 1, "last axis, contiguous"),
+    (lambda n: (isqrt(n), n // isqrt(n)), 0, "first axis, strided"),
+    (lambda n: (512, n // 512), 1, "long axis, few outputs"),
+    (lambda n: (n // 64, 64), 1, "short axis, many outputs"),
 ]
 
 
@@ -54,66 +55,49 @@ def capture(fn: Callable[..., Any], *inputs: torch.Tensor) -> torch.fx.GraphModu
     return graphs[0]
 
 
-def measure(work: Callable[[], object], synchronise: Callable[[], None]) -> float:
-    """Median wall time in milliseconds, with the device drained before the clock stops."""
-    for _ in range(WARMUP):
-        work()
-        synchronise()
+def compare(shape: tuple[int, int], axis: int, why: str) -> None:
+    host = torch.randn(*shape)
 
-    samples = []
-    for _ in range(RUNS):
-        started = time.perf_counter()
-        work()
-        synchronise()
-        samples.append((time.perf_counter() - started) * 1e3)
-    samples.sort()
-    return statistics.median(samples)
+    def model(x: torch.Tensor) -> torch.Tensor:
+        return torch.sum(x, dim=axis)
 
+    recipe = build_recipe(capture(model, host), tessiq.gpu, use_cache=False)
+    kernels = list(recipe.kernels.values())
+    if not kernels:
+        print(f"{shape!s:>16}  {axis:>4}  no kernel ({why})")
+        return
 
-def bandwidth(elements: int, milliseconds: float) -> float:
-    """Gigabytes per second, counting the input read once. The output is negligible."""
-    return elements * 4 / (milliseconds * 1e-3) / 2**30
+    source = host.to(tessiq.gpu)
+    target = torch.empty(model(host).shape, dtype=host.dtype, device=tessiq.gpu)
+    ours = kernel_microseconds(lambda: kernels[0].launch([source], target), RUNS, WARMUP)
+    cuda_input = host.cuda()
+    theirs = kernel_microseconds(lambda: torch.sum(cuda_input, dim=axis), RUNS, WARMUP)
+
+    read = host.numel() * host.element_size()
+    print(
+        f"{shape!s:>16}  {axis:>4}  {ours:>9.1f}  {theirs:>9.1f}  "
+        f"{gigabytes_per_second(read, ours):>9.0f}  {gigabytes_per_second(read, theirs):>9.0f}"
+        f"   {why}"
+    )
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--elements", type=int, nargs="+", help="input sizes; default: half the L2 and 16 times it"
+    )
+    args = parser.parse_args()
     if tessiq.gpu_count() == 0:
         print("no GPU, nothing to measure")
         return
 
+    sizes = args.elements or [size // 4 for size in cache_and_dram_bytes()]
+    print(f"kernel execution, medians of {RUNS} calls; GB/s counts the input read once")
     print(f"{'shape':>16}  {'axis':>4}  {'tessiq':>9}  {'torch':>9}  {'tessiq':>9}  {'torch':>9}")
-    print(f"{'':>16}  {'':>4}  {'ms':>9}  {'ms':>9}  {'GB/s':>9}  {'GB/s':>9}")
-
-    for shape, axis, why in CASES:
-        host = torch.randn(*shape)
-
-        def model(x: torch.Tensor, axis: int = axis) -> torch.Tensor:
-            return torch.sum(x, dim=axis)
-
-        recipe = build_recipe(capture(model, host), tessiq.gpu, use_cache=False)
-        kernels = list(recipe.kernels.values())
-        if not kernels:
-            print(f"{shape!s:>16}  {axis:>4}  no kernel ({why})")
-            continue
-        kernel = kernels[0]
-
-        device = torch.empty(0, device=tessiq.gpu).device
-        source = host.to(device)
-        target = torch.empty(model(host).shape, dtype=host.dtype, device=device)
-        ours = measure(
-            lambda k=kernel, s=source, t=target: k.launch([s], t), torch.cuda.synchronize
-        )
-
-        cuda_input = host.cuda()
-        theirs = measure(
-            lambda x=cuda_input, a=axis: torch.sum(x, dim=a),
-            torch.cuda.synchronize,
-        )
-
-        count = host.numel()
-        print(
-            f"{shape!s:>16}  {axis:>4}  {ours:>9.4f}  {theirs:>9.4f}  "
-            f"{bandwidth(count, ours):>9.0f}  {bandwidth(count, theirs):>9.0f}   {why}"
-        )
+    print(f"{'':>16}  {'':>4}  {'us':>9}  {'us':>9}  {'GB/s':>9}  {'GB/s':>9}")
+    for count in sizes:
+        for shape_of, axis, why in CASES:
+            compare(shape_of(count), axis, why)
 
 
 if __name__ == "__main__":

@@ -101,6 +101,19 @@ def test_on_a_gpu_it_runs_its_host_code(shape: tuple[int, ...]) -> None:
 
 @pytest.mark.cuda
 @pytest.mark.usefixtures("host_code")
+def test_it_runs_after_the_device_ran_out_of_memory() -> None:
+    x, weight, bias = arguments(4, 32, device=tessiq.gpu)
+    layer_norm(x, weight, bias, EPS)  # past the first-use checks, which reset CUDA's last error
+    with pytest.raises(torch.OutOfMemoryError):
+        torch.empty(1 << 50, dtype=torch.uint8, device=tessiq.gpu)
+    before = fallbacks()
+    out = layer_norm(x, weight, bias, EPS)
+    assert fallbacks() == before
+    torch.testing.assert_close(out.cpu(), expected(x.cpu(), weight.cpu(), bias.cpu()))
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("host_code")
 def test_a_weight_that_broadcasts_is_declined_and_runs_the_reference() -> None:
     # The reference broadcasts a single weight and bias, but the kernel reads one of each per
     # column, so the host code hands the call back.

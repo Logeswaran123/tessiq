@@ -26,6 +26,17 @@ Other flags: `--list`, `--verify-only`, `--stats` (per-pass timing), `--memory-p
 `--emit-cuda` (CUDA source per fusion group). Custom-op `rewrite-*` and `override-*` passes are
 registered by the Python extension, so run those with `tessiq.run_passes()`.
 
+## lint_cpp.py
+
+Runs clang-format and clang-tidy over the tracked C++ sources, as CI does. clang-tidy reads the
+build's compilation database, so configure first.
+
+```bash
+python tools/lint_cpp.py --build-dir build            # both
+python tools/lint_cpp.py --format                     # clang-format only
+python tools/lint_cpp.py --tidy --build-dir build -j 8
+```
+
 ## tessiq_explain.py
 
 Runs `tessiq.explain` on a block from `tests/python/test_models.py` (`encoder`, `residual`,

@@ -54,6 +54,27 @@ bool accepts_the_types(const OpInfo& info, const ir::Node& node) {
   return true;
 }
 
+/// Whether everything the node reads and writes has one element type.
+///
+/// Generated loops and reductions load, compute and store in a single type, so a boolean operand
+/// of a float multiply, or an int32 sum that PyTorch widens to int64, would be read or written
+/// wrongly.
+bool has_one_element_type(const ir::Node& node) {
+  const ir::DType dtype = node.result(0)->type().dtype();
+  for (std::size_t i = 1; i < node.result_count(); ++i) {
+    if (node.result(i)->type().dtype() != dtype) {
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < node.operand_count(); ++i) {
+    const ir::Value* operand = node.operand(i);
+    if (operand != nullptr && operand->type().dtype() != dtype) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Whether an elementwise or matmul node has an argument its kernel does not read.
 ///
 /// Those kernels read positional arguments, which the importer keys `arg0`, `arg1` and so on up to
@@ -98,6 +119,11 @@ bool has_an_argument_it_does_not_read(const OpInfo& info, const ir::Node& node) 
 bool has_a_kernel_for_these_types(const ir::Node& node) {
   const OpInfo* info = find_op(node.op());
   if (info != nullptr && !accepts_the_types(*info, node)) {
+    return false;
+  }
+  if (info != nullptr &&
+      (info->category == OpCategory::kElementwise || info->category == OpCategory::kReduction) &&
+      !has_one_element_type(node)) {
     return false;
   }
   if (info != nullptr &&

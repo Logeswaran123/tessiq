@@ -303,7 +303,24 @@ def test_a_device_that_does_not_exist_is_refused() -> None:
         tessiq.set_device(missing)
     with pytest.raises(ValueError, match=f"no tessiq device at index {missing}"):
         tessiq.synchronize(missing)
+    with pytest.raises(ValueError, match=f"no tessiq device at index {missing}"):
+        torch.empty(4, device=f"tessiq:{missing}")
     assert tessiq.current_device() == 0
+
+
+@pytest.mark.parametrize("device", BACKENDS)
+def test_running_out_of_memory_raises_torch_out_of_memory(device: torch.device) -> None:
+    with pytest.raises(torch.OutOfMemoryError, match="could not allocate"):
+        torch.empty(1 << 50, dtype=torch.uint8, device=device)
+
+
+@pytest.mark.parametrize("device", BACKENDS)
+@pytest.mark.parametrize("source", ["device", "host"])
+def test_copying_into_a_slice_leaves_the_rest_alone(device: torch.device, source: str) -> None:
+    dst = torch.zeros(8, device=device)
+    src = torch.arange(8.0) if source == "host" else torch.arange(8.0, device=device)
+    dst[2:4].copy_(src[2:4])
+    assert dst.cpu().tolist() == [0, 0, 2, 3, 0, 0, 0, 0]
 
 
 def test_synchronizing_the_reference_does_nothing() -> None:

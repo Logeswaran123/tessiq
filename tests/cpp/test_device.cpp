@@ -1,14 +1,17 @@
 // Copyright 2026 The Tessiq Authors.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "tessiq/runtime/allocator.h"
+#include "tessiq/runtime/cuda_device.h"
 #include "tessiq/runtime/device.h"
 
 namespace tessiq {
@@ -141,6 +144,24 @@ TEST(BackendTest, AllocationsMeetTheAlignmentContract) {
     EXPECT_EQ(reinterpret_cast<std::uintptr_t>(*ptr) % kDeviceAlignment, 0U) << "index " << index;
     device.raw_deallocate(*ptr, 1024);
   }
+}
+
+TEST(BackendTest, FirstUseFromManyThreadsSucceeds) {
+  auto devices = discover_cuda_devices();
+  if (devices.empty()) {
+    GTEST_SKIP() << "needs a cuda device";
+  }
+  Device& device = *devices.front();
+  std::vector<int> failures(8, 0);
+  std::vector<std::thread> threads;
+  threads.reserve(failures.size());
+  for (int& failed : failures) {
+    threads.emplace_back([&device, &failed] { failed = device.synchronize().has_value() ? 0 : 1; });
+  }
+  for (std::thread& thread : threads) {
+    thread.join();
+  }
+  EXPECT_EQ(std::count(failures.begin(), failures.end(), 1), 0);
 }
 
 TEST(BackendTest, ZeroByteCopyIsANoOpRatherThanAnError) {
