@@ -271,9 +271,12 @@ std::optional<std::string_view> find_embedded_file(std::string_view key);
 ///
 /// `name` is the operation's name and must be an identifier. The directory it is written in holds
 /// its kernel, `<name>.cu`, unless `.kernel()` says otherwise.
+///
+/// The definition is held by pointer: bound to a reference, GCC 13 reports it as possibly dangling,
+/// because the chained calls take temporaries.
 // NOLINTBEGIN(bugprone-throwing-static-initialization): recording a definition allocates, and a
 // failure there means the process is out of memory while loading, which is not worth recovering.
 #define TESSIQ_CUSTOM_OP(name, signature)                                                          \
-  [[maybe_unused]] static const ::tessiq::custom_ops::CustomOp& tessiq_custom_op_##name =          \
-      ::tessiq::custom_ops::define(#name, signature, __FILE__)
+  [[maybe_unused]] static const ::tessiq::custom_ops::CustomOp* const tessiq_custom_op_##name =    \
+      &::tessiq::custom_ops::define(#name, signature, __FILE__)
 // NOLINTEND(bugprone-throwing-static-initialization)
