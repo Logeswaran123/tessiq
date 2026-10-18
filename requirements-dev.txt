@@ -23,7 +23,7 @@ ruff==0.16.8
 
 # tools/gen_ops.py reads ops.toml. tomllib is standard from 3.11 and this project supports 3.10,
 # where tomli is the same parser under its original name.
-tomli==2.4.1 ; python_version < "3.11"
+tomli==2.5.0 ; python_version < "3.11"
 
 # Pinned exactly, like everything else here. Left as >=2.6 it resolved to a different version
 # in CI than on the development machine, and the newer one needs C++20 headers -- the build broke
