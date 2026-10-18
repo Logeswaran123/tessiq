@@ -269,7 +269,6 @@ Result<const Program*> load_program(const Cubin& cubin, std::string_view functio
 #else // TESSIQ_WITH_CUDA
 
 #include <cstddef>
-#include <string>
 #include <utility>
 
 namespace tessiq::codegen {
