@@ -162,8 +162,9 @@ struct TessiqAllocator final : c10::DeviceAllocator {
     }
   }
 
-  // Nothing to record. Every launch and copy on a device is ordered through the legacy default
-  // stream, so a block freed after its last use is not handed out before that use finishes.
+  // Nothing to record. Launches go on the legacy default stream and copies on the device's own
+  // blocking stream, which the legacy stream orders against, so a block freed after its last use
+  // is not handed out before that use finishes.
   void recordStream(const c10::DataPtr& /*ptr*/, c10::Stream /*stream*/) override {}
 
   c10::CachingDeviceAllocator::DeviceStats getDeviceStats(c10::DeviceIndex device) override {
@@ -316,8 +317,8 @@ PinnedAllocator g_pinned_allocator;
 
 /// Device and stream bookkeeping for the dispatcher.
 ///
-/// Streams are not exposed: every launch and copy goes on the legacy default stream, so torch
-/// sees only the default stream.
+/// Streams are not exposed. Launches go on the legacy default stream and copies on each device's
+/// own stream, which the legacy stream orders against, so torch sees only a default stream.
 ///
 /// Every signature below is fixed by c10, down to the spelling of `static_type`. The suppressions
 /// cover the naming rules this interface cannot follow.

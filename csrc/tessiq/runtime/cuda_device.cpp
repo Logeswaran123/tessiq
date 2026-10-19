@@ -51,8 +51,8 @@ class CudaDevice final : public Device {
   Result<void*> raw_allocate(std::size_t bytes) override {
     TESSIQ_RETURN_IF_ERROR(activate());
     void* ptr = nullptr;
-    // cudaMalloc documents 256-byte alignment and in practice returns page-aligned memory, which
-    // meets kDeviceAlignment.
+    // cudaMalloc documents 256-byte alignment. kDeviceAlignment's 512 rests on what it returns in
+    // practice: small allocations at 512-byte steps, large ones aligned to 2 MiB or more.
     if (const cudaError_t status = cudaMalloc(&ptr, bytes); status != cudaSuccess) {
       // Reported here, so cleared from the runtime's last error, where the next launch check
       // would otherwise find it.
