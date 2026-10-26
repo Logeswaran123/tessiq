@@ -28,7 +28,8 @@ suite on one before sending a change to any of them.
 
 - Compare against PyTorch on the CPU, at a tolerance of 1e-5 unless the test says why it needs more.
 - When the result alone cannot tell, check the side effect: the allocator's counters for work on the
-  device, a custom operation's fallback count for its kernel running, the PTX for double precision.
+  device, `_C.cpu_fallback_counts()` for an eager call staying on the device, a custom operation's
+  fallback count for its kernel running, the PTX for double precision.
 - See a new test fail. Break the code it covers and check that it fails, then restore it.
 - Use the inputs that break backends: mixed element types, integer reductions, NaN, infinities and
   negative zero, a layout that changes between calls, and a view as the destination of a copy.

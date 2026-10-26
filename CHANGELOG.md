@@ -5,6 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Added
+
+- Elementwise operations in `ops.toml`, called eagerly on a GPU tensor, run a generated kernel there
+  instead of a round trip through the host. `bench/eager.py` compares them with the fallback and
+  with PyTorch's CUDA kernels.
+- `_C.cpu_fallback_counts()`: how many calls of each operation went through the CPU fallback.
+
+### Fixed
+
+- `relu(-0.0)` returned `0.0`.
+
 ## [0.13.5] - 2026-10-25
 
 ### Fixed
