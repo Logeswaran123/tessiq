@@ -7,7 +7,8 @@ need a GPU.
 | Script | Measures |
 |---|---|
 | [`against_torch.py`](against_torch.py) | Generated kernel vs Inductor on `(a * b + c).relu().sigmoid()`, in L2 and from DRAM; whole calls from host tensors for that chain and a transformer encoder block |
-| [`fusion.py`](fusion.py) | A fused kernel vs the same recipe with kernels removed (each op through the host fallback) |
+| [`fusion.py`](fusion.py) | A fused kernel vs the same recipe with kernels removed (an eager kernel per op), whole calls from host tensors |
+| [`eager.py`](eager.py) | Eager elementwise calls on a GPU tensor: the tessiq kernel against the host fallback it replaced and PyTorch's CUDA kernel, wall time and device time, in L2 and from DRAM |
 | [`reduction.py`](reduction.py) | Reduction kernels vs PyTorch across axis layouts, in L2 and from DRAM |
 | [`gemm_bias_gelu.py`](gemm_bias_gelu.py) | Linear + GELU device time: cuBLAS + GELU kernel, CUTLASS `gemm_bias_gelu`, cuBLASLt `gemm_bias_gelu_tanh` |
 | [`compile_overhead.py`](compile_overhead.py) | Recipe build vs cache hit, and the cost of moving arguments at every step |
