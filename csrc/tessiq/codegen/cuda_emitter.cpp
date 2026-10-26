@@ -230,6 +230,9 @@ class CudaEmitter final : public Emitter {
         source += ",\n    long long d_" + input.name;
       }
     }
+    for (const std::string& name : kernel.scalars) {
+      source += ",\n    scalar_t " + name;
+    }
     source += ") {\n";
     source += "  long long i = blockIdx.x * (long long)blockDim.x + threadIdx.x;\n";
     source += "  if (i >= n) return;\n\n";

@@ -418,5 +418,27 @@ TEST(CudaEmitterTest, ADivisorThatIsKnownIsStillFoldedIn) {
   EXPECT_EQ(source->find("d_m"), std::string::npos) << *source;
 }
 
+TEST(CudaEmitterTest, AScalarIsAParameterAfterTheDivisors) {
+  FusedKernel kernel;
+  kernel.name = "scaled";
+  kernel.elements = ir::kDynamic;
+  KernelInput bias;
+  bias.name = "b";
+  bias.index.clear();
+  bias.read.kind = OperandRead::Kind::kCycled;
+  bias.read.divisor = ir::kDynamic;
+  kernel.inputs = {bias};
+  kernel.scalars = {"s"};
+  kernel.output = "y";
+  kernel.body = {Step{"mul", {{"b", true}, {"s", false}}, "y"}};
+
+  ASSERT_TRUE(cuda_emitter().supports(kernel));
+  const auto source = cuda_emitter().emit(kernel);
+  ASSERT_TRUE(source.has_value()) << (source.has_value() ? "" : source.error().to_string());
+  EXPECT_NE(source->find("long long n,\n    long long d_b,\n    scalar_t s) {"), std::string::npos)
+      << *source;
+  EXPECT_NE(source->find("scalar_t v_y = (v_b * scalar_t(s));"), std::string::npos) << *source;
+}
+
 } // namespace
 } // namespace tessiq::codegen
