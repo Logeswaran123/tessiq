@@ -22,13 +22,18 @@
 #include <c10/core/ScalarType.h>
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <utility>
 
 #include <torch/library.h>
 
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/torch/backend.h"
+#include "tessiq/torch/fallback.h"
 #include "tessiq/torch/pack.h"
 
 namespace tessiq::torch_backend {
@@ -295,17 +300,6 @@ at::Tensor copy_from_and_resize(const at::Tensor& self, const at::Tensor& dst) {
   return copy_from(self, dst, /*non_blocking=*/false);
 }
 
-/// Runs an op with no tessiq kernel by moving its tensors to the host, calling PyTorch's own
-/// kernel, and moving the results back.
-///
-/// No backend implements every ATen op, so there is always a tail that lands here. Each call costs
-/// a transfer each way, so a hot op stands out in a profile. In a compiled graph, partitioning
-/// leaves such ops on the host instead.
-void cpu_fallback(const c10::OperatorHandle& op, torch::jit::Stack* stack) {
-  TESSIQ_LOG(kDebug, kLogModule) << "cpu fallback for " << op.schema().operator_name().name;
-  at::native::cpu_fallback(op, stack);
-}
-
 /// `clone`, and with it `.contiguous()`, which torch routes through the same operation.
 ///
 /// A clone does no arithmetic, so the device packs the view itself instead of sending it through
@@ -383,6 +377,38 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("_reshape_alias", at::native::_reshape_alias);
 }
 
+/// Calls through `cpu_fallback`, by operator name.
+struct FallbackCounts {
+  std::mutex mutex;
+  /// Guarded by `mutex`.
+  std::map<std::string, std::int64_t> calls;
+};
+
+FallbackCounts& fallback_counts() {
+  static FallbackCounts counts;
+  return counts;
+}
+
 } // namespace
+
+/// No backend implements every ATen op, so there is always a tail that lands here. Each call costs
+/// a transfer each way, so a hot op stands out in a profile. In a compiled graph, partitioning
+/// leaves such ops on the host instead.
+void cpu_fallback(const c10::OperatorHandle& op, torch::jit::Stack* stack) {
+  std::string name = c10::toString(op.operator_name());
+  TESSIQ_LOG(kDebug, kLogModule) << "cpu fallback for " << name;
+  {
+    FallbackCounts& counts = fallback_counts();
+    const std::scoped_lock guard(counts.mutex);
+    ++counts.calls[std::move(name)];
+  }
+  at::native::cpu_fallback(op, stack);
+}
+
+std::map<std::string, std::int64_t> cpu_fallback_counts() {
+  FallbackCounts& counts = fallback_counts();
+  const std::scoped_lock guard(counts.mutex);
+  return counts.calls;
+}
 
 } // namespace tessiq::torch_backend

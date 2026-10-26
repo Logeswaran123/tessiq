@@ -168,6 +168,20 @@ def test_unary_op_matches_cpu(op: Callable[[torch.Tensor], torch.Tensor]) -> Non
     assert torch.allclose(op(x.to(DEVICE)).cpu(), op(x), atol=1e-6)
 
 
+def test_a_call_through_the_fallback_is_counted(device: torch.device) -> None:
+    def calls() -> int:
+        # A structured operation reaches the fallback through its out= overload, so count both.
+        counts = _C.cpu_fallback_counts()
+        return sum(n for name, n in counts.items() if name.split(".")[0] == "aten::maximum")
+
+    a = torch.randn(8, device=device)
+    b = torch.randn(8, device=device)
+    before = calls()
+    torch.maximum(a, b)
+    torch.maximum(a, b)
+    assert calls() == before + 2
+
+
 def test_reduction_matches_cpu() -> None:
     torch.manual_seed(0)
     x = torch.randn(128)
