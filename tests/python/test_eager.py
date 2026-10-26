@@ -53,15 +53,32 @@ def same(expected: torch.Tensor, got: torch.Tensor) -> None:
     assert got.stride() == expected.stride()
 
 
-def call(spelling: str) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
-    """A call of `spelling` exactly, with a tensor or a number as its second operand."""
+def call(
+    spelling: str, form: str = "functional"
+) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    """A call of `spelling` exactly, or of its in-place or out= form, with a tensor or a number as
+    its second operand."""
     _, name, overload = spelling.split(".")
-    op = getattr(getattr(torch.ops.aten, name), overload)
-    if overload == "default":
-        return lambda x, _: op(x)
-    if overload == "Tensor":
-        return lambda x, y: op(x, y)
-    return lambda x, _: op(x, 0.75)
+    if form == "in-place":
+        op = getattr(
+            getattr(torch.ops.aten, name + "_"), {"Tensor_Scalar": "Scalar"}.get(overload, overload)
+        )
+    elif form == "out":
+        op = getattr(
+            getattr(torch.ops.aten, name),
+            "out" if overload in ("default", "Tensor") else overload + "_out",
+        )
+    else:
+        op = getattr(getattr(torch.ops.aten, name), overload)
+
+    def called(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        operands = [x] if overload == "default" else [x, y] if overload == "Tensor" else [x, 0.75]
+        result: torch.Tensor = (
+            op(*operands, out=torch.empty_like(x)) if form == "out" else op(*operands)
+        )
+        return result
+
+    return called
 
 
 @pytest.mark.cuda
@@ -76,6 +93,65 @@ def test_every_elementwise_operation_runs_on_the_gpu(spelling: str, dtype: torch
     expected, got, fell_back = run(call(spelling), x, y)
     assert fell_back == 0
     same(expected, got)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize("form", ["in-place", "out"])
+@pytest.mark.parametrize("spelling", SPELLINGS)
+def test_in_place_and_out_forms_run_on_the_gpu(spelling: str, form: str) -> None:
+    torch.manual_seed(0)
+    x = torch.rand(64, 33) * 0.8 + 0.1
+    y = torch.rand(64, 33) * 0.8 + 0.1
+    expected, got, fell_back = run(call(spelling, form), x, y)
+    assert fell_back == 0
+    same(expected, got)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+def test_an_in_place_call_returns_its_tensor_and_writes_through_a_view() -> None:
+    x = torch.arange(24, dtype=torch.float32).view(4, 6)
+    on_gpu = x.to(tessiq.gpu)
+    ones = torch.ones(4).to(tessiq.gpu)
+    before = host_calls()
+    rows = on_gpu[1:3]
+    assert rows.mul_(2.0) is rows
+    on_gpu[:, 1:].T.add_(ones)
+    assert host_calls() == before + 1, "only the strided column view falls back"
+    x[1:3].mul_(2.0)
+    x[:, 1:].T.add_(torch.ones(4))
+    assert torch.equal(on_gpu.cpu(), x)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    "fn",
+    [
+        lambda x, y: torch.add(x, y, out=torch.empty(0, device=x.device)),
+        lambda x, y: x.add_(y, alpha=2),
+        lambda x, y: x[:1].add_(y),
+    ],
+    ids=["out-resized", "alpha", "broadcast-into-self"],
+)
+def test_forms_the_kernel_cannot_write_run_on_the_host(
+    fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+) -> None:
+    torch.manual_seed(0)
+    x, y = torch.rand(4, 8), torch.rand(4, 8)
+    try:
+        expected: torch.Tensor | None = fn(x.clone(), y)
+    except RuntimeError:
+        expected = None
+    on_gpu = x.to(tessiq.gpu)
+    before = host_calls()
+    if expected is None:
+        with pytest.raises(RuntimeError):
+            fn(on_gpu, y.to(tessiq.gpu))
+    else:
+        torch.testing.assert_close(fn(on_gpu, y.to(tessiq.gpu)).cpu(), expected)
+    assert host_calls() == before + 1
 
 
 @pytest.mark.cuda
@@ -185,9 +261,8 @@ def test_special_values_match_the_host() -> None:
         (torch.abs, torch.arange(-8, 8)),
         (lambda x: x / x, torch.arange(1, 16)),
         (torch.exp, torch.rand(16, dtype=torch.float16)),
-        (lambda x: x.add_(1.0), torch.rand(16)),
     ],
-    ids=["alpha", "gelu-tanh", "promotes", "mixed-types", "int-abs", "int-div", "half", "inplace"],
+    ids=["alpha", "gelu-tanh", "promotes", "mixed-types", "int-abs", "int-div", "half"],
 )
 def test_what_the_kernel_does_not_cover_runs_on_the_host(
     fn: Callable[[torch.Tensor], torch.Tensor], x: torch.Tensor

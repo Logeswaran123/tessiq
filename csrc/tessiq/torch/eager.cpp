@@ -10,6 +10,7 @@
 #include "tessiq/torch/eager.h"
 
 #include <ATen/ExpandUtils.h>
+#include <ATen/MemoryOverlap.h>
 #include <ATen/core/dispatch/Dispatcher.h>
 #include <ATen/core/stack.h>
 #include <ATen/native/TypeProperties.h>
@@ -88,21 +89,37 @@ struct Plan {
   std::vector<c10::Scalar> scalars;
 };
 
-/// The operation each registered spelling is, filled once during registration and only read after.
-std::unordered_map<c10::OperatorName, const passes::OpInfo*>& eager_ops() {
-  static std::unordered_map<c10::OperatorName, const passes::OpInfo*> ops;
+/// Which form of an operation a registered overload is.
+enum class Form {
+  /// Returns a new tensor: `add.Tensor`.
+  kFunctional,
+  /// Writes into its first argument and returns it: `add_.Tensor`.
+  kInPlace,
+  /// Writes into its last argument, `out`, and returns it: `add.out`.
+  kOut,
+};
+
+struct EagerOp {
+  const passes::OpInfo* info = nullptr;
+  Form form = Form::kFunctional;
+};
+
+/// What each registered overload is, filled once during registration and only read after.
+std::unordered_map<c10::OperatorName, EagerOp>& eager_ops() {
+  static std::unordered_map<c10::OperatorName, EagerOp> ops;
   return ops;
 }
 
 // ---------------------------------------------------------------------------------------------
 // Deciding whether a call runs here
 
-/// Whether the arguments after the operands are all their defaults, since the kernel reads none
-/// of them: `alpha` on add and sub, `approximate` on gelu.
+/// Whether the arguments after the operands, up to `end`, are all their defaults, since the kernel
+/// reads none of them: `alpha` on add and sub, `approximate` on gelu.
 bool only_defaults(const c10::FunctionSchema& schema,
                    const std::vector<c10::IValue>& arguments,
-                   int arity) {
-  for (auto i = static_cast<std::size_t>(arity); i < arguments.size(); ++i) {
+                   int arity,
+                   std::size_t end) {
+  for (auto i = static_cast<std::size_t>(arity); i < end; ++i) {
     const std::optional<c10::IValue>& fallback = schema.arguments()[i].default_value();
     if (!fallback.has_value() || !(arguments[i] == *fallback)) {
       return false;
@@ -206,6 +223,31 @@ bool packed(const std::vector<std::int64_t>& sizes, const std::vector<std::int64
   return true;
 }
 
+/// The operands that are tensors on the device, in order.
+std::vector<at::Tensor> device_tensors(const Operands& operands) {
+  std::vector<at::Tensor> tensors;
+  for (const std::optional<at::Tensor>& tensor : operands.tensors) {
+    if (tensor.has_value()) {
+      tensors.push_back(*tensor);
+    }
+  }
+  return tensors;
+}
+
+/// The shape `tensors` broadcast to, or nothing when they do not, which the fallback reports in
+/// torch's own words.
+std::optional<at::DimVector> broadcast_shape(const std::vector<at::Tensor>& tensors) {
+  at::DimVector shape(tensors.front().sizes());
+  try {
+    for (std::size_t i = 1; i < tensors.size(); ++i) {
+      shape = at::infer_size_dimvector(shape, tensors[i].sizes());
+    }
+  } catch (const c10::Error&) {
+    return std::nullopt;
+  }
+  return shape;
+}
+
 /// The result torch would give, as a tensor with the right sizes and strides on the device, or
 /// nothing when its layout is not one the kernel can write.
 ///
@@ -214,12 +256,7 @@ bool packed(const std::vector<std::int64_t>& sizes, const std::vector<std::int64
 std::optional<at::Tensor> result_for(const c10::OperatorHandle& handle,
                                      const std::vector<c10::IValue>& arguments,
                                      const Operands& operands) {
-  std::vector<at::Tensor> tensors;
-  for (const std::optional<at::Tensor>& tensor : operands.tensors) {
-    if (tensor.has_value()) {
-      tensors.push_back(*tensor);
-    }
-  }
+  const std::vector<at::Tensor> tensors = device_tensors(operands);
   const at::TensorOptions options = tensors.front().options();
 
   const at::Tensor& first = tensors.front();
@@ -232,19 +269,13 @@ std::optional<at::Tensor> result_for(const c10::OperatorHandle& handle,
     return at::empty_strided(first.sizes(), first.strides(), options);
   }
 
-  at::DimVector shape;
-  try {
-    for (const at::Tensor& tensor : tensors) {
-      shape = shape.empty() ? at::DimVector(tensor.sizes())
-                            : at::infer_size_dimvector(shape, tensor.sizes());
-    }
-  } catch (const c10::Error&) {
-    // The fallback raises torch's own message.
+  const std::optional<at::DimVector> shape = broadcast_shape(tensors);
+  if (!shape.has_value()) {
     return std::nullopt;
   }
   if (std::ranges::all_of(tensors,
                           [](const at::Tensor& tensor) { return tensor.is_contiguous(); })) {
-    return at::empty(shape, options);
+    return at::empty(*shape, options);
   }
 
   torch::jit::Stack stack;
@@ -268,6 +299,30 @@ std::optional<at::Tensor> result_for(const c10::OperatorHandle& handle,
     return std::nullopt;
   }
   return at::empty_strided(like.sizes(), like.strides(), options);
+}
+
+/// `target` as the result of an in-place or out= call, or nothing when the kernel cannot write
+/// into it.
+///
+/// It has to be on the operands' device, of their type and broadcast shape, and dense. An operand
+/// it overlaps has to be the target itself, read where it is written. Anything else, such as
+/// `x.add_(x.t())`, would read elements another thread has already written.
+std::optional<at::Tensor> written_into(const at::Tensor& target, const Operands& operands) {
+  const std::vector<at::Tensor> tensors = device_tensors(operands);
+  const std::optional<at::DimVector> shape = broadcast_shape(tensors);
+  if (!shape.has_value() || target.device() != tensors.front().device() ||
+      target.scalar_type() != operands.dtype || target.sizes() != c10::IntArrayRef(*shape) ||
+      !target.is_non_overlapping_and_dense()) {
+    return std::nullopt;
+  }
+  for (const at::Tensor& tensor : tensors) {
+    const bool itself = tensor.data_ptr() == target.data_ptr() &&
+                        tensor.sizes() == target.sizes() && tensor.strides() == target.strides();
+    if (!itself && at::get_overlap_status(target, tensor) != at::MemOverlapStatus::No) {
+      return std::nullopt;
+    }
+  }
+  return target;
 }
 
 /// The order of `out`'s dimensions from outermost in memory to innermost. Walking the result in
@@ -507,21 +562,41 @@ Result<void> launch(const codegen::Program& program, const Plan& plan, at::Scala
   return program.launch(buffers, arguments, shape, codegen::kDefaultStream);
 }
 
+/// Where a call's result goes: a new tensor laid out as torch would, or the tensor an in-place or
+/// out= call writes. Nothing when the kernel cannot write it.
+std::optional<at::Tensor> output_for(const c10::OperatorHandle& handle,
+                                     const std::vector<c10::IValue>& arguments,
+                                     const Operands& operands,
+                                     Form form) {
+  switch (form) {
+  case Form::kFunctional:
+    return result_for(handle, arguments, operands);
+  case Form::kInPlace:
+    return written_into(arguments.front().toTensor(), operands);
+  case Form::kOut:
+    return written_into(arguments.back().toTensor(), operands);
+  }
+  return std::nullopt;
+}
+
 /// What an elementwise operation from ops.toml does when it is called on a tessiq tensor.
 void run_elementwise(const c10::OperatorHandle& handle, torch::jit::Stack* stack) {
   const auto found = eager_ops().find(handle.operator_name());
   TORCH_CHECK(found != eager_ops().end(), handle.operator_name(), " has no tessiq eager kernel");
-  const passes::OpInfo& info = *found->second;
+  const passes::OpInfo& info = *found->second.info;
+  const Form form = found->second.form;
 
   const std::size_t count = handle.schema().arguments().size();
   const std::vector<c10::IValue> arguments(stack->end() - static_cast<std::ptrdiff_t>(count),
                                            stack->end());
+  // An out= call's last argument is where it writes; the ones before it are the functional call's.
+  const std::size_t inputs = form == Form::kOut ? count - 1 : count;
 
-  const std::optional<Operands> operands = only_defaults(handle.schema(), arguments, info.arity)
-                                               ? operands_of(info, arguments)
-                                               : std::nullopt;
+  const std::optional<Operands> operands =
+      only_defaults(handle.schema(), arguments, info.arity, inputs) ? operands_of(info, arguments)
+                                                                    : std::nullopt;
   std::optional<at::Tensor> out =
-      operands.has_value() ? result_for(handle, arguments, *operands) : std::nullopt;
+      operands.has_value() ? output_for(handle, arguments, *operands, form) : std::nullopt;
   if (out.has_value() && out->numel() == 0) {
     torch::jit::drop(*stack, count);
     torch::jit::push(*stack, std::move(*out));
@@ -555,6 +630,77 @@ c10::OperatorName operator_name_of(std::string_view spelling) {
   return {std::move(name), overload == "default" ? "" : std::move(overload)};
 }
 
+/// The in-place form of `functional`: `aten::add_.Tensor` for `aten::add.Tensor`. torch spells
+/// pow's `pow_.Scalar`, not `pow_.Tensor_Scalar`, since its self is always a tensor.
+c10::OperatorName in_place_of(const c10::OperatorName& functional) {
+  const std::string& overload = functional.overload_name;
+  return {functional.name + "_", overload == "Tensor_Scalar" ? "Scalar" : overload};
+}
+
+/// The out= form of `functional`: `aten::add.out` for `aten::add.Tensor` and `aten::exp`, and
+/// `aten::add.Scalar_out` for `aten::add.Scalar`.
+c10::OperatorName out_of(const c10::OperatorName& functional) {
+  const std::string& overload = functional.overload_name;
+  return {functional.name, overload.empty() || overload == "Tensor" ? "out" : overload + "_out"};
+}
+
+/// Whether `variant` takes the arguments `functional` does, in the same places, with its output
+/// appended for `Form::kOut`. A form that does not is left to the fallback.
+bool same_arguments(const c10::FunctionSchema& functional,
+                    const c10::FunctionSchema& variant,
+                    Form form) {
+  const std::vector<c10::Argument>& theirs = functional.arguments();
+  const std::vector<c10::Argument>& ours = variant.arguments();
+  if (ours.size() != theirs.size() + (form == Form::kOut ? 1 : 0)) {
+    return false;
+  }
+  for (std::size_t i = 0; i < theirs.size(); ++i) {
+    if (ours[i].type()->kind() != theirs[i].type()->kind()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Makes `run_elementwise` torch's implementation of overload `name` on tessiq devices.
+Result<void> register_overload(torch::Library& library,
+                               const c10::OperatorName& name,
+                               const passes::OpInfo* info,
+                               Form form) {
+  std::string unqualified = name.name.substr(name.name.find("::") + 2);
+  if (!name.overload_name.empty()) {
+    unqualified += "." + name.overload_name;
+  }
+  try {
+    library.impl(unqualified.c_str(),
+                 torch::CppFunction::makeFromBoxedFunction<&run_elementwise>());
+  } catch (const c10::Error& error) {
+    return invalid_argument(error.what_without_backtrace());
+  }
+  eager_ops().emplace(name, EagerOp{.info = info, .form = form});
+  return ok();
+}
+
+/// Registers the in-place and out= forms of `functional`, where torch has them with the same
+/// arguments and nothing else implements them.
+Result<void> register_forms(torch::Library& library,
+                            const c10::OperatorHandle& functional,
+                            const passes::OpInfo* info) {
+  const c10::OperatorName& name = functional.operator_name();
+  for (const auto& [variant, form] :
+       {std::pair{in_place_of(name), Form::kInPlace}, std::pair{out_of(name), Form::kOut}}) {
+    const std::optional<c10::OperatorHandle> other =
+        c10::Dispatcher::singleton().findSchema(variant);
+    if (!other.has_value() || other->hasKernelForDispatchKey(c10::DispatchKey::PrivateUse1) ||
+        !same_arguments(functional.schema(), other->schema(), form)) {
+      TESSIQ_LOG(kDebug, kLogModule) << "no " << c10::toString(variant) << " to register";
+      continue;
+    }
+    TESSIQ_RETURN_IF_ERROR(register_overload(library, variant, info, form));
+  }
+  return ok();
+}
+
 } // namespace
 
 Result<void> register_eager_ops() {
@@ -571,8 +717,8 @@ Result<void> register_eager_ops() {
         !spelling.starts_with("aten.")) {
       continue;
     }
-    c10::OperatorName name = operator_name_of(spelling);
-    const std::optional<c10::OperatorHandle> handle = c10::Dispatcher::singleton().findSchema(name);
+    const std::optional<c10::OperatorHandle> handle =
+        c10::Dispatcher::singleton().findSchema(operator_name_of(spelling));
     if (!handle.has_value()) {
       return invalid_argument("ops.toml lists " + spelling + ", which torch does not have");
     }
@@ -581,17 +727,9 @@ Result<void> register_eager_ops() {
       TESSIQ_LOG(kDebug, kLogModule) << spelling << " is already implemented, leaving it alone";
       continue;
     }
-    std::string unqualified = name.name.substr(name.name.find("::") + 2);
-    if (!name.overload_name.empty()) {
-      unqualified += "." + name.overload_name;
-    }
-    try {
-      library->impl(unqualified.c_str(),
-                    torch::CppFunction::makeFromBoxedFunction<&run_elementwise>());
-    } catch (const c10::Error& error) {
-      return invalid_argument(error.what_without_backtrace());
-    }
-    eager_ops().emplace(std::move(name), info);
+    TESSIQ_RETURN_IF_ERROR(
+        register_overload(*library, handle->operator_name(), info, Form::kFunctional));
+    TESSIQ_RETURN_IF_ERROR(register_forms(*library, *handle, info));
   }
   return ok();
 }
