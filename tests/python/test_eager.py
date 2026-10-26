@@ -306,3 +306,96 @@ def test_gradients_flow_through_eager_kernels() -> None:
     assert on_gpu.grad is not None
     assert x.grad is not None
     torch.testing.assert_close(on_gpu.grad.cpu(), x.grad)
+
+
+# --- matmuls -------------------------------------------------------------------------------------
+
+
+def close_products(got: torch.Tensor, expected: torch.Tensor) -> None:
+    """A product sums `k` terms, which cuBLAS adds in another order than the CPU does."""
+    torch.testing.assert_close(got, expected, rtol=1e-5, atol=1e-4)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("fn", "shapes"),
+    [
+        (torch.mm, [(64, 48), (48, 80)]),
+        (lambda a, b: a.t() @ b, [(48, 64), (48, 80)]),
+        (lambda a, b: a @ b.t(), [(64, 48), (80, 48)]),
+        (lambda a, b: a.t() @ b.t(), [(48, 64), (80, 48)]),
+        (lambda a, b: a[:, ::2] @ b, [(64, 96), (48, 80)]),
+        (torch.addmm, [(80,), (64, 48), (48, 80)]),
+        (torch.addmm, [(64, 80), (64, 48), (48, 80)]),
+        (torch.addmm, [(64, 1), (64, 48), (48, 80)]),
+        (torch.addmm, [(), (64, 48), (48, 80)]),
+        (torch.nn.functional.linear, [(64, 48), (80, 48), (80,)]),
+        (torch.bmm, [(4, 16, 8), (4, 8, 12)]),
+        (lambda a, b: torch.bmm(a, b.transpose(1, 2)), [(4, 16, 8), (4, 12, 8)]),
+        (torch.matmul, [(2, 4, 6, 8), (2, 4, 8, 6)]),
+    ],
+    ids=[
+        "mm",
+        "lhs-transposed",
+        "rhs-transposed",
+        "both-transposed",
+        "strided",
+        "addmm-row",
+        "addmm-full",
+        "addmm-column",
+        "addmm-zero-dim",
+        "linear",
+        "bmm",
+        "bmm-transposed",
+        "matmul-4d",
+    ],
+)
+def test_matmuls_run_on_the_gpu(
+    fn: Callable[..., torch.Tensor], shapes: list[tuple[int, ...]]
+) -> None:
+    torch.manual_seed(0)
+    expected, got, fell_back = run(fn, *(torch.randn(shape) for shape in shapes))
+    assert fell_back == 0
+    close_products(got, expected)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("fn", "dtype"),
+    [
+        (lambda c, a, b: torch.addmm(c, a, b, beta=0.5), torch.float32),
+        (lambda c, a, b: torch.addmm(c, a, b, alpha=2), torch.float32),
+        (lambda _, a, b: torch.mm(a, b), torch.float64),
+    ],
+    ids=["beta", "alpha", "float64"],
+)
+def test_matmuls_cublas_does_not_take_run_on_the_host(
+    fn: Callable[..., torch.Tensor], dtype: torch.dtype
+) -> None:
+    torch.manual_seed(0)
+    args = (
+        torch.randn(8, dtype=dtype),
+        torch.randn(4, 6, dtype=dtype),
+        torch.randn(6, 8, dtype=dtype),
+    )
+    expected, got, fell_back = run(fn, *args)
+    assert fell_back == 1
+    close_products(got, expected)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+def test_a_linear_layer_trains_on_the_gpu() -> None:
+    torch.manual_seed(0)
+    layer = torch.nn.Linear(48, 80)
+    x = torch.randn(64, 48)
+    on_gpu = torch.nn.Linear(48, 80).to(tessiq.gpu)
+    on_gpu.load_state_dict(layer.state_dict())
+    torch.autograd.backward(layer(x), torch.ones(64, 80))
+    torch.autograd.backward(on_gpu(x.to(tessiq.gpu)), torch.ones(64, 80).to(tessiq.gpu))
+    for theirs, ours in zip(layer.parameters(), on_gpu.parameters(), strict=True):
+        assert theirs.grad is not None
+        assert ours.grad is not None
+        close_products(ours.grad.cpu(), theirs.grad)

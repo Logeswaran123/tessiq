@@ -49,6 +49,7 @@
 #include "tessiq/support/logging.h"
 #include "tessiq/support/result.h"
 #include "tessiq/torch/backend.h"
+#include "tessiq/torch/eager_matmul.h"
 #include "tessiq/torch/fallback.h"
 #include "tessiq/torch/importer.h"
 #include "tessiq/torch/pack.h"
@@ -731,7 +732,7 @@ Result<void> register_eager_ops() {
         register_overload(*library, handle->operator_name(), info, Form::kFunctional));
     TESSIQ_RETURN_IF_ERROR(register_forms(*library, *handle, info));
   }
-  return ok();
+  return register_eager_matmuls(*library);
 }
 
 } // namespace tessiq::torch_backend
