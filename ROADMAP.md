@@ -16,7 +16,7 @@
 | 11 | Convolution | Done |
 | 12 | Custom operations, rewrite passes | Done |
 | 13 | Precompiled custom operations | Done |
-| 14 | Eager elementwise operations on the device | Planned |
+| 14 | Eager elementwise operations on the device | Done |
 | 15 | Eager reductions, matmuls and convolution on the device | Planned |
 | 16 | MLIR export | Planned, optional |
 
@@ -87,29 +87,21 @@ the CUTLASS SIMT kernel only at one. Exact GELU moved onto the device, and nodes
 arguments the kernel ignores (`alpha`, `beta`) now stay on the host. The rewrites only match 2-D
 inputs.
 
+**14. Eager elementwise operations on the device.** Every ATen spelling of an elementwise operation
+in `ops.toml` gets a tessiq kernel, registered from the table at import. On a GPU a call runs one
+kernel from the compiler's emitter, compiled once per operation, dtype and the way each operand is
+read. Numbers are kernel arguments, so `x * 0.5` and `x * 0.25` share a kernel. Broadcast rows and
+columns are read in place and other layouts are packed on the device. A non-default `alpha` or
+`approximate`, type promotion, mixed dtypes or devices, and integer operations other than add,
+sub, mul, neg and relu still go through the host. From DRAM a call matches PyTorch's CUDA kernel,
+1.24 ms against 1.25 ms of device time at 1 GiB, where the fallback took about 170 ms. In L2
+PyTorch's kernels are faster, 8 µs against 12 µs, and both calls take about 33 µs.
+
 ## Planned
 
-Today the operations in `ops.toml` run on the device only inside compiled graphs. Called eagerly on
-a tessiq tensor, anything other than allocation, copies, views, `clone` and custom operations goes
-through the CPU fallback: a copy to the host and back per operation. Stages 14 and 15 give eager
-calls the kernels the compiler already has.
-
-**14. Eager elementwise operations on the device.**
-- `gen_ops.py` registers tessiq implementations for the functional overloads of the elementwise
-  operations in `ops.toml`, so the table stays the single source.
-- Each call runs a one-node recipe, built once per operation, dtype and rank and then cached.
-  Eager elementwise custom operations already work this way
-  (`mark-supported,cluster,fuse-elementwise` in `csrc/tessiq/torch/custom.cpp`).
-- Anything the compiler would not claim falls back to the host as today:
-  - in-place and `out=` variants;
-  - dtypes the table does not list;
-  - keyword arguments the kernel does not read;
-  - operands on different devices;
-  - type promotion the kernel does not do.
-
-**Done when:** every elementwise operation in `ops.toml`, called on a GPU tensor, runs with no host
-transfer and matches PyTorch on the CPU. A benchmark in `bench/` measures eager calls against the
-fallback they replace.
+Called eagerly on a tessiq tensor, the elementwise operations in `ops.toml` run on the device.
+Reductions, matmuls and convolution still go through the CPU fallback, a copy to the host and back
+per operation. Stage 15 gives them the kernels the compiler already has.
 
 **15. Eager reductions, matmuls and convolution on the device.**
 - Reductions use the existing reduction kernel, which takes its extents as arguments.

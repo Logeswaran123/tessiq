@@ -191,7 +191,7 @@ extern "C" __global__ void tessiq_fused_0(
 
   scalar_t v_m = (v_a * v_b);
   scalar_t v_s = (v_m + v_c);
-  scalar_t v_r = (v_s > scalar_t(0) || v_s != v_s ? v_s : scalar_t(0));
+  scalar_t v_r = (v_s < scalar_t(0) ? scalar_t(0) : v_s);
   scalar_t v_g = (scalar_t(1) / (scalar_t(1) + exp(-v_r)));
 
   p_g[i] = v_g;
@@ -214,7 +214,7 @@ TEST(CudaEmitterTest, TheElementTypeIsATypedefSoOneSpellingServesBoth) {
   ASSERT_TRUE(source.has_value());
   EXPECT_NE(source->find("typedef double scalar_t;"), std::string::npos) << *source;
   // The body is identical to the float version; only the scalar_t typedef differs.
-  EXPECT_NE(source->find("scalar_t v_r = (v_m > scalar_t(0) || v_m != v_m ? v_m : scalar_t(0));"),
+  EXPECT_NE(source->find("scalar_t v_r = (v_m < scalar_t(0) ? scalar_t(0) : v_m);"),
             std::string::npos)
       << *source;
 }
@@ -416,6 +416,28 @@ TEST(CudaEmitterTest, ADivisorThatIsKnownIsStillFoldedIn) {
   ASSERT_TRUE(source.has_value());
   EXPECT_NE(source->find("p_m[i / 32]"), std::string::npos) << *source;
   EXPECT_EQ(source->find("d_m"), std::string::npos) << *source;
+}
+
+TEST(CudaEmitterTest, AScalarIsAParameterAfterTheDivisors) {
+  FusedKernel kernel;
+  kernel.name = "scaled";
+  kernel.elements = ir::kDynamic;
+  KernelInput bias;
+  bias.name = "b";
+  bias.index.clear();
+  bias.read.kind = OperandRead::Kind::kCycled;
+  bias.read.divisor = ir::kDynamic;
+  kernel.inputs = {bias};
+  kernel.scalars = {"s"};
+  kernel.output = "y";
+  kernel.body = {Step{"mul", {{"b", true}, {"s", false}}, "y"}};
+
+  ASSERT_TRUE(cuda_emitter().supports(kernel));
+  const auto source = cuda_emitter().emit(kernel);
+  ASSERT_TRUE(source.has_value()) << (source.has_value() ? "" : source.error().to_string());
+  EXPECT_NE(source->find("long long n,\n    long long d_b,\n    scalar_t s) {"), std::string::npos)
+      << *source;
+  EXPECT_NE(source->find("scalar_t v_y = (v_b * scalar_t(s));"), std::string::npos) << *source;
 }
 
 } // namespace

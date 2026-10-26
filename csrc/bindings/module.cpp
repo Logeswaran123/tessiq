@@ -41,6 +41,8 @@
 #include "tessiq/support/logging.h"
 #include "tessiq/torch/backend.h"
 #include "tessiq/torch/custom.h"
+#include "tessiq/torch/eager.h"
+#include "tessiq/torch/fallback.h"
 #include "tessiq/torch/fused.h"
 #include "tessiq/torch/importer.h"
 #include "tessiq/torch/kernel.h"
@@ -328,6 +330,11 @@ void bind_devices(py::module_& m) {
       py::arg("address"),
       "Internal: the device torch's PrivateUse1 hooks give for a pointer tessiq allocated.");
 
+  m.def("cpu_fallback_counts",
+        &tessiq::torch_backend::cpu_fallback_counts,
+        "How many calls of each operation ran on the host through the CPU fallback, by operator "
+        "name such as aten::add.Tensor.");
+
   m.def("empty_cache",
         &tessiq::torch_backend::empty_cache,
         py::arg("index"),
@@ -358,6 +365,7 @@ PYBIND11_MODULE(_C, m) {
   // Every operation in csrc/custom_ops is checked here, so one whose definition does not hold
   // together fails the import with a message naming it.
   value_or_raise(tessiq::torch_backend::register_custom_ops());
+  value_or_raise(tessiq::torch_backend::register_eager_ops());
 
   m.def(
       "version",

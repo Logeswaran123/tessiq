@@ -5,9 +5,9 @@
 Compares one generated kernel against the same recipe with the kernels removed, so the only
 difference is one kernel against separate operations.
 
-Without a kernel, each operation on a tessiq tensor reaches PyTorch's CPU implementation through
-the fallback, which copies to the host and back. So this measures a generated kernel against the
-fallback, not against a CUDA kernel per operation.
+Without the recipe's kernel, each operation runs as an eager kernel of its own, one launch per
+operation with every intermediate written to memory and read back. Both sides also copy the inputs
+to the device and the result back, which is most of a call at these sizes.
 
 Run with: python bench/fusion.py
 """

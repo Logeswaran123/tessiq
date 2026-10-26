@@ -43,6 +43,7 @@ pybind11_add_module(_C MODULE
   ../tessiq/torch/backend.cpp
   ../tessiq/torch/custom.cpp
   ../tessiq/torch/custom_op.cpp
+  ../tessiq/torch/eager.cpp
   ../tessiq/torch/fused.cpp
   ../tessiq/torch/importer.cpp
   ../tessiq/torch/partition.cpp

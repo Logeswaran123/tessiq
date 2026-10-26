@@ -106,6 +106,11 @@ struct FusedKernel {
   /// The value written to memory.
   std::string output;
 
+  /// Scalars the kernel takes by value, of its element type, after the count and any divisors. A
+  /// step reads one through an argument that is not a value, whose text is the scalar's name, so
+  /// one kernel serves every value the scalar takes.
+  std::vector<std::string> scalars;
+
   std::vector<Step> body;
 
   /// Values of the original graph that a rewrite folded into one of the steps. The executor skips
