@@ -49,6 +49,7 @@
 #include "tessiq/support/logging.h"
 #include "tessiq/support/result.h"
 #include "tessiq/torch/backend.h"
+#include "tessiq/torch/eager_conv.h"
 #include "tessiq/torch/eager_matmul.h"
 #include "tessiq/torch/fallback.h"
 #include "tessiq/torch/importer.h"
@@ -702,6 +703,28 @@ Result<void> register_forms(torch::Library& library,
   return ok();
 }
 
+/// Registers every form of `spelling`, when it is an elementwise operation in ops.toml with a
+/// kernel. A custom operation that replaces it has already registered itself, and wins.
+Result<void> register_elementwise(torch::Library& library, const std::string& spelling) {
+  const passes::OpInfo* info = passes::find_builtin_op(spelling);
+  if (info->category != passes::OpCategory::kElementwise || !info->has_kernel ||
+      !spelling.starts_with("aten.")) {
+    return ok();
+  }
+  const std::optional<c10::OperatorHandle> handle =
+      c10::Dispatcher::singleton().findSchema(operator_name_of(spelling));
+  if (!handle.has_value()) {
+    return invalid_argument("ops.toml lists " + spelling + ", which torch does not have");
+  }
+  if (handle->hasKernelForDispatchKey(c10::DispatchKey::PrivateUse1)) {
+    TESSIQ_LOG(kDebug, kLogModule) << spelling << " is already implemented, leaving it alone";
+    return ok();
+  }
+  TESSIQ_RETURN_IF_ERROR(
+      register_overload(library, handle->operator_name(), info, Form::kFunctional));
+  return register_forms(library, *handle, info);
+}
+
 } // namespace
 
 Result<void> register_eager_ops() {
@@ -713,26 +736,10 @@ Result<void> register_eager_ops() {
       torch::Library::IMPL, "aten", c10::DispatchKey::PrivateUse1, __FILE__, __LINE__);
 
   for (const std::string& spelling : passes::op_names()) {
-    const passes::OpInfo* info = passes::find_builtin_op(spelling);
-    if (info->category != passes::OpCategory::kElementwise || !info->has_kernel ||
-        !spelling.starts_with("aten.")) {
-      continue;
-    }
-    const std::optional<c10::OperatorHandle> handle =
-        c10::Dispatcher::singleton().findSchema(operator_name_of(spelling));
-    if (!handle.has_value()) {
-      return invalid_argument("ops.toml lists " + spelling + ", which torch does not have");
-    }
-    // A custom operation that replaces it has already registered itself, and wins.
-    if (handle->hasKernelForDispatchKey(c10::DispatchKey::PrivateUse1)) {
-      TESSIQ_LOG(kDebug, kLogModule) << spelling << " is already implemented, leaving it alone";
-      continue;
-    }
-    TESSIQ_RETURN_IF_ERROR(
-        register_overload(*library, handle->operator_name(), info, Form::kFunctional));
-    TESSIQ_RETURN_IF_ERROR(register_forms(*library, *handle, info));
+    TESSIQ_RETURN_IF_ERROR(register_elementwise(*library, spelling));
   }
-  return register_eager_matmuls(*library);
+  TESSIQ_RETURN_IF_ERROR(register_eager_matmuls(*library));
+  return register_eager_convolution(*library);
 }
 
 } // namespace tessiq::torch_backend

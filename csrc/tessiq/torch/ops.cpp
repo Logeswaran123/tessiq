@@ -13,7 +13,6 @@
 #include <ATen/ops/_reshape_alias_native.h>
 #include <ATen/ops/as_strided_native.h>
 #include <ATen/ops/clone_ops.h>
-#include <ATen/ops/convolution.h>
 #include <ATen/ops/empty.h>
 #include <ATen/ops/empty_strided.h>
 #include <ATen/ops/set_native.h>
@@ -321,34 +320,6 @@ at::Tensor clone(const at::Tensor& self, std::optional<at::MemoryFormat> memory_
   return at::native::call_fallback_fn<&cpu_fallback, at::_ops::clone>::call(self, memory_format);
 }
 
-/// The convolution every backend other than CPU and CUDA is routed to.
-///
-/// The catch-all fallback cannot handle it: it would call this same operation on the host, where
-/// it does not exist. So this runs the ordinary CPU convolution on host copies and copies the
-/// result back. The fast path is the cuDNN plan the compiler builds.
-at::Tensor convolution_overrideable(const at::Tensor& input,
-                                    const at::Tensor& weight,
-                                    const std::optional<at::Tensor>& bias,
-                                    at::IntArrayRef stride,
-                                    at::IntArrayRef padding,
-                                    at::IntArrayRef dilation,
-                                    bool transposed,
-                                    at::IntArrayRef output_padding,
-                                    int64_t groups) {
-  const std::optional<at::Tensor> host_bias =
-      bias.has_value() && bias->defined() ? std::optional<at::Tensor>(bias->cpu()) : std::nullopt;
-  const at::Tensor host = at::convolution(input.cpu(),
-                                          weight.cpu(),
-                                          host_bias,
-                                          stride,
-                                          padding,
-                                          dilation,
-                                          transposed,
-                                          output_padding,
-                                          groups);
-  return host.to(input.device());
-}
-
 TORCH_LIBRARY_IMPL(_, PrivateUse1, m) {
   m.fallback(torch::CppFunction::makeFromBoxedFunction<&cpu_fallback>());
 }
@@ -366,7 +337,6 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("set_.source_Tensor", &at::native::set_tensor_);
   m.impl("set_", &set_empty);
   m.impl("clone", &clone);
-  m.impl("convolution_overrideable", &convolution_overrideable);
 
   // A view has to share its input's storage, and the fallback would return a copy, so writes
   // through the view would be lost. Other view operations (permute, transpose, squeeze, ...) are
@@ -395,14 +365,16 @@ FallbackCounts& fallback_counts() {
 /// a transfer each way, so a hot op stands out in a profile. In a compiled graph, partitioning
 /// leaves such ops on the host instead.
 void cpu_fallback(const c10::OperatorHandle& op, torch::jit::Stack* stack) {
-  std::string name = c10::toString(op.operator_name());
-  TESSIQ_LOG(kDebug, kLogModule) << "cpu fallback for " << name;
-  {
-    FallbackCounts& counts = fallback_counts();
-    const std::scoped_lock guard(counts.mutex);
-    ++counts.calls[std::move(name)];
-  }
+  count_cpu_fallback(op.operator_name());
   at::native::cpu_fallback(op, stack);
+}
+
+void count_cpu_fallback(const c10::OperatorName& op) {
+  std::string name = c10::toString(op);
+  TESSIQ_LOG(kDebug, kLogModule) << "cpu fallback for " << name;
+  FallbackCounts& counts = fallback_counts();
+  const std::scoped_lock guard(counts.mutex);
+  ++counts.calls[std::move(name)];
 }
 
 std::map<std::string, std::int64_t> cpu_fallback_counts() {

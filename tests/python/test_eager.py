@@ -399,3 +399,67 @@ def test_a_linear_layer_trains_on_the_gpu() -> None:
         assert theirs.grad is not None
         assert ours.grad is not None
         close_products(ours.grad.cpu(), theirs.grad)
+
+
+# --- convolution ---------------------------------------------------------------------------------
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("fn", "shapes"),
+    [
+        (torch.nn.functional.conv2d, [(2, 16, 8, 8), (32, 16, 3, 3)]),
+        (
+            lambda x, w, b: torch.nn.functional.conv2d(x, w, b, padding=1),
+            [(2, 16, 8, 8), (32, 16, 3, 3), (32,)],
+        ),
+        (
+            lambda x, w: torch.nn.functional.conv2d(x, w, stride=2, dilation=2, padding=2),
+            [(2, 16, 9, 9), (32, 16, 3, 3)],
+        ),
+        (lambda x, w: torch.nn.functional.conv2d(x, w, groups=4), [(2, 16, 8, 8), (32, 4, 3, 3)]),
+        (
+            lambda x, w: torch.nn.functional.conv2d(x, w, groups=16, padding=1),
+            [(2, 16, 8, 8), (16, 1, 3, 3)],
+        ),
+        (torch.nn.functional.conv1d, [(2, 4, 16), (8, 4, 3)]),
+    ],
+    ids=["plain", "bias-padding", "stride-dilation", "groups", "depthwise", "conv1d"],
+)
+def test_convolutions_run_on_the_gpu(
+    fn: Callable[..., torch.Tensor], shapes: list[tuple[int, ...]]
+) -> None:
+    torch.manual_seed(0)
+    expected, got, fell_back = run(fn, *(torch.randn(shape) for shape in shapes))
+    assert fell_back == 0
+    close_products(got, expected)
+    assert got.stride() == expected.stride()
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("fn", "x", "w"),
+    [
+        (
+            torch.nn.functional.conv2d,
+            torch.randn(2, 16, 8, 8).to(memory_format=torch.channels_last),
+            torch.randn(32, 16, 3, 3),
+        ),
+        (torch.nn.functional.conv_transpose2d, torch.randn(2, 16, 8, 8), torch.randn(16, 8, 3, 3)),
+        (
+            torch.nn.functional.conv2d,
+            torch.randn(2, 16, 8, 8).double(),
+            torch.randn(32, 16, 3, 3).double(),
+        ),
+    ],
+    ids=["channels-last", "transposed", "float64"],
+)
+def test_convolutions_cudnn_does_not_take_run_on_the_host(
+    fn: Callable[..., torch.Tensor], x: torch.Tensor, w: torch.Tensor
+) -> None:
+    expected, got, fell_back = run(fn, x, w)
+    assert fell_back == 1
+    close_products(got, expected)
+    assert got.stride() == expected.stride()
