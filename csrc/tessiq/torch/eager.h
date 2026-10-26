@@ -8,7 +8,7 @@
 namespace tessiq::torch_backend {
 
 /// Registers a tessiq kernel for every ATen spelling of every elementwise operation in ops.toml,
-/// with its in-place and out= forms, and for the matmuls and convolution.
+/// with its in-place and out= forms, and for the reductions, matmuls and convolution.
 ///
 /// A call on GPU tensors runs one kernel there. Anything the kernel does not cover goes through the
 /// CPU fallback, as before. Called once during module import, after the custom

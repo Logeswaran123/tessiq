@@ -463,3 +463,135 @@ def test_convolutions_cudnn_does_not_take_run_on_the_host(
     assert fell_back == 1
     close_products(got, expected)
     assert got.stride() == expected.stride()
+
+
+# --- reductions ----------------------------------------------------------------------------------
+
+
+def close_sums(got: torch.Tensor, expected: torch.Tensor) -> None:
+    """A sum adds its elements in another order than the CPU does, so a large one differs in the
+    last bits."""
+    torch.testing.assert_close(got, expected, rtol=1e-5, atol=1e-4, equal_nan=True)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    "fn",
+    [
+        torch.sum,
+        lambda x: x.sum(-1),
+        lambda x: x.sum(0),
+        lambda x: x.sum(1, keepdim=True),
+        lambda x: x.sum((0, 1)),
+        torch.mean,
+        lambda x: x.mean(-1),
+        lambda x: x.mean((1, 2), keepdim=True),
+        lambda x: x.amax(-1),
+        lambda x: x.amin((1, 2)),
+        lambda x: x.amax(),
+    ],
+    ids=[
+        "sum",
+        "sum-last",
+        "sum-first",
+        "sum-middle-keepdim",
+        "sum-leading",
+        "mean",
+        "mean-last",
+        "mean-trailing-keepdim",
+        "amax-last",
+        "amin-trailing",
+        "amax",
+    ],
+)
+def test_reductions_run_on_the_gpu(fn: Callable[[torch.Tensor], torch.Tensor]) -> None:
+    torch.manual_seed(0)
+    expected, got, fell_back = run(fn, torch.randn(8, 16, 32))
+    assert fell_back == 0
+    close_sums(got, expected)
+    assert got.stride() == expected.stride()
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("fn", "x"),
+    [
+        (torch.sum, torch.randn(1 << 22)),
+        (torch.mean, torch.randn(1 << 22)),
+        (lambda x: x.sum(0), torch.randn(1 << 20, 4)),
+        (lambda x: x.amax(-1), torch.randn(2, 1 << 20)),
+        (torch.sum, torch.randn(1_000_003)),
+    ],
+    ids=["sum", "mean", "columns", "amax-rows", "prime-length"],
+)
+def test_a_long_axis_with_few_outputs_matches_the_host(
+    fn: Callable[[torch.Tensor], torch.Tensor], x: torch.Tensor
+) -> None:
+    torch.manual_seed(0)
+    _, got, fell_back = run(fn, x)
+    assert fell_back == 0
+    # Against float64, since a sum this long drifts on the host too.
+    torch.testing.assert_close(got.double(), fn(x.double()), rtol=1e-5, atol=1e-3)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("fn", "dtype"),
+    [
+        (lambda x: x.sum(-1), torch.int64),
+        (lambda x: x.amax(-1), torch.int32),
+        (lambda x: x.amin(0), torch.int64),
+    ],
+    ids=["sum-int64", "amax-int32", "amin-int64"],
+)
+def test_integer_reductions_run_on_the_gpu(
+    fn: Callable[[torch.Tensor], torch.Tensor], dtype: torch.dtype
+) -> None:
+    x = torch.randint(-1000, 1000, (16, 24), dtype=dtype)
+    expected, got, fell_back = run(fn, x)
+    assert fell_back == 0
+    assert got.dtype == expected.dtype
+    assert torch.equal(got, expected)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+def test_a_maximum_keeps_nan() -> None:
+    x = torch.tensor([[1.0, float("nan"), 3.0], [1.0, 2.0, 3.0]])
+    expected, got, fell_back = run(lambda t: t.amax(-1), x)
+    assert fell_back == 0
+    torch.testing.assert_close(got, expected, equal_nan=True)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("fn", "x"),
+    [
+        (lambda x: x.sum((0, 2)), torch.randn(4, 6, 8)),
+        (lambda x: x.sum(-1), torch.arange(24, dtype=torch.int32).view(4, 6)),
+        (lambda x: x.mean(-1), torch.arange(24).view(4, 6)),
+        (lambda x: x.sum(-1, dtype=torch.float64), torch.randn(4, 6)),
+        (lambda x: x.transpose(0, 1).sum(0), torch.randn(4, 6)),
+        (lambda x: x.sum(-1), torch.randn(4, 0)),
+    ],
+    ids=["split-axes", "int32-promotes", "int-mean", "dtype", "transposed", "empty"],
+)
+def test_reductions_the_kernel_does_not_take_run_on_the_host(
+    fn: Callable[[torch.Tensor], torch.Tensor], x: torch.Tensor
+) -> None:
+    try:
+        expected: torch.Tensor | None = fn(x)
+    except RuntimeError:
+        expected = None
+    on_gpu = x.to(tessiq.gpu)
+    before = host_calls()
+    if expected is None:
+        with pytest.raises(RuntimeError):
+            fn(on_gpu)
+    else:
+        torch.testing.assert_close(fn(on_gpu).cpu(), expected)
+    assert host_calls() == before + 1
