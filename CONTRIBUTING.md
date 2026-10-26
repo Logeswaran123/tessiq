@@ -28,6 +28,14 @@ pytest -m "not cuda"          # drop -m to include GPU tests
 python tools/lint_cpp.py --build-dir build/dev   # clang-format and clang-tidy
 ```
 
+CI has no CUDA toolkit, so its clang-tidy sees code a CUDA build compiles out. On a machine with a
+GPU, lint that configuration too:
+
+```bash
+cmake --preset dev -B build/nocuda -DTESSIQ_ENABLE_CUDA=OFF
+python tools/lint_cpp.py --tidy --build-dir build/nocuda
+```
+
 `CMakePresets.json` defines `dev` (Debug), `release` (RelWithDebInfo), `sanitizers` and `coverage`,
 each built in `build/<preset>`. Local variations go in an untracked `CMakeUserPresets.json`.
 

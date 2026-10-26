@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [0.13.5] - 2026-10-25
+
 ### Fixed
 
 - Factory ops given a device index that does not exist raise `ValueError` instead of allocating
@@ -20,6 +22,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - Two threads making their first call on a CUDA device could both create its stream.
 - Benchmarks compare kernels from CUPTI records at sizes clear of the L2 cache, and report GB/s
   as 10^9 bytes per second.
+- Building with GCC 13 failed on a dangling-reference warning in `TESSIQ_CUSTOM_OP`.
 
 ### Changed
 

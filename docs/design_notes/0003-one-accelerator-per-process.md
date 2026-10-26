@@ -49,5 +49,4 @@ benchmark that trained on both would have to fork.
 the stricter reference anyway.
 
 **It cannot be fixed in tessiq.** It follows from PyTorch supporting one accelerator per process
-and from PrivateUse1 being how an out-of-tree backend registers. A backend built into PyTorch as
-its own device type would not have it.
+and from PrivateUse1 being how an out-of-tree backend registers.

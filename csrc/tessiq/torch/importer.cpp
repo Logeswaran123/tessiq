@@ -523,8 +523,8 @@ Result<void> import_node(const py::object& fx_node, ImportState& state, ir::Grap
 
 Result<std::unique_ptr<ir::Graph>> import_fx(const py::object& graph_module, std::string name) {
   auto graph = std::make_unique<ir::Graph>(std::move(name));
-  // Copied into a list. `graph.nodes` is a view over an intrusive linked list, and iterating it
-  // from C++ does not terminate: the walk wraps past the sentinel.
+  // Copied into a list. pybind11 asks an iterator for one more element after the last, and FX's
+  // node iterator then wraps from its sentinel back to the first node, so the loop never ends.
   const py::list nodes(graph_module.attr("graph").attr("nodes"));
 
   ImportState state;
