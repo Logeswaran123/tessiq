@@ -45,6 +45,7 @@
 #include "tessiq/runtime/device.h"
 #include "tessiq/support/logging.h"
 #include "tessiq/support/result.h"
+#include "tessiq/torch/backend.h"
 #include "tessiq/torch/custom_op.h"
 #include "tessiq/torch/fused.h"
 #include "tessiq/torch/importer.h"
@@ -405,19 +406,6 @@ Result<std::unique_ptr<RegisteredOp>> check_definition(const CustomOp& op) {
 
 // ---------------------------------------------------------------------------------------------
 // Running an operation
-
-/// The CUDA ordinal behind tessiq device `device`, or nothing for the CPU reference device and any
-/// device that is not tessiq's.
-std::optional<int> cuda_ordinal_of(const c10::Device& device) {
-  if (device.type() != c10::DeviceType::PrivateUse1) {
-    return std::nullopt;
-  }
-  const Result<Device*> found = device_at(device.index());
-  if (!found.has_value() || (*found)->kind() != DeviceKind::kCuda) {
-    return std::nullopt;
-  }
-  return (*found)->ordinal();
-}
 
 /// The GPU a call can run its kernel on, or nothing when it has to run the reference.
 ///

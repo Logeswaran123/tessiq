@@ -472,6 +472,17 @@ c10::Allocator* get_allocator(int index) {
 
 AllocatorStats allocator_stats(int index) { return allocator_at(index).stats(); }
 
+std::optional<int> cuda_ordinal_of(const c10::Device& device) {
+  if (device.type() != c10::DeviceType::PrivateUse1) {
+    return std::nullopt;
+  }
+  const Result<Device*> found = device_at(device.index());
+  if (!found.has_value() || (*found)->kind() != DeviceKind::kCuda) {
+    return std::nullopt;
+  }
+  return (*found)->ordinal();
+}
+
 std::size_t empty_cache(int index) { return allocator_at(index).empty_cache(); }
 
 void reallocate_storage(const c10::Storage& storage, std::size_t bytes) {

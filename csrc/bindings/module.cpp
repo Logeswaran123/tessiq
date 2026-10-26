@@ -41,6 +41,7 @@
 #include "tessiq/support/logging.h"
 #include "tessiq/torch/backend.h"
 #include "tessiq/torch/custom.h"
+#include "tessiq/torch/eager.h"
 #include "tessiq/torch/fallback.h"
 #include "tessiq/torch/fused.h"
 #include "tessiq/torch/importer.h"
@@ -364,6 +365,7 @@ PYBIND11_MODULE(_C, m) {
   // Every operation in csrc/custom_ops is checked here, so one whose definition does not hold
   // together fails the import with a message naming it.
   value_or_raise(tessiq::torch_backend::register_custom_ops());
+  value_or_raise(tessiq::torch_backend::register_eager_ops());
 
   m.def(
       "version",
