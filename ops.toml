@@ -64,7 +64,7 @@ name = "relu"
 aten = ["aten.relu.default"]
 category = "elementwise"
 arity = 1
-expression = "($0 > scalar_t(0) || $0 != $0 ? $0 : scalar_t(0))"
+expression = "($0 < scalar_t(0) ? scalar_t(0) : $0)"
 kernel = true
 
 [[op]]
