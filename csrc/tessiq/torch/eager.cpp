@@ -51,6 +51,7 @@
 #include "tessiq/torch/backend.h"
 #include "tessiq/torch/eager_conv.h"
 #include "tessiq/torch/eager_matmul.h"
+#include "tessiq/torch/eager_norm.h"
 #include "tessiq/torch/eager_reduction.h"
 #include "tessiq/torch/fallback.h"
 #include "tessiq/torch/importer.h"
@@ -741,6 +742,7 @@ Result<void> register_eager_ops() {
   }
   TESSIQ_RETURN_IF_ERROR(register_eager_matmuls(*library));
   TESSIQ_RETURN_IF_ERROR(register_eager_reductions(*library));
+  TESSIQ_RETURN_IF_ERROR(register_eager_normalization(*library));
   return register_eager_convolution(*library);
 }
 

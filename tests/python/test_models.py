@@ -230,12 +230,6 @@ def test_layer_norm_is_broken_up_and_softmax_is_kept_for_its_kernel() -> None:
 def test_a_block_runs_eagerly_on_a_gpu(model: nn.Module, example: torch.Tensor) -> None:
     if tessiq.gpu_count() == 0:
         pytest.skip("needs a gpu")
-    covered = {
-        "::".join(spelling.split(".")[:2])
-        for op in load_operations()
-        if op["kernel"]
-        for spelling in op["aten"]
-    }
     on_gpu = copy.deepcopy(model).to(tessiq.gpu)
     with torch.no_grad():
         expected = model(example)
@@ -244,8 +238,5 @@ def test_a_block_runs_eagerly_on_a_gpu(model: nn.Module, example: torch.Tensor) 
         after = _C.cpu_fallback_counts()
 
     torch.testing.assert_close(got.cpu(), expected, rtol=1e-5, atol=1e-5)
-    # A structured operation falls back through its out= overload, so compare by name alone.
-    fell_back = {
-        name.split(".")[0] for name, count in after.items() if count != before.get(name, 0)
-    }
-    assert not fell_back & covered, f"went through the host: {sorted(fell_back & covered)}"
+    fell_back = sorted(name for name, count in after.items() if count != before.get(name, 0))
+    assert not fell_back, f"went through the host: {fell_back}"

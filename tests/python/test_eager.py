@@ -595,3 +595,119 @@ def test_reductions_the_kernel_does_not_take_run_on_the_host(
     else:
         torch.testing.assert_close(fn(on_gpu).cpu(), expected)
     assert host_calls() == before + 1
+
+
+# --- normalisation -------------------------------------------------------------------------------
+
+
+def batch_norm_args(channels: int) -> tuple[torch.Tensor, ...]:
+    """Weight, bias, running mean and running variance."""
+    return (
+        torch.randn(channels),
+        torch.randn(channels),
+        torch.randn(channels),
+        torch.rand(channels) + 0.5,
+    )
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("fn", "x"),
+    [
+        (
+            lambda x, w, b, mean, var: torch.nn.functional.batch_norm(x, mean, var, w, b),
+            torch.randn(4, 16, 8, 8),
+        ),
+        (
+            lambda x, _w, _b, mean, var: torch.nn.functional.batch_norm(x, mean, var),
+            torch.randn(4, 16, 8, 8),
+        ),
+        (
+            lambda x, w, b, mean, var: torch.nn.functional.batch_norm(x, mean, var, w, b),
+            torch.randn(32, 16),
+        ),
+    ],
+    ids=["affine", "no-affine", "1d"],
+)
+def test_eval_batch_norm_runs_on_the_gpu(fn: Callable[..., torch.Tensor], x: torch.Tensor) -> None:
+    torch.manual_seed(0)
+    expected, got, fell_back = run(fn, x, *batch_norm_args(16))
+    assert fell_back == 0
+    same(expected, got)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    ("shape", "normalized"),
+    [((8, 12, 64), [64]), ((8, 12, 64), [12, 64]), ((2, 1 << 16), [1 << 16])],
+    ids=["last", "last-two", "long-rows"],
+)
+@pytest.mark.parametrize("affine", [True, False], ids=["affine", "plain"])
+def test_layer_norm_runs_on_the_gpu(
+    shape: tuple[int, ...], normalized: list[int], affine: bool
+) -> None:
+    torch.manual_seed(0)
+    weight = torch.randn(normalized) if affine else None
+    bias = torch.randn(normalized) if affine else None
+
+    def norm(x: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        on = x.device
+        result: tuple[torch.Tensor, ...] = torch.ops.aten.native_layer_norm(
+            x,
+            normalized,
+            None if weight is None else weight.to(on),
+            None if bias is None else bias.to(on),
+            1e-5,
+        )
+        return result
+
+    x = torch.randn(shape)
+    expected = norm(x)
+    before = host_calls()
+    got = norm(x.to(tessiq.gpu))
+    assert host_calls() == before
+    # The output, the mean and the reciprocal deviation, which autograd saves.
+    for ours, theirs in zip(got, expected, strict=True):
+        same(theirs, ours.cpu())
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+def test_a_layer_norm_trains_on_the_gpu() -> None:
+    torch.manual_seed(0)
+    norm = torch.nn.LayerNorm(64)
+    on_gpu = torch.nn.LayerNorm(64).to(tessiq.gpu)
+    on_gpu.load_state_dict(norm.state_dict())
+    x = torch.randn(8, 64, requires_grad=True)
+    x_on_gpu = x.detach().to(tessiq.gpu).requires_grad_()
+    torch.autograd.backward(norm(x), torch.ones(8, 64))
+    torch.autograd.backward(on_gpu(x_on_gpu), torch.ones(8, 64).to(tessiq.gpu))
+    assert x.grad is not None
+    assert x_on_gpu.grad is not None
+    torch.testing.assert_close(x_on_gpu.grad.cpu(), x.grad)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("needs_gpu")
+@pytest.mark.parametrize(
+    "fn",
+    [
+        lambda x, w, b, mean, var: torch.nn.functional.batch_norm(
+            x, mean.clone(), var.clone(), w, b, training=True
+        ),
+        lambda x, w, b, mean, var: torch.nn.functional.batch_norm(
+            x.to(memory_format=torch.channels_last), mean, var, w, b
+        ),
+        lambda x, *_: torch.nn.functional.layer_norm(x.transpose(2, 3), [8]),
+    ],
+    ids=["training", "channels-last", "transposed-layer-norm"],
+)
+def test_normalisation_the_kernels_do_not_take_runs_on_the_host(
+    fn: Callable[..., torch.Tensor],
+) -> None:
+    torch.manual_seed(0)
+    expected, got, fell_back = run(fn, torch.randn(4, 16, 8, 8), *batch_norm_args(16))
+    assert fell_back >= 1
+    torch.testing.assert_close(got, expected)

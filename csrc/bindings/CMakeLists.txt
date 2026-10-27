@@ -46,6 +46,7 @@ pybind11_add_module(_C MODULE
   ../tessiq/torch/eager.cpp
   ../tessiq/torch/eager_conv.cpp
   ../tessiq/torch/eager_matmul.cpp
+  ../tessiq/torch/eager_norm.cpp
   ../tessiq/torch/eager_reduction.cpp
   ../tessiq/torch/fused.cpp
   ../tessiq/torch/importer.cpp
