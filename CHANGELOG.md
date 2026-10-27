@@ -14,6 +14,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - Eager reductions (`sum`, `mean`, `amax`, `amin`), matmuls (`mm`, `bmm`, `addmm`, through
   cuBLAS) and 2-D convolution (through cuDNN) on a GPU tensor run there, as do the in-place and
   `out=` forms of the elementwise operations. A long reduction with few outputs runs in two passes.
+- Eval-mode batch norm and layer norm run eagerly on a GPU tensor, built from those kernels.
 
 ### Fixed
 

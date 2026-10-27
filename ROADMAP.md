@@ -103,10 +103,11 @@ flag, so a `Linear` weight and the transposes autograd makes are not copied. Con
 cuDNN with a plan built once per shape. Reductions over one contiguous range of axes use the
 compiler's reduction kernel, and a long axis with few outputs is reduced in two passes: a full sum
 of 256 MiB went from 27 ms in one block to 0.32 ms, and drifts less than the host's. In-place and
-`out=` forms of the elementwise operations write into their tensor with the same kernels. The
-encoder and residual blocks now cross the host only for layer norm's and batch norm's pieces,
-which `ops.toml` does not list, and those round trips are most of their eager time: 2.9 ms each,
-against 0.5 and 0.2 ms on eager CUDA.
+`out=` forms of the elementwise operations write into their tensor with the same kernels.
+Eval-mode batch norm and layer norm, which `ops.toml` does not list, are built from those kernels,
+so the encoder and residual blocks run eagerly with no host calls: 0.68 and 0.54 ms a call, down
+from 2.9 ms with the norms on the host, against 0.53 and 0.20 ms on eager CUDA, which runs cuDNN in
+TF32 and has a batch norm kernel of its own.
 
 ## Planned
 
