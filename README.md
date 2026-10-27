@@ -26,7 +26,7 @@ Each column is one way into tessiq, read top to bottom:
 - **Eager operations** on `tessiq` tensors go through ATen dispatch. Allocation, copies, views
   and `clone` have device implementations, and on a GPU so does everything in
   [`ops.toml`](ops.toml): elementwise operations and reductions run generated kernels, matmuls call
-  cuBLAS and convolution calls cuDNN. Eval-mode batch norm and layer norm are built from those.
+  cuBLAS and convolution calls cuDNN. Eval-mode batch norm and layer norm have kernels of their own.
   Every other operation runs through the CPU fallback: the inputs are copied to the host, PyTorch
   computes the result, and it is copied back.
 - **Custom operations** called as `torch.ops.tessiq.<name>` run their own kernels on the device.
