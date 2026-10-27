@@ -10,6 +10,7 @@ there is a GPU, on that too.
 from __future__ import annotations
 
 import collections
+import copy
 
 import pytest
 import torch
@@ -17,6 +18,7 @@ from torch import nn
 
 import tessiq
 from conftest import load_operations
+from tessiq import _C
 
 
 class ResidualBlock(nn.Module):
@@ -221,3 +223,20 @@ def test_layer_norm_is_broken_up_and_softmax_is_kept_for_its_kernel() -> None:
     text = tessiq.import_graph(capture(double, torch.randn(2, 6, 32, dtype=torch.float64)))
     assert "aten._softmax" not in text, text
     assert "aten.amax.default" in text, text
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize(("model", "example"), block_cases())
+def test_a_block_runs_eagerly_on_a_gpu(model: nn.Module, example: torch.Tensor) -> None:
+    if tessiq.gpu_count() == 0:
+        pytest.skip("needs a gpu")
+    on_gpu = copy.deepcopy(model).to(tessiq.gpu)
+    with torch.no_grad():
+        expected = model(example)
+        before = _C.cpu_fallback_counts()
+        got = on_gpu(example.to(tessiq.gpu))
+        after = _C.cpu_fallback_counts()
+
+    torch.testing.assert_close(got.cpu(), expected, rtol=1e-5, atol=1e-5)
+    fell_back = sorted(name for name, count in after.items() if count != before.get(name, 0))
+    assert not fell_back, f"went through the host: {fell_back}"

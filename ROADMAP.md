@@ -17,7 +17,7 @@
 | 12 | Custom operations, rewrite passes | Done |
 | 13 | Precompiled custom operations | Done |
 | 14 | Eager elementwise operations on the device | Done |
-| 15 | Eager reductions, matmuls and convolution on the device | Planned |
+| 15 | Eager reductions, matmuls and convolution on the device | Done |
 | 16 | MLIR export | Planned, optional |
 
 ## Done
@@ -97,21 +97,20 @@ sub, mul, neg and relu still go through the host. From DRAM a call matches PyTor
 1.24 ms against 1.25 ms of device time at 1 GiB, where the fallback took about 170 ms. In L2
 PyTorch's kernels are faster, 8 µs against 12 µs, and both calls take about 33 µs.
 
+**15. Eager reductions, matmuls and convolution on the device.** The rest of `ops.toml` runs
+eagerly on a GPU. `mm`, `bmm` and `addmm` call cuBLAS, reading packed columns through the transpose
+flag, so a `Linear` weight and the transposes autograd makes are not copied. Convolution calls
+cuDNN with a plan built once per shape. Reductions over one contiguous range of axes use the
+compiler's reduction kernel, and a long axis with few outputs is reduced in two passes: a full sum
+of 256 MiB went from 27 ms in one block to 0.32 ms, and drifts less than the host's. In-place and
+`out=` forms of the elementwise operations write into their tensor with the same kernels.
+Eval-mode batch norm and layer norm, which `ops.toml` does not list, have a fused kernel each,
+within 1.6x of PyTorch's at the shapes measured. The encoder and residual blocks run eagerly with
+no host calls: 0.60 and 0.52 ms a call, down from 2.9 ms with the norms on the host, against 0.54
+and 0.21 ms on eager CUDA. Most of the residual block's difference is convolution, which PyTorch
+lets cuDNN run in TF32 and tessiq runs in fp32.
+
 ## Planned
-
-Called eagerly on a tessiq tensor, the elementwise operations in `ops.toml` run on the device.
-Reductions, matmuls and convolution still go through the CPU fallback, a copy to the host and back
-per operation. Stage 15 gives them the kernels the compiler already has.
-
-**15. Eager reductions, matmuls and convolution on the device.**
-- Reductions use the existing reduction kernel, which takes its extents as arguments.
-- Matmuls call cuBLAS directly, with transposes read from the strides.
-- Convolution calls cuDNN, replacing the host path in `convolution_overrideable`.
-- In-place and `out=` variants of the stage 14 operations are added where they map onto the same
-  kernels.
-
-**Done when:** the encoder and residual blocks in `tests/python/test_models.py` run eagerly on a GPU,
-match PyTorch on the CPU, and cross the host only for the operations `ops.toml` does not cover.
 
 **16. MLIR export (optional).** Lower tessiq IR to `linalg` on tensors, generate ODS from
 `ops.toml`, and lower through the standard bufferization pipeline. Behind `TESSIQ_ENABLE_MLIR`,

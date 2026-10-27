@@ -11,6 +11,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   instead of a round trip through the host. `bench/eager.py` compares them with the fallback and
   with PyTorch's CUDA kernels.
 - `_C.cpu_fallback_counts()`: how many calls of each operation went through the CPU fallback.
+- Eager reductions (`sum`, `mean`, `amax`, `amin`), matmuls (`mm`, `bmm`, `addmm`, through
+  cuBLAS) and 2-D convolution (through cuDNN) on a GPU tensor run there, as do the in-place and
+  `out=` forms of the elementwise operations. A long reduction with few outputs runs in two passes.
+- Eval-mode batch norm and layer norm run eagerly on a GPU tensor, one fused kernel launch each.
 
 ### Fixed
 

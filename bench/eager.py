@@ -1,17 +1,21 @@
 # Copyright 2026 The Tessiq Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""Eager elementwise calls on a GPU tensor.
+"""Eager calls on a GPU tensor.
 
-Each operation runs three ways on the same data:
+Each elementwise operation runs three ways on the same data:
 
   tessiq       the eager kernel, called on a tessiq GPU tensor
   fallback     what the call cost before it had one: the tensors copied to the host, PyTorch's
                CPU kernel, and the result copied back, as the CPU fallback does it
   torch cuda   PyTorch's own CUDA kernel, on a CUDA tensor
 
-The first table is wall time per call with the device drained, which is what a caller waits for.
-The second is the kernels' device time from CUPTI, which compares the generated kernel with
-PyTorch's.
+Wall time is per call with the device drained, which is what a caller waits for. Device time is
+the kernels' own, from CUPTI, which compares the generated kernel with PyTorch's.
+
+Then whole model blocks run eagerly, one operation at a time, as a model outside `torch.compile`
+does: on a tessiq GPU, on a CUDA GPU, and on the CPU. torch lets cuDNN use TF32 for convolutions
+by default and tessiq asks it for fp32, so the CUDA column of the residual block is the faster
+arithmetic.
 
 Run with: python bench/eager.py [--elements N ...]
 """
@@ -19,14 +23,18 @@ Run with: python bench/eager.py [--elements N ...]
 from __future__ import annotations
 
 import argparse
+import copy
 import statistics
+import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import torch
 from kernel_timing import cache_and_dram_bytes, gigabytes_per_second, kernel_microseconds
 
 import tessiq
+from tessiq import _C
 
 RUNS = 50
 WARMUP = 10
@@ -104,6 +112,40 @@ def measure(count: int) -> None:
         )
 
 
+def blocks() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests" / "python"))
+    from test_models import EncoderBlock, ResidualBlock
+
+    torch.manual_seed(0)
+    cases = [
+        ("encoder, 512 wide, 128 steps, batch 8", EncoderBlock(512, 8, 2048), (8, 128, 512)),
+        ("residual, 64 channels, 56x56, batch 8", ResidualBlock(64), (8, 64, 56, 56)),
+    ]
+
+    def drain() -> None:
+        tessiq.synchronize(tessiq.gpu)
+
+    print("\nmodel blocks run eagerly, input already on the device, wall time per call")
+    print("  block                                    tessiq  torch cuda   torch cpu   host calls")
+    for name, model, shape in cases:
+        model.eval()
+        example = torch.randn(shape)
+        ours = copy.deepcopy(model).to(tessiq.gpu)
+        theirs = copy.deepcopy(model).cuda()
+        ours_in = example.to(tessiq.gpu)
+        theirs_in = example.cuda()
+        with torch.no_grad():
+            mine = wall_milliseconds(lambda ours=ours, x=ours_in: ours(x), drain)
+            cuda = wall_milliseconds(
+                lambda theirs=theirs, x=theirs_in: theirs(x), torch.cuda.synchronize
+            )
+            cpu = wall_milliseconds(lambda model=model, x=example: model(x), lambda: None)
+            before = sum(_C.cpu_fallback_counts().values())
+            ours(ours_in)
+            host_calls = sum(_C.cpu_fallback_counts().values()) - before
+        print(f"  {name:38s} {mine:7.2f} ms {cuda:8.2f} ms {cpu:8.2f} ms {host_calls:9d}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -118,6 +160,7 @@ def main() -> None:
     print(f"torch {torch.__version__}, medians of {RUNS} calls after {WARMUP} warm-up calls")
     for count in sizes:
         measure(count // ROW * ROW)
+    blocks()
 
 
 if __name__ == "__main__":

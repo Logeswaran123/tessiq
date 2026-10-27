@@ -24,10 +24,11 @@ layer does, and custom operations and compiler passes extend it without changes 
 Each column is one way into tessiq, read top to bottom:
 
 - **Eager operations** on `tessiq` tensors go through ATen dispatch. Allocation, copies, views
-  and `clone` have device implementations, and on a GPU so do the elementwise operations in
-  [`ops.toml`](ops.toml), each call running one generated kernel. Every other operation runs
-  through the CPU fallback: the inputs are copied to the host, PyTorch computes the result, and it
-  is copied back.
+  and `clone` have device implementations, and on a GPU so does everything in
+  [`ops.toml`](ops.toml): elementwise operations and reductions run generated kernels, matmuls call
+  cuBLAS and convolution calls cuDNN. Eval-mode batch norm and layer norm have kernels of their own.
+  Every other operation runs through the CPU fallback: the inputs are copied to the host, PyTorch
+  computes the result, and it is copied back.
 - **Custom operations** called as `torch.ops.tessiq.<name>` run their own kernels on the device.
 - **Compiled models** are where the operations in `ops.toml` run on the device. `torch.compile`
   hands the graph compiler an FX graph, which it turns into a recipe:
@@ -67,8 +68,9 @@ Each column is one way into tessiq, read top to bottom:
 **Device integration** (`csrc/tessiq/torch/`, `python/tessiq/device.py`)
 - Registers `tessiq` with PyTorch: the device guard, the PrivateUse1 hooks, and the ATen kernels
   for allocation, copies, views and `clone`.
-- Registers a kernel for every elementwise operation in `ops.toml`. On a GPU tensor a call runs
-  one kernel from the compiler's emitter, compiled once and cached.
+- Registers kernels for the operations in `ops.toml`. On a GPU tensor an elementwise operation or
+  a reduction runs one kernel from the compiler's emitter, compiled once and cached, and a matmul
+  or convolution is one cuBLAS or cuDNN call.
 - Any other ATen operation on a `tessiq` tensor copies its inputs to the host, runs PyTorch's CPU
   kernel, and copies the result back.
 
@@ -341,8 +343,9 @@ End to end, tessiq is behind PyTorch on the GPU, and most of a call is spent on 
   [design note 0003](docs/design_notes/0003-one-accelerator-per-process.md).
 - **Results come back to the host.** Compiled calls always return CPU tensors, so a large output
   pays a device-to-host copy on every call.
-- **Most eager operations are slow.** Outside `torch.compile`, reductions, matmuls, convolutions
-  and anything else not elementwise go through the CPU fallback on tessiq tensors.
+- **Eager coverage.** Outside `torch.compile`, an operation that is not in `ops.toml` and is not
+  eval-mode batch norm or layer norm goes through the CPU fallback on tessiq tensors, a copy to the
+  host and back per call.
 - **Data types.** Generated kernels support float32, float64, int32 and int64. cuBLAS, cuDNN and
   most custom operations are float32 only, and other types run on the host.
 - **Custom operations.** They have no backward pass yet, and their schemas can't have default

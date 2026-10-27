@@ -11,6 +11,7 @@
 
 #include "tessiq/codegen/emitter.h"
 #include "tessiq/codegen/kernel.h"
+#include "tessiq/codegen/norm.h"
 #include "tessiq/ir/text.h"
 #include "tessiq/passes/pass.h"
 
@@ -438,6 +439,24 @@ TEST(CudaEmitterTest, AScalarIsAParameterAfterTheDivisors) {
   EXPECT_NE(source->find("long long n,\n    long long d_b,\n    scalar_t s) {"), std::string::npos)
       << *source;
   EXPECT_NE(source->find("scalar_t v_y = (v_b * scalar_t(s));"), std::string::npos) << *source;
+}
+
+TEST(NormSourceTest, LayerNormWritesEachRowsStatistics) {
+  const std::string source = layer_norm_source(ir::DType::kF64, "ln");
+  EXPECT_NE(source.find("typedef double scalar_t;"), std::string::npos) << source;
+  EXPECT_NE(source.find("extern \"C\" __global__ void ln("), std::string::npos) << source;
+  EXPECT_NE(source.find("p_mean[row] = mean;"), std::string::npos) << source;
+  EXPECT_NE(source.find("p_rstd[row] = rstd;"), std::string::npos) << source;
+  // The variance is taken over centred values, as torch takes it.
+  EXPECT_NE(source.find("centred * centred"), std::string::npos) << source;
+}
+
+TEST(NormSourceTest, BatchNormHasAnEntryPerLayout) {
+  const std::string source = batch_norm_source(ir::DType::kF32, "bn");
+  EXPECT_NE(source.find("typedef float scalar_t;"), std::string::npos) << source;
+  EXPECT_NE(source.find("void bn_by_plane("), std::string::npos) << source;
+  EXPECT_NE(source.find("void bn_by_element("), std::string::npos) << source;
+  EXPECT_NE(source.find("p_in[i] * alpha + beta"), std::string::npos) << source;
 }
 
 } // namespace

@@ -20,7 +20,7 @@
 <text x="128" y="224.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#57606a" text-anchor="end" letter-spacing="0.4">BACKEND</text>
 <rect x="152.0" y="186" width="266.7" height="66" rx="6" fill="#e7f0ff" stroke="#2f6fdb" stroke-width="1.5"/>
 <text x="285.3" y="214.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1a4fa8" text-anchor="middle">Device integration</text>
-<text x="285.3" y="234.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#34507a" text-anchor="middle" xml:space="preserve">copies, views, elementwise, fallback</text>
+<text x="285.3" y="234.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#34507a" text-anchor="middle" xml:space="preserve">copies, views, ops.toml, fallback</text>
 <rect x="428.7" y="186" width="266.7" height="66" rx="6" fill="#e7f0ff" stroke="#2f6fdb" stroke-width="1.5"/>
 <text x="562.0" y="214.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#1a4fa8" text-anchor="middle">Custom operations</text>
 <text x="562.0" y="234.0" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#34507a" text-anchor="middle" xml:space="preserve">kernels, expressions, host code</text>
