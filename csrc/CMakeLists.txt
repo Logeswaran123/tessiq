@@ -105,6 +105,7 @@ add_library(tessiq_codegen STATIC
   tessiq/codegen/cuda_emitter.cpp
   tessiq/codegen/gemm.cpp
   tessiq/codegen/kernel.cpp
+  tessiq/codegen/norm.cpp
   tessiq/codegen/nvrtc.cpp
   tessiq/codegen/pack.cpp
   tessiq/codegen/precompiled.cpp

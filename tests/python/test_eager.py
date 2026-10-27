@@ -627,8 +627,12 @@ def batch_norm_args(channels: int) -> tuple[torch.Tensor, ...]:
             lambda x, w, b, mean, var: torch.nn.functional.batch_norm(x, mean, var, w, b),
             torch.randn(32, 16),
         ),
+        (
+            lambda x, w, b, mean, var: torch.nn.functional.batch_norm(x, mean, var, w, b),
+            torch.randn(2, 16, 24, 24),
+        ),
     ],
-    ids=["affine", "no-affine", "1d"],
+    ids=["affine", "no-affine", "1d", "planes-wider-than-a-block"],
 )
 def test_eval_batch_norm_runs_on_the_gpu(fn: Callable[..., torch.Tensor], x: torch.Tensor) -> None:
     torch.manual_seed(0)
